@@ -11,7 +11,9 @@ async def main(args):
     backend_type, connection_string = args.storage
     backend_params = utils.safe_kwargs(backend_type, vars(args))
     backend = backend_type(connection_string, **backend_params)
-    repo = Repository(backend)
+    repo = Repository(backend, concurrent=args.concurrent,
+                    progress=args.progress)
+    await repo.unlock()
 
 
 if __name__ == '__main__':

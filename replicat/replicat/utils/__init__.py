@@ -17,7 +17,7 @@ def _storage_tuple(uri):
 common_parser = argparse.ArgumentParser(add_help=False)
 common_parser.add_argument('-c', '--concurrent', default=5, type=int)
 common_parser.add_argument('-v', '--verbose', action='count', default=0)
-common_parser.add_argument('-P', '--hide-progress', action='store_true')
+common_parser.add_argument('-P', '--hide-progress', dest='progress', action='store_false')
 common_parser.add_argument('-s', '--storage', type=_storage_tuple, required=True)
 
 

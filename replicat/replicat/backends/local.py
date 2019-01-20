@@ -1,26 +1,67 @@
 import logging
+import os
+from pathlib import Path
+from tempfile import NamedTemporaryFile
 from .. import Backend
 
 
 logger = logging.getLogger(__name__)
 
 
+def _recursive_scandir(start_entry):
+    # Just recursively yield all *files* below `start_entry`
+    if not start_entry.is_dir(follow_symlinks=False):
+        yield start_entry.path
+    else:
+        with os.scandir(start_entry.path) as it:
+            for entry in it:
+                yield from _recursive_scandir(entry)
+
+
 class Local(Backend):
 
     def __init__(self, connection_string):
-        pass
+        self.path = Path(connection_string)
 
     def upload(self, name, contents):
-        pass
+        destination = self.path / name
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        # Make sure the temporary is on the same filesystem to make
+        # atomic replacements possible
+        temp = Path(NamedTemporaryFile(prefix=f'{destination.name}_',
+                            dir=destination.parent, delete=False).name)
+        temp.write_bytes(contents)
+        temp.replace(destination)
 
     def download(self, name):
-        pass
+        contents = (self.path / name).read_bytes()
+        return contents
 
     def list_files(self, prefix=''):
-        pass
+        path_length = len(str(self.path))
+        # pathlib strips the trailing slash from paths; we don't want that here
+        prefix_dirname, prefix_basename = os.path.split(prefix)
+        absolute_dirname = self.path / prefix_dirname
+
+        try:
+            scandir = os.scandir(absolute_dirname)
+        except OSError as e:
+            logger.debug(f'Unable to list files in {absolute_dirname}', exc_info=True)
+            return
+
+        with scandir as it:
+            for entry in it:
+                if not entry.name.startswith(prefix_basename):
+                    continue
+                for file in _recursive_scandir(entry):
+                    # NOTE: Anything from the standard library seems
+                    # like an overkill here
+                    yield file[path_length + 1:]
 
     def hide_file(self, name):
-        pass
+        origin = self.path / name
+        # NOTE: hidden files should still come up in prefix searches
+        origin.replace(origin.with_name(f'{origin.name}_'))
 
 
 Client = Local

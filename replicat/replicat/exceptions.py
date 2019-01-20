@@ -1,0 +1,2 @@
+class ReplicatError(Exception):
+    pass
