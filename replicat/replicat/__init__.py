@@ -28,3 +28,8 @@ class Backend(abc.ABC):
     async def hide_file(self, name):
         """ Either async or plain function """
         return None
+
+    async def authenticate(self):
+        """ Either async or plain function. Also, it's optional, and must
+            have the same type as the methods that need authentication """
+        raise NotImplementedError
