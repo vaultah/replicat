@@ -108,5 +108,5 @@ async def test_require_auth(backend_type):
     assert 1 <= rs.count('ERROR') <= jobs
     # ... and, of course, the total number of calls is errors + successes
     assert rs.count('CALL') == rs.count('ERROR') + rs.count('SUCCESS')
-    # ... and in the end, all of the jobs has completed successfully
+    # ... and in the end, all of the jobs have completed successfully
     assert rs.count('SUCCESS') == jobs

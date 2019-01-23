@@ -126,8 +126,10 @@ def require_auth(func):
                 return func(self, *a, **ka)
             except exceptions.AuthRequired:
                 if self._auth_lock.acquire(blocking=False):
-                    self.authenticate()
-                    self._auth_lock.release()
+                    try:
+                        self.authenticate()
+                    finally:
+                        self._auth_lock.release()
                 else:
                     with self._auth_lock:
                         pass
