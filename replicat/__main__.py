@@ -3,25 +3,29 @@ import logging
 from .replicat import utils
 from .replicat.repository import Repository
 
-
 logger = logging.getLogger(__name__)
 
 
-async def main(args):
-    backend_type, connection_string = args.storage
+async def main(args, unknown):
+    backend_type, connection_string = args.repo
     backend_params = utils.safe_kwargs(backend_type, vars(args))
     backend = backend_type(connection_string, **backend_params)
     repo = Repository(backend, concurrent=args.concurrent,
                     progress=args.progress)
-    await repo.unlock()
+    if args.action == 'init':
+        pairs = zip(unknown[::2], unknown[1::2])
+        settings = {k.lstrip('-'): utils.guess_type(v) for k, v in pairs}
+        await repo.init(password=args.password, settings=settings)
+    else:
+        await repo.unlock(password=args.password, key=args.key)
 
 
 if __name__ == '__main__':
-    common_args, _ = utils.common_parser.parse_known_args()
-    # Parse the arguments again with a backend-specific parser
-    backend_type, _ = common_args.storage
-    parser = utils.make_parser(backend_type)
-    args = parser.parse_args()
+    common, _ = utils.common_options.parse_known_args()
+    backend_type, _ = common.repo
+    backend_args = utils.parser_from_callable(backend_type)
+    parser = utils.make_parser(utils.common_options, backend_args)
+    args, unknown = parser.parse_known_args()
 
     if args.verbose >= 2:
         log_level = logging.DEBUG
@@ -31,5 +35,4 @@ if __name__ == '__main__':
         log_level = logging.WARNING
 
     logging.basicConfig(level=log_level)
-
-    asyncio.run(main(args))
+    asyncio.run(main(args, unknown))
