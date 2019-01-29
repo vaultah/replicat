@@ -1,17 +1,20 @@
 import argparse
+import ast
 import asyncio
 import base64
 import collections.abc
 import functools
 import importlib
 import inspect
+import os
 import threading
+from pathlib import Path
 from types import SimpleNamespace
 
 from .. import exceptions
 
 
-def _storage_tuple(uri):
+def _backend_tuple(uri):
     parts = uri.split(':', 1)
     if len(parts) < 2:
         name, connection_string = 'local', parts[0]
@@ -21,12 +24,73 @@ def _storage_tuple(uri):
     mod = importlib.import_module(f'..backends.{name}', package=__package__)
     return (mod.Client, connection_string)
 
+def _read_bytes(arg):
+    return Path(arg).read_bytes()
 
-common_parser = argparse.ArgumentParser(add_help=False)
-common_parser.add_argument('-c', '--concurrent', default=5, type=int)
-common_parser.add_argument('-v', '--verbose', action='count', default=0)
-common_parser.add_argument('-P', '--hide-progress', dest='progress', action='store_false')
-common_parser.add_argument('-s', '--storage', type=_storage_tuple, required=True)
+# NOTE: Python uses the file system encoding in surrograteescape mode
+# for command line arguments AND os.environ. And we need bytes. So yeah.
+# Still, we'll use os.environb when available.
+def _get_environb(var, default=None):
+    try:
+        value = os.environb.get(os.fsencode(var), default)
+    except AttributeError:
+        value = os.environ.get(var, default)
+        if value is not default:
+            return os.fsencode(value)
+    finally:
+        return value
+
+common_options = argparse.ArgumentParser(add_help=False)
+common_options.add_argument('-r', '--repository', type=_backend_tuple, dest='repo',
+            default=os.environ.get('REPLICAT_REPOSITORY', str(Path())))
+common_options.add_argument('-q', '--hide-progress', dest='progress', action='store_false')
+common_options.add_argument('-c', '--concurrent', default=5, type=int)
+common_options.add_argument('-v', '--verbose', action='count', default=0)
+common_options.add_argument('-k', '--key', metavar='KEYFILE', type=_read_bytes)
+# All the different ways to provide a repo password
+password_options = common_options.add_mutually_exclusive_group()
+password_options.add_argument('-p', '--password', type=os.fsencode)
+password_options.add_argument('-P', '--password-file', dest='password',
+                        metavar='PASSWORD_FILE_PATH', type=_read_bytes)
+common_options.set_defaults(password=_get_environb('REPLICAT_PASSWORD'))
+
+
+def make_parser(*parent_parsers):
+    parser = argparse.ArgumentParser(add_help=True)
+    # TODO: argparse is broken
+    subparsers = parser.add_subparsers(dest='action', required=True)
+    subparsers.add_parser('init', parents=parent_parsers)
+    subparsers.add_parser('snapshot', parents=parent_parsers)
+    return parser
+
+
+def parser_from_callable(cls):
+    """ Create an ArgumentParser instance based on the keyword-only
+        arguments of `cls`'s constructor """
+    parser = argparse.ArgumentParser(add_help=False)
+    params = inspect.signature(cls).parameters
+
+    for name, arg in params.items():
+        # Take just keyword-only arguments
+        if arg.kind is not arg.KEYWORD_ONLY:
+            continue
+        default = arg.default if arg.default is not arg.empty else None
+        # TODO: annotations?
+        name = name.replace('_', '-')
+        parser.add_argument(f'--{name}', required=arg.default is arg.empty,
+                        default=default, type=guess_type)
+
+    return parser
+
+
+def guess_type(value):
+    if value.lower() in {'none', 'false', 'true'}:
+        value = value.title()
+
+    try:
+        return ast.literal_eval(value)
+    except ValueError:
+        return value
 
 
 def flat_to_nested(flat, *, sep='.'):
@@ -52,7 +116,7 @@ def type_hint(object):
         We only expect to deal with byte strings right now """
     # TODO: add memoryview?
     if isinstance(object, collections.abc.ByteString):
-        return {'@binary': str(base64.standard_b64encode(object), 'ascii')}
+        return {'!bytes': str(base64.standard_b64encode(object), 'ascii')}
     raise TypeError
 
 
@@ -60,7 +124,7 @@ def type_reverse(object):
     """ Intended to be used as an object_hook. Converts the JSON object
         returned from type_hint to a Python object of appropriate type """
     try:
-        encoded = object.pop('@binary')
+        encoded = object.pop('!bytes')
     except KeyError:
         return object
     else:
@@ -71,25 +135,6 @@ def safe_kwargs(func, args):
     params = inspect.signature(func).parameters
     return {name: args[name] for name, arg in params.items()
                 if arg.kind is arg.KEYWORD_ONLY and name in args}
-
-
-def make_parser(cls):
-    """ Create an ArgumentParser instance based on the keyword-only
-        arguments of `cls`'s constructor """
-    parser = argparse.ArgumentParser(parents=[common_parser])
-    params = inspect.signature(cls).parameters
-
-    for name, arg in params.items():
-        # Take just keyword-only arguments
-        if arg.kind is not arg.KEYWORD_ONLY:
-            continue
-        default = arg.default if arg.default is not arg.empty else None
-        # TODO: Consider annotations? Will inspect module eval them in Python 4.0?
-        _type = type(default) if default is not None else None
-        parser.add_argument(f'--{name}', required=arg.default is arg.empty,
-                        default=default, type=_type)
-
-    return parser
 
 
 def require_auth(func):

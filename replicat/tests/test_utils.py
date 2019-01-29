@@ -70,10 +70,10 @@ def test_flat_to_nested():
             utils.flat_to_nested(x)
 
 
-def test_binary_serialization():
+def test_bytestring_serialization():
     raw = b'<bytes>'
     serialized = utils.type_hint(raw)
-    assert serialized == {'@binary': str(standard_b64encode(raw), 'ascii')}
+    assert serialized == {'!bytes': str(standard_b64encode(raw), 'ascii')}
     deserialized = utils.type_reverse(serialized)
     assert deserialized == raw
 
