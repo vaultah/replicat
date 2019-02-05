@@ -28,30 +28,30 @@ class Repository:
     def apply_defaults(self, config):
         encryption = config.setdefault('encryption', {})
         if encryption is not None:
-            cipher = encryption.setdefault('cipher', {})
-            cipher_class = getattr(adapters, cipher.setdefault('name', 'aes_gcm'))
-            cipher_instance = cipher_class(**cipher.get('args', {}))
-            cipher['args'] = dict(cipher_instance)
+            cipher_name = encryption.setdefault('cipher', 'aes_gcm')
+            cipher_class = getattr(adapters, cipher_name)
+            cipher = cipher_class(**encryption.get(cipher_name, {}))
+            encryption[cipher_name] = dict(cipher)
 
-            kdf = encryption.setdefault('kdf', {})
-            kdf_class = getattr(adapters, kdf.setdefault('name', 'scrypt'))
-            kdf['args'] = dict(kdf_class(**kdf.get('args', {}),
-                            length=cipher_instance.key_bytes))
+            kdf_name = encryption.setdefault('kdf', 'scrypt')
+            kdf_class = getattr(adapters, kdf_name)
+            encryption[kdf_name] = dict(kdf_class(**encryption.get(kdf_name, {}),
+                            length=cipher.key_bytes))
 
     def prepare_config(self, config):
         properties = utils.DefaultNamespace()
         encryption = config.get('encryption', None)
 
         if encryption is not None:
-            cipher, kdf = encryption['cipher'], encryption['kdf']
+            cipher_name, kdf_name = encryption['cipher'], encryption['kdf']
 
-            cipher_class = getattr(adapters, cipher['name'])
-            properties.cipher = cipher_class(**cipher['args'])
+            cipher_class = getattr(adapters, cipher_name)
+            properties.cipher = cipher_class(**encryption[cipher_name])
             properties.encrypt = properties.cipher.encrypt
             properties.decrypt = properties.cipher.decrypt
 
-            kdf_class = getattr(adapters, kdf['name'])
-            properties.kdf = kdf_class(**kdf['args'])
+            kdf_class = getattr(adapters, kdf_name)
+            properties.kdf = kdf_class(**encryption[kdf_name])
             properties.derive_key = properties.kdf.derive
             # TODO: use enum?
             properties.encryption = 'symmetric'
@@ -115,11 +115,11 @@ class Repository:
             # Create the private/encrypted part of the key
             private = {'secret': os.urandom(64)}
             # Now yank the key portion out of the config
-            key = {
-                'kdf': new['encryption'].pop('kdf'),
-                'encrypted': repo.encrypt(self.serialize(private),
-                        repo.derive_key(password))
-            }
+            encryption = new['encryption']
+            kdf = encryption.pop('kdf')
+            key = {'kdf': kdf, kdf: encryption.pop(kdf),
+                   'encrypted': repo.encrypt(self.serialize(private),
+                        repo.derive_key(password))}
 
             logger.info('New key: %s', json.dumps(key, indent=4,
                             sort_keys=True, default=utils.type_hint))
