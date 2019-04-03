@@ -1,5 +1,6 @@
 import asyncio
 import base64
+import collections.abc
 import functools
 import inspect
 import json
@@ -10,7 +11,6 @@ from concurrent.futures import ThreadPoolExecutor
 
 from . import utils
 from . import exceptions
-from .utils import adapters
 
 logger = logging.getLogger(__name__)
 
@@ -25,54 +25,12 @@ class Repository:
         self._progress = progress
         self.backend = backend
 
-    def apply_defaults(self, config):
-        encryption = config.setdefault('encryption', {})
-        if encryption is not None:
-            cipher_name = encryption.setdefault('cipher', 'aes_gcm')
-            cipher_class = getattr(adapters, cipher_name)
-            cipher = cipher_class(**encryption.get(cipher_name, {}))
-            encryption[cipher_name] = dict(cipher)
-
-            kdf_name = encryption.setdefault('kdf', 'scrypt')
-            kdf_class = getattr(adapters, kdf_name)
-            encryption[kdf_name] = dict(kdf_class(**encryption.get(kdf_name, {}),
-                            length=cipher.key_bytes))
-
-    def prepare_config(self, config):
-        properties = utils.DefaultNamespace()
-        encryption = config.get('encryption', None)
-
-        if encryption is not None:
-            cipher_name, kdf_name = encryption['cipher'], encryption['kdf']
-
-            cipher_class = getattr(adapters, cipher_name)
-            properties.cipher = cipher_class(**encryption[cipher_name])
-            properties.encrypt = properties.cipher.encrypt
-            properties.decrypt = properties.cipher.decrypt
-
-            kdf_class = getattr(adapters, kdf_name)
-            properties.kdf = kdf_class(**encryption[kdf_name])
-            properties.derive_key = properties.kdf.derive
-            # TODO: use enum?
-            properties.encryption = 'symmetric'
-        else:
-            properties.encryption = None
-
-        return properties
-
     def as_coroutine(self, func, *args, **kwargs):
         if inspect.iscoroutinefunction(func):
             return func(*args, **kwargs)
         else:
             loop = asyncio.get_event_loop()
             return loop.run_in_executor(self.executor, func, *args, **kwargs)
-
-    def serialize(self, object):
-        string = json.dumps(object, separators=(',', ':'), default=utils.type_hint)
-        return bytes(string, 'ascii')
-
-    def deserialize(self, data):
-        return json.loads(data, object_hook=utils.type_reverse)
 
     @property
     def executor(self):
@@ -83,48 +41,109 @@ class Repository:
             self._executor = ThreadPoolExecutor(max_workers=self._slots.maxsize)
             return self._executor
 
-    async def unlock(self, *, password=None, key=None):
-        data = await self.as_coroutine(self.backend.download, 'config')
-        config = self.deserialize(data)
-        encryption = config.get('encryption')
+    def serialize(self, object):
+        string = json.dumps(object, separators=(',', ':'), default=utils.type_hint)
+        return bytes(string, 'ascii')
+
+    def deserialize(self, data):
+        return json.loads(data, object_hook=utils.type_reverse)
+
+    def _make_config(self, settings):
+        # Create a raw and unencrypted combination of config and key, using
+        # user-provided settings and our defaults
+        rv = {}
+        encryption = settings.get('encryption', {})
 
         if encryption is not None:
-            # TODO: Load the key from the backend as a fallback?
+            cipher_config = encryption.get('cipher', {})
+            cipher_config.setdefault('name', 'aes_gcm')
+            cipher, cipher_args = utils.adapter_from_config(**cipher_config)
+            # KDF for user personal data
+            kdf_config = encryption.get('kdf', {})
+            kdf_config.setdefault('name', 'scrypt')
+            kdf, kdf_args = utils.adapter_from_config(**kdf_config, length=cipher.key_bytes)
+            # NOTE: *FAST* KDF for shared data. Yes, it's non-standard. Don't @ me.
+            shared_config = encryption.get('shared_kdf', {})
+            shared_config.setdefault('name', 'blake2b')
+            shared, shared_args = utils.adapter_from_config(
+                                        **shared_config, length=cipher.key_bytes)
+
+            rv['encryption'] = {
+                'cipher': {'name': type(cipher).__name__, **cipher_args}
+            }
+
+            rv['key'] = {
+                'kdf': {'name': type(kdf).__name__, **kdf_args},
+                'key_derivation_params': kdf.derivation_params(),
+                'private': {
+                    'shared_kdf': {'name': type(shared).__name__, **shared_args},
+                    'shared_encryption_secret': shared.derivation_params()
+                }
+            }
+
+        return rv
+
+    def _prepare_config(self, config, *, password=None, key=None):
+        properties = utils.DefaultNamespace()
+        encryption = config.get('encryption')
+        # NOTE: only symmetric encryption is supported at this point anyway
+        properties.encrypted = bool(encryption)
+
+        if properties.encrypted:
             if password is None or key is None:
                 raise exceptions.ReplicatError(
                         'Password and key are needed to unlock this repository')
-            key = self.deserialize(key)
-            encryption.update(key)
-            repo = self.prepare_config(config)
-            repo.userkey = repo.derive_key(password)
-            decrypted = self.deserialize(repo.decrypt(key['encrypted'], repo.userkey))
-            repo.shared_secret = decrypted['secret']
 
-        self.properties = repo
+            properties.cipher, _ = utils.adapter_from_config(**encryption['cipher'])
+            properties.encrypt = properties.cipher.encrypt
+            properties.decrypt = properties.cipher.decrypt
+
+            properties.kdf, _ = utils.adapter_from_config(**key['kdf'])
+            properties.derive_key = functools.partial(properties.kdf.derive,
+                                                params=key['key_derivation_params'])
+            properties.userkey = properties.derive_key(password)
+
+            # Decrypt the encrypted part of the key, if needed
+            try:
+                private = key['private']
+            except KeyError:
+                decrypted_private = properties.decrypt(key['encrypted'], properties.userkey)
+                private = self.deserialize(decrypted_private)
+
+            properties.shared_kdf, _ = utils.adapter_from_config(**private['shared_kdf'])
+            properties.derive_shared_key = functools.partial(properties.shared_kdf.derive,
+                                                    params=private['shared_encryption_secret'])
+
+        return properties
+
+    async def unlock(self, *, password=None, key=None):
+        data = await self.as_coroutine(self.backend.download, 'config')
+        config = self.deserialize(data)
+
+        # TODO: Load the key from the backend as a fallback?
+        if isinstance(key, collections.abc.ByteString):
+            key = self.deserialize(key)
+
+        self.properties = self._prepare_config(config, password=password, key=key)
 
     async def init(self, *, password=None, settings=None):
         if settings is None:
             settings = {}
-        new = utils.flat_to_nested(settings)
-        self.apply_defaults(new)
-        repo = self.prepare_config(new)
 
-        if repo.encryption is not None:
-            if password is None:
-                raise exceptions.ReplicatError('Password is needed')
-            # Create the private/encrypted part of the key
-            private = {'secret': os.urandom(64)}
-            # Now yank the key portion out of the config
-            encryption = new['encryption']
-            kdf = encryption.pop('kdf')
-            key = {'kdf': kdf, kdf: encryption.pop(kdf),
-                   'encrypted': repo.encrypt(self.serialize(private),
-                        repo.derive_key(password))}
+        config = self._make_config(utils.flat_to_nested(settings))
+        key = config.pop('key', None)
+        self.properties = self._prepare_config(config, password=password, key=key)
 
-            logger.info('New key: %s', json.dumps(key, indent=4,
-                            sort_keys=True, default=utils.type_hint))
+        if self.properties.encrypted:
+            logger.debug('New key (unencrypted):\n%s',
+                    json.dumps(key, indent=4, default=utils.type_hint))
+            key['encrypted'] = self.properties.encrypt(
+                                        self.serialize(key.pop('private')),
+                                        self.properties.userkey)
+            logger.info('New key (encrypted):\n%s',
+                    json.dumps(key, indent=4, default=utils.type_hint))
 
-        logger.info('New config: %s', json.dumps(new, indent=4,
-                        sort_keys=True, default=utils.type_hint))
-
-        await self.as_coroutine(self.backend.upload, 'config', self.serialize(new))
+        logger.info('New config:\n%s',
+            json.dumps(config, indent=4, sort_keys=True, default=utils.type_hint))
+        await self.as_coroutine(self.backend.upload, 'config', self.serialize(config))
+        return utils.DefaultNamespace(config=config, key=key)

@@ -54,8 +54,8 @@ class scrypt:
 
 class blake2b:
 
-    def __init__(self, *, digest_bytes=64):
-        self.digest_size = digest_bytes
+    def __init__(self, *, length=64):
+        self.digest_size = length
 
     def derivation_params(self):
         key = os.urandom(hashlib.blake2b.MAX_KEY_SIZE)
