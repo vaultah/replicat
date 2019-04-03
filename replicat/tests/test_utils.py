@@ -15,7 +15,7 @@ class PlainBackend:
     def __init__(self, arg):
         self.results = arg
 
-    @utils.require_auth
+    @utils.requires_auth
     def action(self):
         self.results.append('CALL')
         time.sleep(random.random() / 5)
@@ -36,7 +36,7 @@ class AsyncBackend:
     def __init__(self, arg):
         self.results = arg
 
-    @utils.require_auth
+    @utils.requires_auth
     async def action(self):
         self.results.append('CALL')
         await asyncio.sleep(random.random() / 5)
@@ -89,7 +89,7 @@ def test_safe_kwargs():
     [PlainBackend, AsyncBackend],
     ids=['threads', 'async'])
 @pytest.mark.asyncio
-async def test_require_auth(backend_type):
+async def test_requires_auth(backend_type):
     jobs, rs = 10, []
     backend = backend_type(rs)
 

@@ -11,7 +11,9 @@ import threading
 from pathlib import Path
 from types import SimpleNamespace
 
+import aiohttp
 from .. import exceptions
+from . import adapters
 
 
 def _backend_tuple(uri):
@@ -53,6 +55,14 @@ password_options.add_argument('-p', '--password', type=os.fsencode)
 password_options.add_argument('-P', '--password-file', dest='password',
                         metavar='PASSWORD_FILE_PATH', type=_read_bytes)
 common_options.set_defaults(password=_get_environb('REPLICAT_PASSWORD'))
+
+
+def adapter_from_config(name, **kwargs):
+    adapter_type = getattr(adapters, name)
+    bound_args = inspect.signature(adapter_type).bind(**kwargs)
+    bound_args.apply_defaults()
+    adapter_args = bound_args.arguments
+    return adapter_type(**adapter_args), adapter_args
 
 
 def make_parser(*parent_parsers):
@@ -137,20 +147,23 @@ def safe_kwargs(func, args):
                 if arg.kind is arg.KEYWORD_ONLY and name in args}
 
 
-def require_auth(func):
+def requires_auth(func):
     """ If a decorated backend method (async or plain) raises AuthRequired,
         indicating that the backend authorization is no longer valid,
         the decorator will call authenticate to refresh it """
     # TODO: logging?
+    # TODO: a minor race condition is still possible
     if inspect.iscoroutinefunction(func):
         async def wrapper(self, *a, **ka):
             try:
-                self._async_auth_lock
-            except AttributeError:
-                self._async_auth_lock = asyncio.Lock()
-
-            try:
-                return await func(self, *a, **ka)
+                try:
+                    self._async_auth_lock
+                except AttributeError:
+                    # First call (within the instance); force authentication
+                    self._async_auth_lock = asyncio.Lock()
+                    raise exceptions.AuthRequired
+                else:
+                    return await func(self, *a, **ka)
             except exceptions.AuthRequired:
                 if not self._async_auth_lock.locked():
                     async with self._async_auth_lock:
@@ -163,12 +176,14 @@ def require_auth(func):
     else:
         def wrapper(self, *a, **ka):
             try:
-                self._auth_lock
-            except AttributeError:
-                self._auth_lock = threading.Lock()
-
-            try:
-                return func(self, *a, **ka)
+                try:
+                    self._auth_lock
+                except AttributeError:
+                    # First call (within the instance); force authentication
+                    self._auth_lock = threading.Lock()
+                    raise exceptions.AuthRequired
+                else:
+                    return func(self, *a, **ka)
             except exceptions.AuthRequired:
                 if self._auth_lock.acquire(blocking=False):
                     try:
@@ -183,6 +198,28 @@ def require_auth(func):
 
     wrapper = functools.wraps(func)(wrapper)
     return wrapper
+
+
+class async_session:
+
+    """ Creates and stores an aiohttp client session when accessed
+        through the parent object. It should be accessed from
+        within an async function. """
+
+    def __init__(self, *args, **kwargs):
+        self.args, self.kwargs = args, kwargs
+
+    def __get__(self, instance, owner):
+        try:
+            return self.session
+        except AttributeError:
+            # async loop should be picked up automatically
+            self.session = aiohttp.ClientSession(*self.args, **self.kwargs)
+            return self.session
+
+    # TODO: atexit?
+    def close(self):
+        self.session.close()
 
 
 class DefaultNamespace(SimpleNamespace):
