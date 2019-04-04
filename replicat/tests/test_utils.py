@@ -20,15 +20,14 @@ class PlainBackend:
         self.results.append('CALL')
         time.sleep(random.random() / 5)
 
-        if 'AUTH' not in self.results:
+        if random.random() > 0.75:
             self.results.append('ERROR')
             raise exceptions.AuthRequired
 
-        time.sleep(random.random() / 5)
         self.results.append('SUCCESS')
 
     def authenticate(self):
-        time.sleep(random.random() / 5)
+        time.sleep(0.5)
         self.results.append('AUTH')
 
 
@@ -41,15 +40,14 @@ class AsyncBackend:
         self.results.append('CALL')
         await asyncio.sleep(random.random() / 5)
 
-        if 'AUTH' not in self.results:
+        if random.random() > 0.75:
             self.results.append('ERROR')
             raise exceptions.AuthRequired
 
-        await asyncio.sleep(random.random() / 5)
         self.results.append('SUCCESS')
 
     async def authenticate(self):
-        await asyncio.sleep(random.random() / 5)
+        await asyncio.sleep(0.5)
         self.results.append('AUTH')
 
 
@@ -90,7 +88,7 @@ def test_safe_kwargs():
     ids=['threads', 'async'])
 @pytest.mark.asyncio
 async def test_requires_auth(backend_type):
-    jobs, rs = 10, []
+    jobs, rs = 20, []
     backend = backend_type(rs)
 
     if inspect.iscoroutinefunction(backend.action):
@@ -102,11 +100,13 @@ async def test_requires_auth(backend_type):
 
     results = await asyncio.gather(*tasks, return_exceptions=True)
 
-    # backend.authenticate was called exactly once
-    assert rs.count('AUTH') == 1
-    # ... despite there being at least one and at most `jobs` authentication errors
-    assert 1 <= rs.count('ERROR') <= jobs
-    # ... and, of course, the total number of calls is errors + successes
-    assert rs.count('CALL') == rs.count('ERROR') + rs.count('SUCCESS')
-    # ... and in the end, all of the jobs have completed successfully
+    # Must request authentication at the very beginning
+    assert rs[0] == 'AUTH'
+    # Test the test correctness
+    assert rs.count('ERROR') > 0
+    # In the end, all jobs were completed
     assert rs.count('SUCCESS') == jobs
+    # Number of calls
+    assert rs.count('CALL') == jobs + rs.count('ERROR')
+    # There must be fewer authentications (not counting the first one) than errors
+    assert rs.count('AUTH') - 1 <= rs.count('ERROR')

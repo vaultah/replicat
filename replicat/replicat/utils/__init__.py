@@ -8,6 +8,7 @@ import importlib
 import inspect
 import os
 import threading
+import weakref
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -147,23 +148,35 @@ def safe_kwargs(func, args):
                 if arg.kind is arg.KEYWORD_ONLY and name in args}
 
 
+_async_locks = weakref.WeakKeyDictionary()
+_sync_locks = weakref.WeakKeyDictionary()
+
+
 def requires_auth(func):
     """ If a decorated backend method (async or plain) raises AuthRequired,
         indicating that the backend authorization is no longer valid,
         the decorator will call authenticate to refresh it """
     # TODO: logging?
-    # TODO: a minor race condition is still possible
     if inspect.iscoroutinefunction(func):
         async def wrapper(self, *a, **ka):
             try:
+                self._async_auth_lock
+            except AttributeError:
                 try:
-                    self._async_auth_lock
-                except AttributeError:
-                    # First call (within the instance); force authentication
-                    self._async_auth_lock = asyncio.Lock()
-                    raise exceptions.AuthRequired
+                    lock = _async_locks[self]
+                except KeyError:
+                    lock = _async_locks[self] = asyncio.Lock()
+
+                if not lock.locked():
+                    async with lock:
+                        await self.authenticate()
+                        self._async_auth_lock = lock
                 else:
-                    return await func(self, *a, **ka)
+                    async with lock:
+                        pass
+
+            try:
+                return await func(self, *a, **ka)
             except exceptions.AuthRequired:
                 if not self._async_auth_lock.locked():
                     async with self._async_auth_lock:
@@ -176,14 +189,23 @@ def requires_auth(func):
     else:
         def wrapper(self, *a, **ka):
             try:
+                self._auth_lock
+            except AttributeError:
                 try:
-                    self._auth_lock
-                except AttributeError:
-                    # First call (within the instance); force authentication
-                    self._auth_lock = threading.Lock()
-                    raise exceptions.AuthRequired
+                    lock = _sync_locks[self]
+                except KeyError:
+                    lock = _sync_locks[self] = threading.Lock()
+
+                if lock.acquire(blocking=False):
+                    self.authenticate()
+                    self._auth_lock = lock
+                    lock.release()
                 else:
-                    return func(self, *a, **ka)
+                    with lock:
+                        pass
+
+            try:
+                return func(self, *a, **ka)
             except exceptions.AuthRequired:
                 if self._auth_lock.acquire(blocking=False):
                     try:
