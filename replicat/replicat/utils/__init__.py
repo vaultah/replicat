@@ -85,8 +85,13 @@ def parser_from_callable(cls):
         # Take just keyword-only arguments
         if arg.kind is not arg.KEYWORD_ONLY:
             continue
-        default = arg.default if arg.default is not arg.empty else None
+
         # TODO: annotations?
+        if arg.default is not arg.empty:
+            default = arg.default
+        else:
+            default = os.environ.get(f'{cls.__name__.upper()}_{name.upper()}')
+
         name = name.replace('_', '-')
         parser.add_argument(f'--{name}', required=arg.default is arg.empty,
                         default=default, type=guess_type)
