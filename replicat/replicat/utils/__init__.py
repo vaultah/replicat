@@ -167,10 +167,7 @@ def requires_auth(func):
             try:
                 self._async_auth_lock
             except AttributeError:
-                try:
-                    lock = _async_locks[self]
-                except KeyError:
-                    lock = _async_locks[self] = asyncio.Lock()
+                lock = _async_locks.setdefault(self, asyncio.Lock())
 
                 if not lock.locked():
                     async with lock:
@@ -196,10 +193,8 @@ def requires_auth(func):
             try:
                 self._auth_lock
             except AttributeError:
-                try:
-                    lock = _sync_locks[self]
-                except KeyError:
-                    lock = _sync_locks[self] = threading.Lock()
+                # NOTE: *slightly* wasteful, but thread-safe
+                lock = _sync_locks.setdefault(self, threading.Lock())
 
                 if lock.acquire(blocking=False):
                     self.authenticate()
