@@ -3,19 +3,9 @@ import os
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 from .. import Backend
-
+from ..utils.fs import recursive_scandir
 
 logger = logging.getLogger(__name__)
-
-
-def _recursive_scandir(start_entry):
-    # Just recursively yield all *files* below `start_entry`
-    if not start_entry.is_dir(follow_symlinks=False):
-        yield start_entry.path
-    else:
-        with os.scandir(start_entry.path) as it:
-            for entry in it:
-                yield from _recursive_scandir(entry)
 
 
 class Local(Backend):
@@ -53,7 +43,7 @@ class Local(Backend):
             for entry in it:
                 if not entry.name.startswith(prefix_basename):
                     continue
-                for file in _recursive_scandir(entry):
+                for file in recursive_scandir(entry):
                     # NOTE: Anything from the standard library seems
                     # like an overkill here
                     yield file[path_length + 1:]

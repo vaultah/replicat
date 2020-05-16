@@ -11,13 +11,16 @@ async def main(args, unknown):
     backend_params = utils.safe_kwargs(backend_type, vars(args))
     backend = backend_type(connection_string, **backend_params)
     repo = Repository(backend, concurrent=args.concurrent,
-                    progress=args.progress)
+                progress=args.progress)
+
     if args.action == 'init':
         pairs = zip(unknown[::2], unknown[1::2])
         settings = {k.lstrip('-'): utils.guess_type(v) for k, v in pairs}
         await repo.init(password=args.password, settings=settings)
     else:
         await repo.unlock(password=args.password, key=args.key)
+        if args.action == 'snapshot':
+            await repo.snapshot(paths=args.path)
 
 
 if __name__ == '__main__':

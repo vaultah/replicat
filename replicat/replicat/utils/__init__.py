@@ -14,8 +14,7 @@ from types import SimpleNamespace
 
 import aiohttp
 from .. import exceptions
-from . import adapters
-
+from . import adapters, fs
 
 def _backend_tuple(uri):
     parts = uri.split(':', 1)
@@ -71,7 +70,8 @@ def make_parser(*parent_parsers):
     # TODO: argparse is broken
     subparsers = parser.add_subparsers(dest='action', required=True)
     subparsers.add_parser('init', parents=parent_parsers)
-    subparsers.add_parser('snapshot', parents=parent_parsers)
+    snapshot_parser = subparsers.add_parser('snapshot', parents=parent_parsers)
+    snapshot_parser.add_argument('path', nargs='+', type=Path)
     return parser
 
 

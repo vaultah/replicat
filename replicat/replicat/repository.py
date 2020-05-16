@@ -58,15 +58,24 @@ class Repository:
             cipher_config = encryption.get('cipher', {})
             cipher_config.setdefault('name', 'aes_gcm')
             cipher, cipher_args = utils.adapter_from_config(**cipher_config)
+
             # KDF for user personal data
             kdf_config = encryption.get('kdf', {})
             kdf_config.setdefault('name', 'scrypt')
-            kdf, kdf_args = utils.adapter_from_config(**kdf_config, length=cipher.key_bytes)
+            kdf, kdf_args = utils.adapter_from_config(
+                **kdf_config, length=cipher.key_bytes
+            )
+
             # NOTE: *FAST* KDF for shared data. Yes, it's non-standard. Don't @ me.
             shared_config = encryption.get('shared_kdf', {})
             shared_config.setdefault('name', 'blake2b')
             shared, shared_args = utils.adapter_from_config(
-                                        **shared_config, length=cipher.key_bytes)
+                **shared_config, length=cipher.key_bytes
+            )
+
+            chunker = settings.get('chunking', {})
+            chunker.setdefault('name', 'simple_chunker')
+            chunker, chunker_args = utils.adapter_from_config(**chunker)
 
             rv['encryption'] = {
                 'cipher': {'name': type(cipher).__name__, **cipher_args}
@@ -77,7 +86,8 @@ class Repository:
                 'key_derivation_params': kdf.derivation_params(),
                 'private': {
                     'shared_kdf': {'name': type(shared).__name__, **shared_args},
-                    'shared_encryption_secret': shared.derivation_params()
+                    'shared_encryption_secret': shared.derivation_params(),
+                    'chunker': {'name': type(chunker).__name__, **chunker_args}
                 }
             }
 
@@ -92,27 +102,37 @@ class Repository:
         if properties.encrypted:
             if password is None or key is None:
                 raise exceptions.ReplicatError(
-                        'Password and key are needed to unlock this repository')
+                    'Password and key are needed to unlock this repository'
+                )
 
+            # Encryption
             properties.cipher, _ = utils.adapter_from_config(**encryption['cipher'])
             properties.encrypt = properties.cipher.encrypt
             properties.decrypt = properties.cipher.decrypt
 
+            # Key derivation
             properties.kdf, _ = utils.adapter_from_config(**key['kdf'])
-            properties.derive_key = functools.partial(properties.kdf.derive,
-                                                params=key['key_derivation_params'])
+            properties.derive_key = functools.partial(
+                properties.kdf.derive, params=key['key_derivation_params']
+            )
             properties.userkey = properties.derive_key(password)
 
-            # Decrypt the encrypted part of the key, if needed
             try:
                 private = key['private']
             except KeyError:
-                decrypted_private = properties.decrypt(key['encrypted'], properties.userkey)
+                # Decrypt and deserialize the encrypted part of the key, if needed
+                decrypted_private = properties.decrypt(
+                    key['encrypted'], properties.userkey
+                )
                 private = self.deserialize(decrypted_private)
 
             properties.shared_kdf, _ = utils.adapter_from_config(**private['shared_kdf'])
-            properties.derive_shared_key = functools.partial(properties.shared_kdf.derive,
-                                                    params=private['shared_encryption_secret'])
+            properties.derive_shared_key = functools.partial(
+                properties.shared_kdf.derive, params=private['shared_encryption_secret']
+            )
+
+            # Chunking
+            properties.chunker, _ = utils.adapter_from_config(**private['chunker'])
 
         return properties
 
@@ -135,15 +155,26 @@ class Repository:
         self.properties = self._prepare_config(config, password=password, key=key)
 
         if self.properties.encrypted:
-            logger.debug('New key (unencrypted):\n%s',
-                    json.dumps(key, indent=4, default=utils.type_hint))
+            logger.debug(
+                'New key (unencrypted):\n%s',
+                json.dumps(key, indent=4, default=utils.type_hint)
+            )
             key['encrypted'] = self.properties.encrypt(
-                                        self.serialize(key.pop('private')),
-                                        self.properties.userkey)
-            logger.info('New key (encrypted):\n%s',
-                    json.dumps(key, indent=4, default=utils.type_hint))
+                self.serialize(key.pop('private')), self.properties.userkey
+            )
+            print(
+                'Encrypted key data:',
+                json.dumps(key, indent=4, default=utils.type_hint)
+            )
 
         logger.info('New config:\n%s',
             json.dumps(config, indent=4, sort_keys=True, default=utils.type_hint))
+
         await self.as_coroutine(self.backend.upload, 'config', self.serialize(config))
         return utils.DefaultNamespace(config=config, key=key)
+
+    async def snapshot(self, *, paths):
+        files = list(utils.fs.flatten_paths(paths))
+        source_chunks = utils.fs.stream_files(files)
+        for chunk in self.properties.chunker.next_chunks(source_chunks):
+            print(chunk, len(chunk))
