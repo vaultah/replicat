@@ -88,22 +88,23 @@ class simple_chunker:
         self.buffer = b''
 
     def _fnv_1a(self, buffer):
-        hsh = 0xCBF29CE484222325
+        hsh = 0xCBF2_9CE4_8422_2325
         for x in buffer:
             hsh ^= x
-            hsh = (hsh * 0x100000001B3) & 0xFFFFFFFFFFF
+            hsh = (hsh * 0x0000_0100_0000_01B3) & 0xFFFF_FFFF_FFFF_FFFF
 
         return hsh
 
     def _next_from_buffer(self):
-        seed = self._fnv_1a(self.buffer[:self.min_length])
+        seed = self._fnv_1a(self.buffer[: self.min_length])
         cut_at = max(
-            range(self.min_length - 1, min(self.max_length, len(self.buffer))),
-            key=lambda i: self.buffer[i] ^ self.buffer[i - 1] & seed,
-            default=self.min_length - 1
+            range(self.min_length - 1, min(self.max_length, len(self.buffer)), 8),
+            key=lambda i: int.from_bytes(self.buffer[i : i + 8], 'little')
+            ^ int.from_bytes(self.buffer[i - 8 : i], 'little') & seed,
+            default=self.min_length - 1,
         )
-        rv = self.buffer[:cut_at + 1]
-        self.buffer = self.buffer[cut_at + 1:]
+        rv = self.buffer[: cut_at + 1]
+        self.buffer = self.buffer[cut_at + 1 :]
         return rv
 
     def next_chunks(self, chunk_iterator):
