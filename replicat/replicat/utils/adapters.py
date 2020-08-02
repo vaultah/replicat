@@ -95,19 +95,23 @@ class simple_chunker:
 
         return hsh
 
-    def _next_from_buffer(self):
-        seed = self._fnv_1a(self.buffer[: self.min_length])
+    def _next_from_buffer(self, *, person=None):
+        if person is None:
+            person = b''
+
+        person = person.rjust(64, b'\x00')
+        seed = self._fnv_1a(person + self.buffer[: self.min_length])
         cut_at = max(
             range(self.min_length - 1, min(self.max_length, len(self.buffer)), 8),
             key=lambda i: int.from_bytes(self.buffer[i : i + 8], 'little')
-            ^ int.from_bytes(self.buffer[i - 8 : i], 'little') & seed,
+            ^ int.from_bytes(self.buffer[i - 8 : i], 'little') ^ seed,
             default=self.min_length - 1,
         )
         rv = self.buffer[: cut_at + 1]
         self.buffer = self.buffer[cut_at + 1 :]
         return rv
 
-    def next_chunks(self, chunk_iterator):
+    def next_chunks(self, chunk_iterator, *, params=None):
         it = iter(chunk_iterator)
         chunk = next(it, None)
 
@@ -116,7 +120,7 @@ class simple_chunker:
             next_chunk = next(it, None)
 
             while len(self.buffer) // self.max_length > (next_chunk is None):
-                yield self._next_from_buffer()
+                yield self._next_from_buffer(person=params)
 
             chunk = next_chunk
 
@@ -142,3 +146,7 @@ class simple_chunker:
                 self.buffer = self.buffer[cut_at:]
 
         return chunks
+
+    def chunking_params(self):
+        person = os.urandom(64)
+        return person

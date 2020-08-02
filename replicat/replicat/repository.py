@@ -51,10 +51,11 @@ class Repository:
     def _make_config(self, settings):
         # Create a raw and unencrypted combination of config and key, using
         # user-provided settings and our defaults
-        rv = {}
+        config = {}
         encryption = settings.get('encryption', {})
 
         if encryption is not None:
+            # Cipher for user data
             cipher_config = encryption.get('cipher', {})
             cipher_config.setdefault('name', 'aes_gcm')
             cipher, cipher_args = utils.adapter_from_config(**cipher_config)
@@ -69,7 +70,7 @@ class Repository:
             # NOTE: *FAST* KDF for shared data. Yes, it's non-standard. Don't @ me.
             shared_config = encryption.get('shared_kdf', {})
             shared_config.setdefault('name', 'blake2b')
-            shared, shared_args = utils.adapter_from_config(
+            shared_kdf, shared_args = utils.adapter_from_config(
                 **shared_config, length=cipher.key_bytes
             )
 
@@ -77,21 +78,22 @@ class Repository:
             chunker.setdefault('name', 'simple_chunker')
             chunker, chunker_args = utils.adapter_from_config(**chunker)
 
-            rv['encryption'] = {
+            config['encryption'] = {
                 'cipher': {'name': type(cipher).__name__, **cipher_args}
             }
 
-            rv['key'] = {
+            config['key'] = {
                 'kdf': {'name': type(kdf).__name__, **kdf_args},
                 'key_derivation_params': kdf.derivation_params(),
                 'private': {
-                    'shared_kdf': {'name': type(shared).__name__, **shared_args},
-                    'shared_encryption_secret': shared.derivation_params(),
-                    'chunker': {'name': type(chunker).__name__, **chunker_args}
+                    'shared_kdf': {'name': type(shared_kdf).__name__, **shared_args},
+                    'chunker': {'name': type(chunker).__name__, **chunker_args},
+                    'shared_encryption_secret': shared_kdf.derivation_params(),
+                    'chunker_personalization': chunker.chunking_params()
                 }
             }
 
-        return rv
+        return config
 
     def _prepare_config(self, config, *, password=None, key=None):
         properties = utils.DefaultNamespace()
@@ -120,7 +122,7 @@ class Repository:
             try:
                 private = key['private']
             except KeyError:
-                # Decrypt and deserialize the encrypted part of the key, if needed
+                # The key is still encrypted
                 decrypted_private = properties.decrypt(
                     key['encrypted'], properties.userkey
                 )
@@ -133,6 +135,9 @@ class Repository:
 
             # Chunking
             properties.chunker, _ = utils.adapter_from_config(**private['chunker'])
+            properties.next_chunks = functools.partial(
+                properties.chunker.next_chunks, params=private['chunker_personalization']
+            )
 
         return properties
 
@@ -163,7 +168,7 @@ class Repository:
                 self.serialize(key.pop('private')), self.properties.userkey
             )
             print(
-                'Encrypted key data:',
+                'New key (encrypted):',
                 json.dumps(key, indent=4, default=utils.type_hint)
             )
 
@@ -176,5 +181,5 @@ class Repository:
     async def snapshot(self, *, paths):
         files = list(utils.fs.flatten_paths(paths))
         source_chunks = utils.fs.stream_files(files)
-        for chunk in self.properties.chunker.next_chunks(source_chunks):
+        for chunk in self.properties.next_chunks(source_chunks):
             print(chunk, len(chunk))
