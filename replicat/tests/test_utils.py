@@ -98,7 +98,7 @@ async def test_requires_auth(backend_type):
         executor = ThreadPoolExecutor(max_workers=jobs)
         tasks = [loop.run_in_executor(executor, backend.action) for _ in range(jobs)]
 
-    results = await asyncio.gather(*tasks, return_exceptions=True)
+    await asyncio.gather(*tasks, return_exceptions=True)
 
     # Must request authentication at the very beginning
     assert rs[0] == 'AUTH'

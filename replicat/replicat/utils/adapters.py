@@ -1,5 +1,4 @@
 import hashlib
-import inspect
 import os
 from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives.ciphers import aead
@@ -72,6 +71,9 @@ class blake2b:
     def mac(self, message, *, params):
         return hashlib.blake2b(message, digest_size=self.digest_size,
                             key=params).digest()
+
+    def digest(self, data):
+        return hashlib.blake2b(data, digest_size=self.digest_size).digest()
 
 
 class simple_chunker:

@@ -1,18 +1,84 @@
 import asyncio
-import base64
 import collections.abc
 import functools
 import inspect
+import io
 import json
 import logging
 import os
-from pathlib import Path
+import sys
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
+from datetime import datetime
+from functools import cached_property, partial
+from itertools import tee, zip_longest
 
-from . import utils
 from . import exceptions
+from . import utils
 
 logger = logging.getLogger(__name__)
+
+try:
+    from tqdm import tqdm
+    _tqdm_installed = True
+except ImportError:
+    # tqdm was not installed, and that's okay
+    tqdm = None
+    _tqdm_installed = False
+
+
+@dataclass
+class _chunk:
+    _properties: utils.DefaultNamespace
+    contents: bytes
+    start: int
+    end: int
+    counter: int
+    slot: int = None
+
+    @cached_property
+    def digest(self):
+        return self._properties.digest(self.contents)
+
+    @cached_property
+    def encrypted_contents(self):
+        if self._properties.encrypted:
+            return self._properties.encrypt(
+                self.contents, self._properties.derive_shared_key(self.digest)
+            )
+        else:
+            return self.contents
+
+    @cached_property
+    def name(self):
+        if self._properties.encrypted:
+            return self._properties.mac(self.digest).hex()
+        else:
+            return self.digest.hex()
+
+
+class TrackedBytesIO(io.BytesIO):
+
+    def __init__(self, initial_bytes, *, desc, slot, progress):
+        super().__init__(initial_bytes)
+        self._tracker = tqdm(
+            desc=desc,
+            unit='B',
+            total=len(initial_bytes),
+            unit_scale=True,
+            position=slot,
+            file=sys.stdout,
+            disable=not progress,
+            leave=None
+        )
+
+    def read(self, *args, **kwargs):
+        # TODO: rate limit
+        data = super().read(*args, **kwargs)
+        self._tracker.update(len(data))
+        return data
+
+    # TODO: close tqdm
 
 
 class Repository:
@@ -20,8 +86,15 @@ class Repository:
     def __init__(self, backend, *, concurrent, progress=False):
         self._slots = asyncio.Queue(maxsize=concurrent)
         # We need actual integers for TQDM slot management
-        for x in range(concurrent):
-            self._slots.put_nowait(x)
+        for slot in range(1, concurrent + 1):
+            self._slots.put_nowait(slot)
+
+        if progress and not _tqdm_installed:
+            raise exceptions.ReplicatError(
+                'TQDM is required to display progress '
+                '(can be installed with [progress] or [all])'
+            )
+
         self._progress = progress
         self.backend = backend
 
@@ -48,10 +121,41 @@ class Repository:
     def deserialize(self, data):
         return json.loads(data, object_hook=utils.type_reverse)
 
-    def _make_config(self, settings):
+    def read_metadata(self, path):
+        # TODO: Cache stat result?
+        stat_result = os.stat(path)
+        return {
+            'st_mode': stat_result.st_mode,
+            'st_uid': stat_result.st_uid,
+            'st_gid': stat_result.st_gid,
+            'st_size': stat_result.st_size,
+            'st_atime': stat_result.st_atime,
+            'st_mtime': stat_result.st_mtime,
+            'st_ctime': stat_result.st_ctime,
+        }
+
+    @cached_property
+    def _chunk_type(self):
+        return partial(_chunk, _properties=self.properties)
+
+    def _config_and_key_from_settings(self, settings):
         # Create a raw and unencrypted combination of config and key, using
         # user-provided settings and our defaults
         config = {}
+        key = None
+
+        # Hashing algorithm for chunks
+        hashing_config = settings.get('hashing', {})
+        hashing_config.setdefault('name', 'blake2b')
+        hasher, hasher_args = utils.adapter_from_config(**hashing_config)
+        config['hashing'] = {'name': type(hasher).__name__, **hasher_args}
+
+        # Deduplication params
+        chunker = settings.get('chunking', {})
+        chunker.setdefault('name', 'simple_chunker')
+        chunker, chunker_args = utils.adapter_from_config(**chunker)
+        config['chunking'] = {'name': type(chunker).__name__, **chunker_args}
+
         encryption = settings.get('encryption', {})
 
         if encryption is not None:
@@ -59,6 +163,9 @@ class Repository:
             cipher_config = encryption.get('cipher', {})
             cipher_config.setdefault('name', 'aes_gcm')
             cipher, cipher_args = utils.adapter_from_config(**cipher_config)
+            config['encryption'] = {
+                'cipher': {'name': type(cipher).__name__, **cipher_args}
+            }
 
             # KDF for user personal data
             kdf_config = encryption.get('kdf', {})
@@ -74,29 +181,33 @@ class Repository:
                 **shared_config, length=cipher.key_bytes
             )
 
-            chunker = settings.get('chunking', {})
-            chunker.setdefault('name', 'simple_chunker')
-            chunker, chunker_args = utils.adapter_from_config(**chunker)
+            mac_config = encryption.get('mac', {})
+            mac_config.setdefault('name', 'blake2b')
+            mac, mac_args = utils.adapter_from_config(
+                **mac_config
+            )
 
-            config['encryption'] = {
-                'cipher': {'name': type(cipher).__name__, **cipher_args}
-            }
-
-            config['key'] = {
+            key = {
                 'kdf': {'name': type(kdf).__name__, **kdf_args},
                 'key_derivation_params': kdf.derivation_params(),
                 'private': {
                     'shared_kdf': {'name': type(shared_kdf).__name__, **shared_args},
-                    'chunker': {'name': type(chunker).__name__, **chunker_args},
+                    'mac': {'name': type(mac).__name__, **mac_args},
                     'shared_encryption_secret': shared_kdf.derivation_params(),
+                    'mac_key': mac.mac_params(),
                     'chunker_personalization': chunker.chunking_params()
                 }
             }
 
-        return config
+        return config, key
 
     def _prepare_config(self, config, *, password=None, key=None):
         properties = utils.DefaultNamespace()
+
+        properties.chunker, _ = utils.adapter_from_config(**config['chunking'])
+        properties.hasher, _ = utils.adapter_from_config(**config['hashing'])
+        properties.digest = properties.hasher.digest
+
         encryption = config.get('encryption')
         # NOTE: only symmetric encryption is supported at this point anyway
         properties.encrypted = bool(encryption)
@@ -122,11 +233,17 @@ class Repository:
             try:
                 private = key['private']
             except KeyError:
-                # The key is still encrypted
+                # Private portion of the key is still encrypted
                 decrypted_private = properties.decrypt(
                     key['encrypted'], properties.userkey
                 )
                 private = self.deserialize(decrypted_private)
+
+            # Message authentication
+            properties.authenticator, _ = utils.adapter_from_config(**private['mac'])
+            properties.mac = functools.partial(
+                properties.authenticator.mac, params=private['mac_key']
+            )
 
             properties.shared_kdf, _ = utils.adapter_from_config(**private['shared_kdf'])
             properties.derive_shared_key = functools.partial(
@@ -134,10 +251,11 @@ class Repository:
             )
 
             # Chunking
-            properties.chunker, _ = utils.adapter_from_config(**private['chunker'])
             properties.next_chunks = functools.partial(
                 properties.chunker.next_chunks, params=private['chunker_personalization']
             )
+        else:
+            properties.next_chunks = properties.chunker.next_chunks
 
         return properties
 
@@ -155,8 +273,7 @@ class Repository:
         if settings is None:
             settings = {}
 
-        config = self._make_config(utils.flat_to_nested(settings))
-        key = config.pop('key', None)
+        config, key = self._config_and_key_from_settings(utils.flat_to_nested(settings))
         self.properties = self._prepare_config(config, password=password, key=key)
 
         if self.properties.encrypted:
@@ -179,7 +296,135 @@ class Repository:
         return utils.DefaultNamespace(config=config, key=key)
 
     async def snapshot(self, *, paths):
-        files = list(utils.fs.flatten_paths(paths))
-        source_chunks = utils.fs.stream_files(files)
-        for chunk in self.properties.next_chunks(source_chunks):
-            print(chunk, len(chunk))
+        paths = list(utils.fs.flatten_paths(paths))
+        logger.info('Found %d files', len(paths))
+        # Small files are more likely to change than big files, read them quickly
+        # and pu tthem in chunks together
+        paths.sort(key=lambda file: (file.stat().st_size, file.name))
+
+        tasks = []
+        files = {}
+        chunks = []
+        ranges = {}
+        bytes_read = 0
+        bytes_chunked = 0
+        chunk_counter = 0
+
+        file_tracker = tqdm(
+            desc='Files processed',
+            unit='',
+            total=len(paths),
+            position=0,
+            file=sys.stdout,
+            disable=not self._progress,
+            leave=None
+        )
+
+        for file, source_chunk in utils.fs.stream_files(paths):
+            if file not in ranges:
+                # First chunk from this file
+                start = bytes_read
+            else:
+                start, _ = ranges[file]
+
+            bytes_read += len(source_chunk)
+            ranges[file] = (start, bytes_read)
+
+            chunks = self.properties.next_chunks([source_chunk])
+            # XXX
+
+            for chunk in chunks:
+                chunk_counter += 1
+                slot = await self._slots.get()
+                chunk_object = self._chunk_type(
+                    contents=chunk,
+                    counter=chunk_counter,
+                    start=bytes_chunked,
+                    end=bytes_chunked + len(chunk),
+                    slot=slot
+                )
+                bytes_chunked += len(chunk)
+
+                def _done_callback(_, chunk=chunk_object):
+                    logger.info('Chunk %s uploaded', chunk_object.name)
+                    for file, (file_start, file_end) in ranges.items():
+                        if file_start > chunk.end or file_end < chunk.start:
+                            continue
+
+                        chunk_lo = max(file_start - chunk.start, 0)
+                        chunk_hi = min(file_end, chunk.end) - chunk.start
+
+                        if file not in files:
+                            files[file] = {
+                                'name':  file.name,
+                                'path': str(file.resolve()),
+                                'chunks': [],
+                                'metadata': self.read_metadata(file)
+                            }
+
+                        files[file]['chunks'].append(
+                            {
+                                'name': chunk.name,
+                                'start': chunk_lo,
+                                'end': chunk_hi,
+                                'digest': chunk.digest.hex(),
+                                'counter': chunk.counter
+                            }
+                        )
+
+                        if chunk.end >= file_end:
+                            # File completed
+                            logger.info('File %r fully uploaded', str(file))
+                            file_tracker.update()
+
+                    self._slots.put_nowait(chunk.slot)
+
+                storage_path = f'data/{chunk_object.name[:2]}/{chunk_object.name}'
+                matching = await self.as_coroutine(self.backend.list_files, storage_path)
+                if next(matching, None) is not None:
+                    # Reuse the same chunk
+                    logger.info('Will reuse chunk %s', chunk_object.name)
+                    _done_callback(None)
+                    continue
+
+                logger.info('Uploading chunk %s', chunk_object.name)
+                io_wrapper = TrackedBytesIO(
+                    chunk_object.encrypted_contents,
+                    desc=f'Chunk #{chunk_object.counter:06}',
+                    slot=chunk_object.slot,
+                    progress=self._progress
+                )
+                task = asyncio.ensure_future(
+                    self.as_coroutine(
+                        self.backend.upload,
+                        storage_path,
+                        io_wrapper,
+                    )
+                )
+
+                task.add_done_callback(_done_callback)
+                tasks.append(task)
+
+        if tasks:
+            done, pending = await asyncio.wait(
+                tasks, return_when=asyncio.FIRST_EXCEPTION
+            )
+
+        now = datetime.utcnow()
+        snapshot = {
+            'utc_timestamp': str(now),
+            'unix_timestamp': now.timestamp(),
+            'files': list(files.values()),
+        }
+        logger.debug(
+            'Generated snashot: %s',
+            json.dumps(snapshot, indent=4, sort_keys=True, default=utils.type_hint)
+        )
+        encrypted_snapshot = self.properties.encrypt(
+            self.serialize(snapshot), self.properties.userkey
+        )
+        snapshot_name = self.properties.digest(encrypted_snapshot).hex()
+        await self.as_coroutine(
+            self.backend.upload, f'snapshots/{snapshot_name}', encrypted_snapshot
+        )
+        return utils.DefaultNamespace(snapshot=snapshot_name, data=snapshot)

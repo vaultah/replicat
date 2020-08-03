@@ -1,5 +1,7 @@
+import io
 import logging
 import os
+import shutil
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 from .. import Backend
@@ -20,7 +22,14 @@ class Local(Backend):
         # atomic replacements possible
         temp = Path(NamedTemporaryFile(prefix=f'{destination.name}_',
                             dir=destination.parent, delete=False).name)
-        temp.write_bytes(contents)
+
+        if isinstance(contents, io.IOBase):
+            with temp.open('wb') as file:
+                shutil.copyfileobj(contents, file)
+            contents._tracker.close()
+        else:
+            temp.write_bytes(contents)
+
         temp.replace(destination)
 
     def download(self, name):

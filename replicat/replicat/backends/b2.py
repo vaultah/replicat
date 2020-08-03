@@ -1,5 +1,6 @@
 import base64
 import functools
+import io
 import logging
 
 import aiohttp
@@ -63,7 +64,6 @@ class B2(Backend):
             'Authorization': upload_token,
             'X-Bz-File-Name': name,
             'Content-Type': 'application/octet-stream',
-            'Content-Length': str(len(contents)),
             'X-Bz-Content-Sha1': 'do_not_verify' # TODO
         }
 
