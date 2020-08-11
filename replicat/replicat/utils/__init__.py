@@ -12,7 +12,7 @@ import weakref
 from pathlib import Path
 from types import SimpleNamespace
 
-import aiohttp
+import httpx
 from .. import exceptions
 from . import adapters, fs
 
@@ -105,7 +105,7 @@ def guess_type(value):
 
     try:
         return ast.literal_eval(value)
-    except ValueError:
+    except (ValueError, SyntaxError):
         return value
 
 
@@ -222,9 +222,9 @@ def requires_auth(func):
     return wrapper
 
 
-class async_session:
+class async_client:
 
-    """ Creates and stores an aiohttp client session when accessed
+    """ Creates and stores an httpx client when accessed
         through the parent object. It should be accessed from
         within an async function. """
 
@@ -236,7 +236,7 @@ class async_session:
             return self.session
         except AttributeError:
             # async loop should be picked up automatically
-            self.session = aiohttp.ClientSession(*self.args, **self.kwargs)
+            self.session = httpx.AsyncClient(*self.args, **self.kwargs)
             return self.session
 
     # TODO: atexit?

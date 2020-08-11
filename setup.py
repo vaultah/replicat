@@ -22,7 +22,7 @@ setup(
                 'deduplication, encryption and stuff.',
     packages=find_packages(),
     install_requires=[
-        'aiohttp', # TODO: switch to httpx
+        'httpx',
         'cryptography',
     ],
     extras_require=extras_require,

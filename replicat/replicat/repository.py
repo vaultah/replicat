@@ -60,6 +60,7 @@ class TrackedBytesIO(io.BytesIO):
 
     def __init__(self, initial_bytes, *, desc, slot, progress):
         super().__init__(initial_bytes)
+        self.initial_bytes = initial_bytes
         self._tracker = tqdm(
             desc=desc,
             unit='B',
@@ -77,7 +78,22 @@ class TrackedBytesIO(io.BytesIO):
         self._tracker.update(len(data))
         return data
 
-    # TODO: close tqdm
+    def write(self, *args, **kwargs):
+        raise NotImplementedError
+
+    def iter_chunks(self, chunk_size=128_000):
+        yield from iter(lambda: self.read(chunk_size), b'')
+
+    def __len__(self):
+        return len(self.initial_bytes)
+
+    def __iter__(self):
+        return self.iter_chunks()
+
+    async def __aiter__(self):
+        # For compatibility with httpx
+        for x in self.iter_chunks():
+            yield x
 
 
 class Repository:
@@ -296,7 +312,7 @@ class Repository:
 
     async def snapshot(self, *, paths):
         paths = list(utils.fs.flatten_paths(paths))
-        logger.info('Found %d files', len(paths))
+        logger.info('Found %d files, sorting', len(paths))
         # Small files are more likely to change than big files, read them quickly
         # and pu tthem in chunks together
         paths.sort(key=lambda file: (file.stat().st_size, file.name))
@@ -322,7 +338,7 @@ class Repository:
         )
 
         def _done_chunk(*, chunk: _chunk):
-            logger.info('Chunk %s uploaded', chunk.name)
+            logger.info('Chunk %s processed successfully', chunk.name)
 
             for file, (file_start, file_end) in state.file_ranges.items():
                 if file_start > chunk.end or file_end < chunk.start:
@@ -351,7 +367,7 @@ class Repository:
 
                 if chunk.end >= file_end and file in state.files_finished:
                     # File completed
-                    logger.info('File %r fully uploaded', str(file))
+                    logger.info('File %r fully processed', str(file))
                     finished_tracker.update()
 
             self._slots.put_nowait(chunk.slot)
@@ -360,6 +376,7 @@ class Repository:
             # XXX: reset chunker
             for file, source_chunk in utils.fs.stream_files(paths):
                 if file not in state.file_ranges:
+                    logger.debug('Started chunking file %r', str(file))
                     # First chunk from this file
                     start = state.bytes_read
                     if state.current_file is not None:
@@ -376,7 +393,10 @@ class Repository:
                     state.bytes_chunked += len(output_chunk)
                     yield start, output_chunk
 
+                logger.debug('Finished chunking file %r', str(file))
+
             state.files_finished.add(state.current_file)
+            logger.debug('Finalizing chunking')
 
             for output_chunk in self.properties.chunker.finalize():
                 start = state.bytes_chunked
@@ -396,7 +416,7 @@ class Repository:
 
             storage_path = f'data/{chunk.name[:2]}/{chunk.name}'
             matching = await self.as_coroutine(self.backend.list_files, storage_path)
-            if next(matching, None) is not None:
+            if next(iter(matching), None) is not None:
                 # Reuse the same chunk
                 logger.info('Will reuse chunk %s', chunk.name)
                 _done_chunk(chunk=chunk)
@@ -421,12 +441,15 @@ class Repository:
             done, pending = await asyncio.wait(
                 tasks, return_when=asyncio.FIRST_EXCEPTION
             )
+            for x in done:
+                x.result()
 
         now = datetime.utcnow()
         snapshot = {
             'utc_timestamp': str(now),
             'unix_timestamp': now.timestamp(),
             'files': list(files.values()),
+            # TODO: 'config'
         }
         logger.debug(
             'Generated snashot: %s',
