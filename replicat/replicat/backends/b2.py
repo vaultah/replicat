@@ -69,9 +69,8 @@ class B2(Backend):
             'Content-Length': str(len(contents)),
             'X-Bz-Content-Sha1': 'do_not_verify' # TODO
         }
-
         response = await self.client.post(
-            'https://httpbin.org/post', headers=upload_headers, data=contents
+            upload_url, headers=upload_headers, data=contents
         )
         response.raise_for_status()
         return response.json()
