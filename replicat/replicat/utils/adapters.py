@@ -1,5 +1,6 @@
 import hashlib
 import os
+import sys
 from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives.ciphers import aead
 from cryptography.hazmat.primitives.kdf.scrypt import Scrypt
@@ -105,8 +106,8 @@ class simple_chunker:
         seed = self._fnv_1a(person + self.buffer[: self.min_length])
         cut_at = max(
             range(self.min_length - 1, min(self.max_length, len(self.buffer)), 8),
-            key=lambda i: int.from_bytes(self.buffer[i : i + 8], 'little')
-            ^ int.from_bytes(self.buffer[i - 8 : i], 'little') ^ seed,
+            key=lambda i: int.from_bytes(self.buffer[i : i + 8], sys.byteorder)
+            ^ int.from_bytes(self.buffer[i - 8 : i], sys.byteorder) ^ seed,
             default=self.min_length - 1,
         )
         rv = self.buffer[: cut_at + 1]

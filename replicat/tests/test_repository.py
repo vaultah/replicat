@@ -48,7 +48,7 @@ async def test_encrypted_snapshot(local_backend, tmp_path):
     )
     await repo.unlock(password=b'<password>', key=params.key)
 
-    files = []
+    canonical_files = []
     sizes = {
         "a": 4096,
         "b": 2048,
@@ -67,17 +67,18 @@ async def test_encrypted_snapshot(local_backend, tmp_path):
     for name, size in sizes.items():
         file = tmp_path / name
         file.write_bytes(os.urandom(size))
-        files.append(file)
+        canonical_files.append(file)
 
-    result = await repo.snapshot(paths=files)
+    result = await repo.snapshot(paths=canonical_files)
     assert len([*local_backend.list_files('snapshots')]) == 1
     assert len([*local_backend.list_files(f'snapshots/{result.snapshot}')]) == 1
 
     # Small files come first
-    files.reverse()
-    restored = []
+    canonical_files.reverse()
+    snapshot_files = sorted(result.data['files'], key=lambda x: x['name'], reverse=True)
+    restored_files = []
 
-    for file, snapshot_data in zip(files, result.data['files']):
+    for file, snapshot_data in zip(canonical_files, snapshot_files):
         file_snapshot = b''
 
         for chunk in sorted(snapshot_data['chunks'], key=lambda x: x['counter']):
@@ -90,7 +91,6 @@ async def test_encrypted_snapshot(local_backend, tmp_path):
             decrypted_chunk = repo.properties.decrypt(contents, shared_key)
             file_snapshot += decrypted_chunk[chunk['start']:chunk['end']]
 
-        restored.append(file_snapshot)
+        restored_files.append(file_snapshot)
 
-
-    assert all(x.read_bytes() == y for x, y in zip(files, restored))
+    assert all(x.read_bytes() == y for x, y in zip(canonical_files, restored_files))

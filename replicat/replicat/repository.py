@@ -311,11 +311,20 @@ class Repository:
         return utils.DefaultNamespace(config=config, key=key)
 
     async def snapshot(self, *, paths):
-        paths = list(utils.fs.flatten_paths(paths))
-        logger.info('Found %d files, sorting', len(paths))
+        files = []
+
+        for path in utils.fs.flatten_paths(paths):
+            try:
+                path.resolve(strict=True)
+            except (FileNotFoundError, RuntimeError):
+                logger.warning('Skipping file %s, path not resolved', path)
+            else:
+                files.append(path)
+
+        logger.info('Found %d files, sorting', len(files))
         # Small files are more likely to change than big files, read them quickly
         # and pu tthem in chunks together
-        paths.sort(key=lambda file: (file.stat().st_size, file.name))
+        files.sort(key=lambda file: (file.stat().st_size, file.name))
 
         state = utils.DefaultNamespace(
             bytes_read=0,
@@ -326,11 +335,11 @@ class Repository:
             current_file=None
         )
         tasks = []
-        files = {}
+        snapshot_files = {}
         finished_tracker = tqdm(
             desc='Files processed',
             unit='',
-            total=len(paths),
+            total=len(files),
             position=0,
             file=sys.stdout,
             disable=not self._progress,
@@ -347,15 +356,15 @@ class Repository:
                 chunk_lo = max(file_start - chunk.start, 0)
                 chunk_hi = min(file_end, chunk.end) - chunk.start
 
-                if file not in files:
-                    files[file] = {
+                if file not in snapshot_files:
+                    snapshot_files[file] = {
                         'name':  file.name,
                         'path': str(file.resolve()),
                         'chunks': [],
                         'metadata': self.read_metadata(file)
                     }
 
-                files[file]['chunks'].append(
+                snapshot_files[file]['chunks'].append(
                     {
                         'name': chunk.name,
                         'start': chunk_lo,
@@ -374,7 +383,7 @@ class Repository:
 
         def _chunk_generator():
             # XXX: reset chunker
-            for file, source_chunk in utils.fs.stream_files(paths):
+            for file, source_chunk in utils.fs.stream_files(files):
                 if file not in state.file_ranges:
                     logger.debug('Started chunking file %r', str(file))
                     # First chunk from this file
@@ -448,7 +457,7 @@ class Repository:
         snapshot = {
             'utc_timestamp': str(now),
             'unix_timestamp': now.timestamp(),
-            'files': list(files.values()),
+            'files': list(snapshot_files.values()),
             # TODO: 'config'
         }
         logger.debug(
