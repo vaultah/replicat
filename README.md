@@ -1,4 +1,6 @@
-![Placeholder](https://i.imgur.com/1vtNQHs.png)
+<p align='center'>
+    <img src='https://i.imgur.com/1vtNQHs.png' />
+</p>
 
 # Replicat
 
