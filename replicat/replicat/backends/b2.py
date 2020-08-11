@@ -1,6 +1,5 @@
 import base64
 import functools
-import io
 import logging
 
 import aiohttp
@@ -89,8 +88,6 @@ class B2(Backend):
     @on_error
     async def list_files(self, prefix=''):
         files = []
-        start = None
-
         url = f'{self.auth.apiUrl}/b2api/v{B2_API_VERSION}/b2_list_file_versions'
         params = {'bucketId': self.bucket_id, 'maxFileCount': 10_000, 'prefix': prefix}
         headers = {'Authorization': self.auth.authorizationToken}
@@ -115,7 +112,7 @@ class B2(Backend):
         headers = {'Authorization': self.auth.authorizationToken}
 
         async with self.session.post(url, json=params, headers=headers) as response:
-            decoded = await response.json()
+            await response.json()
 
 
 Client = B2
