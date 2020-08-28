@@ -313,7 +313,7 @@ class Repository:
     async def snapshot(self, *, paths):
         files = []
 
-        for path in utils.fs.flatten_paths(paths):
+        for path in utils.fs.flatten_paths(paths, follow_symlinks=True):
             try:
                 path.resolve(strict=True)
             except (FileNotFoundError, RuntimeError):
