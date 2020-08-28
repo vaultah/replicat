@@ -90,24 +90,16 @@ class simple_chunker:
         self.min_length, self.max_length = min_length, max_length
         self.buffer = b''
 
-    def _fnv_1a(self, buffer):
-        hsh = 0xCBF2_9CE4_8422_2325
-        for x in buffer:
-            hsh ^= x
-            hsh = (hsh * 0x0000_0100_0000_01B3) & 0xFFFF_FFFF_FFFF_FFFF
+    def _next_from_buffer(self, *, person):
+        def key(i, _person=person + person[:8]):
+            prev = int.from_bytes(self.buffer[i - 8 : i], sys.byteorder)
+            shift = prev % 64
+            vari = int.from_bytes(_person[shift : shift + 8], sys.byteorder)
+            return prev ^ int.from_bytes(self.buffer[i : i + 8], sys.byteorder) ^ vari
 
-        return hsh
-
-    def _next_from_buffer(self, *, person=None):
-        if person is None:
-            person = b''
-
-        person = person.rjust(64, b'\x00')
-        seed = self._fnv_1a(person + self.buffer[: self.min_length])
         cut_at = max(
             range(self.min_length - 1, min(self.max_length, len(self.buffer)), 8),
-            key=lambda i: int.from_bytes(self.buffer[i : i + 8], sys.byteorder)
-            ^ int.from_bytes(self.buffer[i - 8 : i], sys.byteorder) ^ seed,
+            key=key,
             default=self.min_length - 1,
         )
         rv = self.buffer[: cut_at + 1]
@@ -118,36 +110,40 @@ class simple_chunker:
         it = iter(chunk_iterator)
         chunk = next(it, None)
 
+        if not params:
+            person = b'\x00' * 64
+        else:
+            person = params
+            while len(person) < 64:
+                person += params
+
+            person = person[:64]
+
         while chunk is not None:
             self.buffer += chunk
             next_chunk = next(it, None)
 
             while len(self.buffer) // self.max_length > (next_chunk is None):
-                yield self._next_from_buffer(person=params)
+                yield self._next_from_buffer(person=person)
 
             chunk = next_chunk
 
     def finalize(self):
         if len(self.buffer) <= self.max_length:
             chunks = [self.buffer]
-            self.buffer = b''
         elif len(self.buffer) < self.max_length + self.min_length:
             # TODO: something better for weirder limits?
             chunks = [
                 self.buffer[:len(self.buffer) // 2],
                 self.buffer[len(self.buffer) // 2:]
             ]
-            self.buffer = b''
         else:
-            chunks = [self.buffer[:self.max_length]]
-            self.buffer = self.buffer[self.max_length:]
+            chunks = [
+                self.buffer[:self.max_length],
+                self.buffer[self.max_length:]
+            ]
 
-            while self.buffer:
-                div, mod = divmod(len(self.buffer), self.min_length)
-                cut_at = self.min_length + mod // div
-                chunks.append(self.buffer[:cut_at])
-                self.buffer = self.buffer[cut_at:]
-
+        self.buffer = b''
         return chunks
 
     def chunking_params(self):

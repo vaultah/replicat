@@ -43,3 +43,23 @@ class TestSimpleChunker:
 
         assert person_chunks != chunks
         assert b''.join(chunks) == b''.join(person_chunks) == data
+
+    @pytest.mark.parametrize('person', [None, b'', b'abcd', os.urandom(64)])
+    def test_sequence_stabilizes(self, person):
+        data = bytearray(os.urandom(1_000_000))
+        before_chunker = adapters.simple_chunker(min_length=500, max_length=10000)
+        before_chunks = list(before_chunker.next_chunks([data], params=person))
+        before_chunks += before_chunker.finalize()
+
+        data[0] = (data[0] - 1) % 255
+        after_chunker = adapters.simple_chunker(min_length=500, max_length=10000)
+        after_chunks = list(after_chunker.next_chunks([data], params=person))
+        after_chunks += after_chunker.finalize()
+
+        matches = next(
+            i
+            for i, (x, y) in enumerate(zip(before_chunks[::-1], after_chunks[::-1]))
+            if x != y
+        )
+        assert len(before_chunks) == len(before_chunks)
+        assert matches == len(before_chunks) - 1

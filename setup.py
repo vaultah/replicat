@@ -22,7 +22,7 @@ setup(
                 'deduplication, encryption and stuff.',
     packages=find_packages(),
     install_requires=[
-        'httpx@git+https://github.com/encode/httpx.git@master',
+        'httpx',
         'cryptography',
     ],
     extras_require=extras_require,
