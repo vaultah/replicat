@@ -81,7 +81,7 @@ class simple_chunker:
 
     # Chunk lengths in bytes
     MIN_LENGTH = 128_000
-    MAX_LENGTH = 25_000_000
+    MAX_LENGTH = 8_192_000
 
     def __init__(self, *, min_length=MIN_LENGTH, max_length=MAX_LENGTH):
         if min_length > max_length:
@@ -93,7 +93,7 @@ class simple_chunker:
     def _next_from_buffer(self, *, person):
         def key(i, _person=person + person[:8]):
             prev = int.from_bytes(self.buffer[i - 8 : i], sys.byteorder)
-            shift = prev % 64
+            shift = prev & 0x3F
             vari = int.from_bytes(_person[shift : shift + 8], sys.byteorder)
             return prev ^ int.from_bytes(self.buffer[i : i + 8], sys.byteorder) ^ vari
 

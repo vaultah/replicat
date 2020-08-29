@@ -11,6 +11,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime
 from functools import cached_property, partial
+from pathlib import Path
 
 from . import exceptions
 from . import utils
@@ -77,6 +78,11 @@ class TrackedBytesIO(io.BytesIO):
         data = super().read(*args, **kwargs)
         self._tracker.update(len(data))
         return data
+
+    def seek(self, *args, **kwargs):
+        pos = super().seek(*args, **kwargs)
+        self._tracker.reset()
+        self._tracker.update(pos)
 
     def write(self, *args, **kwargs):
         raise NotImplementedError
@@ -275,6 +281,7 @@ class Repository:
         return properties
 
     async def unlock(self, *, password=None, key=None):
+        print('Loading config...')
         data = await self.as_coroutine(self.backend.download, 'config')
         config = self.deserialize(data)
 
@@ -282,12 +289,14 @@ class Repository:
         if isinstance(key, collections.abc.ByteString):
             key = self.deserialize(key)
 
+        print('Unlocking repository...')
         self.properties = self._prepare_config(config, password=password, key=key)
 
     async def init(self, *, password=None, settings=None):
         if settings is None:
             settings = {}
 
+        print('Generating config and key...')
         config, key = self._config_and_key_from_settings(utils.flat_to_nested(settings))
         self.properties = self._prepare_config(config, password=password, key=key)
 
@@ -299,15 +308,18 @@ class Repository:
             key['encrypted'] = self.properties.encrypt(
                 self.serialize(key.pop('private')), self.properties.userkey
             )
-            print(
-                'New key (encrypted):',
-                json.dumps(key, indent=4, default=utils.type_hint)
-            )
-
-        logger.info('New config:\n%s',
-            json.dumps(config, indent=4, sort_keys=True, default=utils.type_hint))
+            pretty_key = json.dumps(key, indent=4, default=utils.type_hint)
+            # TODO: store in the repository?
+            # TODO: warn on overwrite?
+            key_path = Path('replicat.key').resolve()
+            key_path.write_text(pretty_key)
+            print(f'New key (stored in {key_path}):', pretty_key, sep='\n')
 
         await self.as_coroutine(self.backend.upload, 'config', self.serialize(config))
+        pretty_config = json.dumps(
+            config, indent=4, sort_keys=True, default=utils.type_hint
+        )
+        print('Generated config (stored in repository):', pretty_config, sep='\n')
         return utils.DefaultNamespace(config=config, key=key)
 
     async def snapshot(self, *, paths):
@@ -321,9 +333,9 @@ class Repository:
             else:
                 files.append(path)
 
-        logger.info('Found %d files, sorting', len(files))
+        logger.info('Found %d files', len(files))
         # Small files are more likely to change than big files, read them quickly
-        # and pu tthem in chunks together
+        # and put them in chunks together
         files.sort(key=lambda file: (file.stat().st_size, file.name))
 
         state = utils.DefaultNamespace(

@@ -24,6 +24,7 @@ setup(
     install_requires=[
         'httpx',
         'cryptography',
+        'backoff'
     ],
     extras_require=extras_require,
 )

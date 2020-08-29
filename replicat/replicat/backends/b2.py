@@ -1,8 +1,11 @@
 import base64
 import functools
+import io
 import logging
 
+import backoff
 import httpx
+
 from .. import Backend
 from .. import utils, exceptions
 
@@ -39,6 +42,7 @@ class B2(Backend):
         self.bucket_id = connection_string
         self.key_id, self.application_key = key_id, application_key
 
+    @backoff.on_exception(backoff.expo, httpx.RequestError, max_tries=5)
     async def authenticate(self):
         logger.debug('Authenticating')
         auth_url = f'{B2_API_BASE_URL}/b2_authorize_account'
@@ -50,6 +54,7 @@ class B2(Backend):
         logger.debug('Authentication set')
 
     @utils.requires_auth
+    @backoff.on_exception(backoff.expo, httpx.RequestError, max_tries=5)
     @on_error
     async def upload(self, name, contents):
         url = f'{self.auth.apiUrl}/b2api/v{B2_API_VERSION}/b2_get_upload_url'
@@ -69,13 +74,20 @@ class B2(Backend):
             'Content-Length': str(len(contents)),
             'X-Bz-Content-Sha1': 'do_not_verify' # TODO
         }
-        response = await self.client.post(
-            upload_url, headers=upload_headers, data=contents
-        )
-        response.raise_for_status()
-        return response.json()
+        try:
+            response = await self.client.post(
+                upload_url, headers=upload_headers, data=contents
+            )
+            response.raise_for_status()
+        except BaseException:
+            if isinstance(contents, io.BytesIO):
+                contents.seek(0)
+            raise
+        else:
+            return response.json()
 
     @utils.requires_auth
+    @backoff.on_exception(backoff.expo, httpx.RequestError, max_tries=5)
     @on_error
     async def download(self, name):
         # TODO: optimize somehow?
@@ -89,6 +101,7 @@ class B2(Backend):
         return response.read()
 
     @utils.requires_auth
+    @backoff.on_exception(backoff.expo, httpx.RequestError, max_tries=5)
     @on_error
     async def list_files(self, prefix=''):
         files = []
@@ -109,6 +122,7 @@ class B2(Backend):
         return files
 
     @utils.requires_auth
+    @backoff.on_exception(backoff.expo, httpx.RequestError, max_tries=5)
     @on_error
     async def hide_file(self, name):
         url = f'{self.auth.apiUrl}/b2api/v{B2_API_VERSION}/b2_hide_file'
