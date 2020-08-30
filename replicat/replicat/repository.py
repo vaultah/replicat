@@ -70,7 +70,7 @@ class TrackedBytesIO(io.BytesIO):
             position=slot,
             file=sys.stdout,
             disable=not progress,
-            leave=None
+            leave=False
         )
 
     def read(self, *args, **kwargs):
@@ -107,7 +107,7 @@ class Repository:
     def __init__(self, backend, *, concurrent, progress=False):
         self._slots = asyncio.Queue(maxsize=concurrent)
         # We need actual integers for TQDM slot management
-        for slot in range(1, concurrent + 1):
+        for slot in range(2, concurrent + 2):
             self._slots.put_nowait(slot)
 
         if progress and not _tqdm_installed:
@@ -355,7 +355,18 @@ class Repository:
             position=0,
             file=sys.stdout,
             disable=not self._progress,
-            leave=None
+            leave=True
+        )
+
+        bytes_tracker = tqdm(
+            desc='Data processed',
+            unit='B',
+            unit_scale=True,
+            total=None,
+            position=1,
+            file=sys.stdout,
+            disable=not self._progress,
+            leave=True,
         )
 
         def _done_chunk(*, chunk: _chunk):
@@ -390,6 +401,8 @@ class Repository:
                     # File completed
                     logger.info('File %r fully processed', str(file))
                     finished_tracker.update()
+
+                bytes_tracker.update(chunk.end - chunk.start)
 
             self._slots.put_nowait(chunk.slot)
 
