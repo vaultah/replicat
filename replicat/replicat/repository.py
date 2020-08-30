@@ -336,7 +336,7 @@ class Repository:
         logger.info('Found %d files', len(files))
         # Small files are more likely to change than big files, read them quickly
         # and put them in chunks together
-        files.sort(key=lambda file: (file.stat().st_size, file.name))
+        files.sort(key=lambda file: (file.stat().st_size, str(file)))
 
         state = utils.DefaultNamespace(
             bytes_read=0,
