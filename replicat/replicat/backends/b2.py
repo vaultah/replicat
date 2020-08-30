@@ -1,7 +1,10 @@
+import asyncio
 import base64
 import functools
 import io
 import logging
+import sys
+from contextlib import suppress
 
 import backoff
 import httpx
@@ -33,6 +36,43 @@ def on_error(func):
     return wrapper
 
 
+def forbidden(e):
+    return (
+        isinstance(e, httpx.HTTPStatusError)
+        and e.response.status_code == httpx.codes.FORBIDDEN
+    )
+
+
+async def on_backoff_reauth(details):
+    exc = sys.exc_info()[1]
+    if isinstance(exc, httpx.HTTPStatusError):
+        try:
+            retry_after = exc.response.headers['retry-after']
+        except KeyError:
+            pass
+        else:
+            await asyncio.sleep(int(retry_after) - details['wait'])
+
+        if exc.response.status_code == httpx.codes.TOO_MANY_REQUESTS:
+            return
+
+    # Trigger re-auth as per B2 guidelines
+    raise exceptions.AuthRequired
+
+
+async def on_backoff_no_reauth(details):
+    # Simply suppress it
+    with suppress(exceptions.AuthRequired):
+        await on_backoff_reauth(details)
+
+
+backoff_decorator = functools.partial(
+    backoff.on_exception, backoff.expo, httpx.RequestError, max_time=60, giveup=forbidden
+)
+backoff_no_reauth = backoff_decorator(on_backoff=[on_backoff_no_reauth])
+backoff_reauth = backoff_decorator(on_backoff=[on_backoff_reauth])
+
+
 class B2(Backend):
 
     client = utils.async_client()
@@ -42,19 +82,19 @@ class B2(Backend):
         self.bucket_id = connection_string
         self.key_id, self.application_key = key_id, application_key
 
-    @backoff.on_exception(backoff.expo, httpx.RequestError, max_tries=5)
+    @backoff_no_reauth
     async def authenticate(self):
         logger.debug('Authenticating')
         auth_url = f'{B2_API_BASE_URL}/b2_authorize_account'
-        combined = f'{self.key_id}:{self.application_key}'.encode('ascii')
-        headers = {'Authorization': 'Basic' + base64.b64encode(combined).decode('ascii')}
-        response = await self.client.get(auth_url, headers=headers)
+        response = await self.client.get(
+            auth_url, auth=(self.key_id, self.application_key)
+        )
         response.raise_for_status()
         self.auth = utils.DefaultNamespace(**response.json())
         logger.debug('Authentication set')
 
     @utils.requires_auth
-    @backoff.on_exception(backoff.expo, httpx.RequestError, max_tries=5)
+    @backoff_reauth
     @on_error
     async def upload(self, name, contents):
         url = f'{self.auth.apiUrl}/b2api/v{B2_API_VERSION}/b2_get_upload_url'
@@ -87,7 +127,7 @@ class B2(Backend):
             return response.json()
 
     @utils.requires_auth
-    @backoff.on_exception(backoff.expo, httpx.RequestError, max_tries=5)
+    @backoff_reauth
     @on_error
     async def download(self, name):
         # TODO: optimize somehow?
@@ -101,7 +141,7 @@ class B2(Backend):
         return response.read()
 
     @utils.requires_auth
-    @backoff.on_exception(backoff.expo, httpx.RequestError, max_tries=5)
+    @backoff_reauth
     @on_error
     async def list_files(self, prefix=''):
         files = []
@@ -122,7 +162,7 @@ class B2(Backend):
         return files
 
     @utils.requires_auth
-    @backoff.on_exception(backoff.expo, httpx.RequestError, max_tries=5)
+    @backoff_reauth
     @on_error
     async def hide_file(self, name):
         url = f'{self.auth.apiUrl}/b2api/v{B2_API_VERSION}/b2_hide_file'
