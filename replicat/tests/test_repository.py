@@ -62,6 +62,7 @@ async def test_encrypted_snapshot(local_backend, tmp_path):
         'j': 8,
         'k': 4,
         'l': 2,
+        'm': 0
     }
 
     for name, size in sizes.items():

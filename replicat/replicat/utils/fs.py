@@ -28,5 +28,8 @@ def flatten_paths(paths, *, follow_symlinks=False):
 def stream_files(files, *, chunk_size=16_777_216):
     for f in files:
         file = f.open('rb')
-        for chunk in iter(lambda: file.read(chunk_size), b''):
+        while True:
+            chunk = file.read(chunk_size)
             yield f, chunk
+            if not chunk:
+                break
