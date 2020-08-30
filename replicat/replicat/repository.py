@@ -402,8 +402,7 @@ class Repository:
                     logger.info('File %r fully processed', str(file))
                     finished_tracker.update()
 
-                bytes_tracker.update(chunk.end - chunk.start)
-
+            bytes_tracker.update(chunk.end - chunk.start)
             self._slots.put_nowait(chunk.slot)
 
         def _chunk_generator():
