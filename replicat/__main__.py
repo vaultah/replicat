@@ -38,4 +38,7 @@ if __name__ == '__main__':
         log_level = logging.WARNING
 
     logging.basicConfig(level=log_level)
+    logging.getLogger('backoff').addHandler(logging.StreamHandler())
+    logging.getLogger('backoff').setLevel(log_level)
+
     asyncio.run(main(args, unknown))
