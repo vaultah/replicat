@@ -7,6 +7,7 @@ import json
 import logging
 import os
 import sys
+import threading
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime
@@ -55,6 +56,10 @@ class _chunk:
             return self._properties.mac(self.digest).hex()
         else:
             return self.digest.hex()
+
+    @cached_property
+    def location(self):
+        return f'data/{self.name[:2]}/{self.name}'
 
 
 class TrackedBytesIO(io.BytesIO):
@@ -105,6 +110,7 @@ class TrackedBytesIO(io.BytesIO):
 class Repository:
 
     def __init__(self, backend, *, concurrent, progress=False):
+        self._concurrent = concurrent
         self._slots = asyncio.Queue(maxsize=concurrent)
         # We need actual integers for TQDM slot management
         for slot in range(2, concurrent + 2):
@@ -342,11 +348,11 @@ class Repository:
             bytes_read=0,
             bytes_chunked=0,
             chunk_counter=0,
-            file_ranges={},
+            # Fixed-size dictionary for thread safety
+            file_ranges=dict.fromkeys(files),
             files_finished=set(),
             current_file=None
         )
-        tasks = []
         snapshot_files = {}
         finished_tracker = tqdm(
             desc='Files processed',
@@ -357,7 +363,6 @@ class Repository:
             disable=not self._progress,
             leave=True
         )
-
         bytes_tracker = tqdm(
             desc='Data processed',
             unit='B',
@@ -368,11 +373,19 @@ class Repository:
             disable=not self._progress,
             leave=True,
         )
+        loop = asyncio.get_event_loop()
+        tasks = set()
+        chunk_queue = asyncio.Queue(maxsize=self._concurrent * 5)
+        _stop = threading.Event()
 
-        def _done_chunk(*, chunk: _chunk):
+        def _done_chunk(chunk: _chunk):
             logger.info('Chunk %s processed successfully', chunk.name)
 
-            for file, (file_start, file_end) in state.file_ranges.items():
+            for file, ranges in state.file_ranges.items():
+                if ranges is None:
+                    continue
+
+                file_start, file_end = ranges
                 if file_start > chunk.end or file_end < chunk.start:
                     continue
 
@@ -381,7 +394,7 @@ class Repository:
 
                 if file not in snapshot_files:
                     snapshot_files[file] = {
-                        'name':  file.name,
+                        'name': file.name,
                         'path': str(file.resolve()),
                         'chunks': [],
                         'metadata': self.read_metadata(file)
@@ -403,12 +416,25 @@ class Repository:
                     finished_tracker.update()
 
             bytes_tracker.update(chunk.end - chunk.start)
-            self._slots.put_nowait(chunk.slot)
+
+        async def _upload_chunk(chunk):
+            io_wrapper = TrackedBytesIO(
+                chunk.encrypted_contents,
+                desc=f'Chunk #{chunk.counter:06}',
+                slot=chunk.slot,
+                progress=self._progress
+            )
+            await self.as_coroutine(self.backend.upload, chunk.location, io_wrapper)
+            _done_chunk(chunk)
 
         def _chunk_generator():
             # XXX: reset chunker
             for file, source_chunk in utils.fs.stream_files(files):
-                if file not in state.file_ranges:
+                if _stop.is_set():
+                    logging.debug('Stopping chunk generator')
+                    return
+
+                if state.file_ranges[file] is None:
                     logger.debug('Started chunking file %r', str(file))
                     # First chunk from this file
                     start = state.bytes_read
@@ -424,19 +450,33 @@ class Repository:
                 for output_chunk in self.properties.next_chunks([source_chunk]):
                     start = state.bytes_chunked
                     state.bytes_chunked += len(output_chunk)
-                    yield start, output_chunk
+                    asyncio.run_coroutine_threadsafe(
+                        chunk_queue.put((start, output_chunk)), loop=loop
+                    )
 
                 logger.debug('Finished chunking file %r', str(file))
 
             state.files_finished.add(state.current_file)
-            logger.debug('Finalizing chunking')
 
             for output_chunk in self.properties.chunker.finalize():
                 start = state.bytes_chunked
                 state.bytes_chunked += len(output_chunk)
-                yield start, output_chunk
+                asyncio.run_coroutine_threadsafe(
+                    chunk_queue.put((start, output_chunk)), loop=loop
+                )
 
-        for starts_at, output_chunk in _chunk_generator():
+        chunk_generator = loop.run_in_executor(
+            ThreadPoolExecutor(max_workers=1), _chunk_generator
+        )
+        chunk_generator.add_done_callback(lambda fut: fut.result())
+
+        while not chunk_queue.empty() or not chunk_generator.done():
+            try:
+                starts_at, output_chunk = chunk_queue.get_nowait()
+            except asyncio.QueueEmpty:
+                await asyncio.sleep(0.02)
+                continue
+
             state.chunk_counter += 1
             slot = await self._slots.get()
             chunk = self._chunk_type(
@@ -447,35 +487,40 @@ class Repository:
                 slot=slot
             )
 
-            storage_path = f'data/{chunk.name[:2]}/{chunk.name}'
-            matching = await self.as_coroutine(self.backend.list_files, storage_path)
+            matching = await self.as_coroutine(self.backend.list_files, chunk.location)
             if next(iter(matching), None) is not None:
                 # Reuse the same chunk
                 logger.info('Will reuse chunk %s', chunk.name)
-                _done_chunk(chunk=chunk)
-                continue
+                try:
+                    _done_chunk(chunk)
+                except:
+                    _stop.set()
+                    raise
+                else:
+                    continue
+                finally:
+                    self._slots.put_nowait(slot)
 
             logger.info('Uploading chunk %s', chunk.name)
-            io_wrapper = TrackedBytesIO(
-                chunk.encrypted_contents,
-                desc=f'Chunk #{chunk.counter:06}',
-                slot=chunk.slot,
-                progress=self._progress
-            )
-            task = asyncio.ensure_future(
-                self.as_coroutine(
-                    self.backend.upload, storage_path, io_wrapper
-                )
-            )
-            task.add_done_callback(lambda _, chunk=chunk: _done_chunk(chunk=chunk))
-            tasks.append(task)
+            task = asyncio.create_task(_upload_chunk(chunk))
+
+            def cb(fut, slot=slot):
+                try:
+                    fut.result()
+                except:
+                    _stop.set()
+                    raise
+                else:
+                    # Allow the chunk to be garbage-collected
+                    tasks.discard(task)
+                finally:
+                    self._slots.put_nowait(slot)
+
+            task.add_done_callback(cb)
+            tasks.add(task)
 
         if tasks:
-            done, pending = await asyncio.wait(
-                tasks, return_when=asyncio.FIRST_EXCEPTION
-            )
-            for x in done:
-                x.result()
+            await asyncio.wait(tasks, return_when=asyncio.FIRST_EXCEPTION)
 
         now = datetime.utcnow()
         snapshot = {

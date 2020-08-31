@@ -77,6 +77,7 @@ async def test_encrypted_snapshot(local_backend, tmp_path):
     # Small files come first
     canonical_files.reverse()
     snapshot_files = sorted(result.data['files'], key=lambda x: x['name'], reverse=True)
+    assert len(canonical_files) == len(snapshot_files)
     restored_files = []
 
     for file, snapshot_data in zip(canonical_files, snapshot_files):

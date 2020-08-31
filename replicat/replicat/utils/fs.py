@@ -26,10 +26,10 @@ def flatten_paths(paths, *, follow_symlinks=False):
 
 
 def stream_files(files, *, chunk_size=16_777_216):
-    for f in files:
-        file = f.open('rb')
-        while True:
-            chunk = file.read(chunk_size)
-            yield f, chunk
-            if not chunk:
-                break
+    for file in files:
+        with file.open('rb') as obj:
+            while True:
+                chunk = obj.read(chunk_size)
+                yield file, chunk
+                if not chunk:
+                    break
