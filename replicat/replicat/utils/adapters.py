@@ -1,6 +1,6 @@
 import hashlib
 import os
-import sys
+import struct
 from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives.ciphers import aead
 from cryptography.hazmat.primitives.kdf.scrypt import Scrypt
@@ -91,33 +91,35 @@ class simple_chunker:
         self.buffer = b''
 
     def _next_from_buffer(self, *, person):
-        def key(i, _person=person + person[:8]):
-            prev = int.from_bytes(self.buffer[i - 8 : i], sys.byteorder)
-            shift = prev & 0x3F
-            vari = int.from_bytes(_person[shift : shift + 8], sys.byteorder)
-            return prev ^ int.from_bytes(self.buffer[i : i + 8], sys.byteorder) ^ vari
+        _person = person + person[:8]
+        _shifts_cache = [
+            struct.unpack_from('<Q', _person, offset=i)[0] for i in range(64)
+        ]
+        def key(i, _shifts_cache=_shifts_cache):
+            prev, cur = struct.unpack_from('<QQ', self.buffer, offset=i - 8)
+            return _shifts_cache[prev & 0x3F] ^ prev ^ cur
 
+        start_index = (self.min_length + 7) & -8
         cut_at = max(
-            range(self.min_length - 1, min(self.max_length, len(self.buffer)), 8),
+            range(start_index, min(self.max_length, len(self.buffer)), 8),
             key=key,
-            default=self.min_length - 1,
+            default=start_index,
         )
-        rv = self.buffer[: cut_at + 1]
-        self.buffer = self.buffer[cut_at + 1 :]
+        rv = self.buffer[:cut_at]
+        self.buffer = self.buffer[cut_at:]
         return rv
 
     def next_chunks(self, chunk_iterator, *, params=None):
-        it = iter(chunk_iterator)
-        chunk = next(it, None)
-
         if not params:
             person = b'\x00' * 64
         else:
             person = params
             while len(person) < 64:
                 person += params
-
             person = person[:64]
+
+        it = iter(chunk_iterator)
+        chunk = next(it, None)
 
         while chunk is not None:
             self.buffer += chunk
