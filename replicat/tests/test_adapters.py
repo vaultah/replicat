@@ -30,11 +30,11 @@ class TestSimpleChunker:
 
     def test_personalization(self):
         data = os.urandom(1_000_000)
-        chunker = adapters.simple_chunker(min_length=500, max_length=10000)
+        chunker = adapters.simple_chunker(min_length=500, max_length=10_000)
         chunks = list(chunker.next_chunks([data])) + chunker.finalize()
 
         person_chunker = adapters.simple_chunker(
-            min_length=500, max_length=10000
+            min_length=500, max_length=10_000
         )
         person_chunks = list(
             person_chunker.next_chunks([data], params=os.urandom(10))
@@ -47,19 +47,29 @@ class TestSimpleChunker:
     @pytest.mark.parametrize('person', [None, b'', b'abcd', os.urandom(64)])
     def test_sequence_stabilizes(self, person):
         data = bytearray(os.urandom(1_000_000))
-        before_chunker = adapters.simple_chunker(min_length=500, max_length=10000)
+        before_chunker = adapters.simple_chunker(min_length=500, max_length=10_000)
         before_chunks = list(before_chunker.next_chunks([data], params=person))
-        before_chunks += before_chunker.finalize()
 
         data[0] = (data[0] - 1) % 255
-        after_chunker = adapters.simple_chunker(min_length=500, max_length=10000)
+        after_chunker = adapters.simple_chunker(min_length=500, max_length=10_000)
         after_chunks = list(after_chunker.next_chunks([data], params=person))
-        after_chunks += after_chunker.finalize()
 
-        matches = next(
-            i
-            for i, (x, y) in enumerate(zip(before_chunks[::-1], after_chunks[::-1]))
-            if x != y
-        )
-        assert len(before_chunks) == len(before_chunks)
-        assert matches == len(before_chunks) - 1
+        assert before_chunks[-1] == after_chunks[-1]
+
+    @pytest.mark.parametrize('person', [None, b'', b'abcd', os.urandom(64)])
+    @pytest.mark.parametrize('repeating_bytes', [1_500, 5_000, 20_000, 50_000])
+    def test_repetion(self, person, repeating_bytes):
+        data = os.urandom(repeating_bytes)
+        counts = []
+        finalized = []
+
+        for i in (10, 20, 30):
+            chunker = adapters.simple_chunker(min_length=500, max_length=10_000)
+            chunks = list(chunker.next_chunks([data] * i))
+            counts.append((len(chunks), len(set(chunks))))
+            finalized.append(tuple(chunker.finalize()))
+
+        first, second, third = counts
+        assert first[0] < second[0] < third[0]
+        assert first[1] == second[1] == second[1]
+        assert len(set(finalized)) == 1
