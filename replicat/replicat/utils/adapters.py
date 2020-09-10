@@ -91,13 +91,11 @@ class simple_chunker:
         self.buffer = b''
 
     def _next_from_buffer(self, *, person):
-        _person = person + person[:8]
-        _shifts_cache = [
-            struct.unpack_from('<Q', _person, offset=i)[0] for i in range(64)
-        ]
+        _shifts_cache = struct.unpack_from('<QQQQQQQQ', person)
+
         def key(i, _shifts_cache=_shifts_cache):
             prev, cur = struct.unpack_from('<QQ', self.buffer, offset=i - 8)
-            return _shifts_cache[prev & 0x3F] ^ prev ^ cur
+            return _shifts_cache[prev >> 61] ^ prev ^ cur
 
         start_index = (self.min_length + 7) & -8
         cut_at = max(

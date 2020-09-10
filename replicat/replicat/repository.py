@@ -354,24 +354,24 @@ class Repository:
             current_file=None
         )
         snapshot_files = {}
-        finished_tracker = tqdm(
-            desc='Files processed',
-            unit='',
-            total=len(files),
-            position=0,
-            file=sys.stdout,
-            disable=not self._progress,
-            leave=True
-        )
         bytes_tracker = tqdm(
             desc='Data processed',
             unit='B',
             unit_scale=True,
             total=None,
-            position=1,
+            position=0,
             file=sys.stdout,
             disable=not self._progress,
             leave=True,
+        )
+        finished_tracker = tqdm(
+            desc='Files processed',
+            unit='',
+            total=len(files),
+            position=1,
+            file=sys.stdout,
+            disable=not self._progress,
+            leave=True
         )
         loop = asyncio.get_event_loop()
         tasks = set()
