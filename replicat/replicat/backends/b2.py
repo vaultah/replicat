@@ -8,8 +8,7 @@ from contextlib import suppress
 import backoff
 import httpx
 
-from .. import Backend
-from .. import utils, exceptions
+from .. import Backend, exceptions, utils
 
 B2_API_VERSION = 2
 B2_API_BASE_URL = f'https://api.backblazeb2.com/b2api/v{B2_API_VERSION}'
@@ -66,7 +65,11 @@ async def on_backoff_no_reauth(details):
 
 
 backoff_decorator = functools.partial(
-    backoff.on_exception, backoff.expo, httpx.RequestError, max_time=60, giveup=forbidden
+    backoff.on_exception,
+    backoff.expo,
+    httpx.RequestError,
+    max_time=60,
+    giveup=forbidden,
 )
 backoff_no_reauth = backoff_decorator(on_backoff=[on_backoff_no_reauth])
 backoff_reauth = backoff_decorator(on_backoff=[on_backoff_reauth])
@@ -111,7 +114,7 @@ class B2(Backend):
             'X-Bz-File-Name': name,
             'Content-Type': 'application/octet-stream',
             'Content-Length': str(len(contents)),
-            'X-Bz-Content-Sha1': 'do_not_verify' # TODO
+            'X-Bz-Content-Sha1': 'do_not_verify',  # TODO
         }
         try:
             response = await self.client.post(

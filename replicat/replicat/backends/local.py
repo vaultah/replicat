@@ -4,6 +4,7 @@ import os
 import shutil
 from pathlib import Path
 from tempfile import NamedTemporaryFile
+
 from .. import Backend
 from ..utils.fs import recursive_scandir
 
@@ -11,7 +12,6 @@ logger = logging.getLogger(__name__)
 
 
 class Local(Backend):
-
     def __init__(self, connection_string):
         self.path = Path(connection_string)
 
@@ -20,8 +20,11 @@ class Local(Backend):
         destination.parent.mkdir(parents=True, exist_ok=True)
         # Make sure the temporary is on the same filesystem to make
         # atomic replacements possible
-        temp = Path(NamedTemporaryFile(prefix=f'{destination.name}_',
-                            dir=destination.parent, delete=False).name)
+        temp = Path(
+            NamedTemporaryFile(
+                prefix=f'{destination.name}_', dir=destination.parent, delete=False
+            ).name
+        )
 
         if isinstance(contents, io.IOBase):
             with temp.open('wb') as file:
@@ -44,7 +47,7 @@ class Local(Backend):
 
         try:
             scandir = os.scandir(absolute_dirname)
-        except OSError as e:
+        except OSError:
             logger.debug(f'Unable to list files in {absolute_dirname}', exc_info=True)
             return
 
@@ -55,7 +58,7 @@ class Local(Backend):
                 for file in recursive_scandir(entry):
                     # NOTE: Anything from the standard library seems
                     # like an overkill here
-                    yield file[path_length + 1:]
+                    yield file[path_length + 1 :]
 
     def hide_file(self, name):
         origin = self.path / name

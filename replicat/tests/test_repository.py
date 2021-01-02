@@ -1,13 +1,12 @@
 import os
 import time
-import threading
 from unittest.mock import patch
 
 import pytest
+
 from replicat import exceptions
-from replicat.utils.adapters import simple_chunker
-from replicat.repository import Repository
 from replicat.backends.local import Local
+from replicat.repository import Repository
 
 
 @pytest.mark.asyncio
@@ -41,7 +40,6 @@ async def test_encrypted_unlock(local_backend):
 
 
 class TestSnapshot:
-
     @pytest.mark.asyncio
     async def test_encrypted_data(self, local_backend, tmp_path):
         repo = Repository(backend=local_backend, concurrent=5)
@@ -50,8 +48,8 @@ class TestSnapshot:
             settings={
                 'encryption.kdf.n': 4,
                 'chunking.min_length': 256,
-                'chunking.max_length': 512
-            }
+                'chunking.max_length': 512,
+            },
         )
         await repo.unlock(password=b'<password>', key=params.key)
 
@@ -70,7 +68,7 @@ class TestSnapshot:
             'k': 4,
             'l': 2,
             'm': 0,
-            'n': 0
+            'n': 0,
         }
 
         for name, size in sizes.items():
@@ -95,7 +93,7 @@ class TestSnapshot:
 
             for chunk in sorted(snapshot_data['chunks'], key=lambda x: x['counter']):
                 chunk_name = chunk['name']
-                chunk_path, = local_backend.list_files(
+                (chunk_path,) = local_backend.list_files(
                     f'data/{chunk_name[:2]}/{chunk_name}'
                 )
                 path = local_backend.path / chunk_path
@@ -105,7 +103,7 @@ class TestSnapshot:
                     bytes.fromhex(chunk['digest'])
                 )
                 decrypted_chunk = repo.properties.decrypt(contents, shared_key)
-                file_snapshot += decrypted_chunk[chunk['start']:chunk['end']]
+                file_snapshot += decrypted_chunk[chunk['start'] : chunk['end']]
 
             restored_files.append(file_snapshot)
 
@@ -122,8 +120,8 @@ class TestSnapshot:
             settings={
                 'encryption.kdf.n': 4,
                 'chunking.min_length': 256,
-                'chunking.max_length': 512
-            }
+                'chunking.max_length': 512,
+            },
         )
         await repo.unlock(password=b'<password>', key=params.key)
 
@@ -147,32 +145,22 @@ class TestSnapshot:
             settings={
                 'encryption.kdf.n': 4,
                 'chunking.min_length': 256,
-                'chunking.max_length': 512
-            }
+                'chunking.max_length': 512,
+            },
         )
         await repo.unlock(password=b'<password>', key=params.key)
 
         file = tmp_path / 'file'
         file.write_bytes(os.urandom(1_024))
 
-        chunker_finalized = threading.Event()
-
-        def fnlz():
-            try:
-                return simple_chunker.finalize(repo.properties.chunker)
-            finally:
-                chunker_finalized.set()
-
         def upld(name, contents):
             if not name.startswith('snapshots/'):
-                chunker_finalized.wait()
                 time.sleep(1)
 
             return Local.upload(local_backend, name, contents)
 
         with patch.object(local_backend, 'upload', side_effect=upld) as upload_mock:
-            with patch.object(repo.properties.chunker, 'finalize', side_effect=fnlz):
-                result = await repo.snapshot(paths=[file])
+            result = await repo.snapshot(paths=[file])
 
         snapshots = list(local_backend.list_files('snapshots'))
         chunks = list(local_backend.list_files('data'))

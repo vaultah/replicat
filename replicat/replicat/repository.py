@@ -14,18 +14,18 @@ from datetime import datetime
 from functools import cached_property, partial
 from pathlib import Path
 
-from . import exceptions
-from . import utils
-
-logger = logging.getLogger(__name__)
+from . import exceptions, utils
 
 try:
     from tqdm import tqdm
+
     _tqdm_installed = True
 except ImportError:
     # tqdm was not installed, and that's okay
     tqdm = None
     _tqdm_installed = False
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -63,31 +63,36 @@ class _chunk:
 
 
 class TrackedBytesIO(io.BytesIO):
-
     def __init__(self, initial_bytes, *, desc, slot, progress):
         super().__init__(initial_bytes)
         self.initial_bytes = initial_bytes
-        self._tracker = tqdm(
-            desc=desc,
-            unit='B',
-            total=len(initial_bytes),
-            unit_scale=True,
-            position=slot,
-            file=sys.stdout,
-            disable=not progress,
-            leave=False
-        )
+
+        if _tqdm_installed:
+            self._tracker = tqdm(
+                desc=desc,
+                unit='B',
+                total=len(initial_bytes),
+                unit_scale=True,
+                position=slot,
+                file=sys.stdout,
+                disable=not progress,
+                leave=False,
+            )
+        else:
+            self._tracker = None
 
     def read(self, *args, **kwargs):
         # TODO: rate limit
         data = super().read(*args, **kwargs)
-        self._tracker.update(len(data))
+        if self._tracker is not None:
+            self._tracker.update(len(data))
         return data
 
     def seek(self, *args, **kwargs):
         pos = super().seek(*args, **kwargs)
-        self._tracker.reset()
-        self._tracker.update(pos)
+        if self._tracker is not None:
+            self._tracker.reset()
+            self._tracker.update(pos)
 
     def write(self, *args, **kwargs):
         raise NotImplementedError
@@ -108,7 +113,6 @@ class TrackedBytesIO(io.BytesIO):
 
 
 class Repository:
-
     def __init__(self, backend, *, concurrent, progress=False):
         self._concurrent = concurrent
         self._slots = asyncio.Queue(maxsize=concurrent)
@@ -176,12 +180,13 @@ class Repository:
         hashing_config.setdefault('name', 'blake2b')
         hasher, hasher_args = utils.adapter_from_config(**hashing_config)
         config['hashing'] = {'name': type(hasher).__name__, **hasher_args}
+        config['hashing'] = dict(hasher_args, name=type(hasher).__name__)
 
         # Deduplication params
         chunker = settings.get('chunking', {})
         chunker.setdefault('name', 'simple_chunker')
         chunker, chunker_args = utils.adapter_from_config(**chunker)
-        config['chunking'] = {'name': type(chunker).__name__, **chunker_args}
+        config['chunking'] = dict(chunker_args, name=type(chunker).__name__)
 
         encryption = settings.get('encryption', {})
 
@@ -191,7 +196,7 @@ class Repository:
             cipher_config.setdefault('name', 'aes_gcm')
             cipher, cipher_args = utils.adapter_from_config(**cipher_config)
             config['encryption'] = {
-                'cipher': {'name': type(cipher).__name__, **cipher_args}
+                'cipher': dict(cipher_args, name=type(cipher).__name__)
             }
 
             # KDF for user personal data
@@ -210,20 +215,18 @@ class Repository:
 
             mac_config = encryption.get('mac', {})
             mac_config.setdefault('name', 'blake2b')
-            mac, mac_args = utils.adapter_from_config(
-                **mac_config
-            )
+            mac, mac_args = utils.adapter_from_config(**mac_config)
 
             key = {
-                'kdf': {'name': type(kdf).__name__, **kdf_args},
+                'kdf': dict(kdf_args, name=type(kdf).__name__),
                 'key_derivation_params': kdf.derivation_params(),
                 'private': {
-                    'shared_kdf': {'name': type(shared_kdf).__name__, **shared_args},
-                    'mac': {'name': type(mac).__name__, **mac_args},
+                    'shared_kdf': dict(shared_args, name=type(shared_kdf).__name__),
+                    'mac': dict(mac_args, name=type(mac).__name__),
                     'shared_encryption_secret': shared_kdf.derivation_params(),
                     'mac_key': mac.mac_params(),
-                    'chunker_personalization': chunker.chunking_params()
-                }
+                    'chunker_personalization': chunker.chunking_params(),
+                },
             }
 
         return config, key
@@ -271,18 +274,19 @@ class Repository:
             properties.mac = functools.partial(
                 properties.authenticator.mac, params=private['mac_key']
             )
-
-            properties.shared_kdf, _ = utils.adapter_from_config(**private['shared_kdf'])
+            # KDF for shared data
+            properties.shared_kdf, _ = utils.adapter_from_config(
+                **private['shared_kdf']
+            )
             properties.derive_shared_key = functools.partial(
                 properties.shared_kdf.derive, params=private['shared_encryption_secret']
             )
-
             # Chunking
-            properties.next_chunks = functools.partial(
-                properties.chunker.next_chunks, params=private['chunker_personalization']
+            properties.chunkify = functools.partial(
+                properties.chunker, params=private['chunker_personalization']
             )
         else:
-            properties.next_chunks = properties.chunker.next_chunks
+            properties.chunkify = properties.chunker
 
         return properties
 
@@ -309,7 +313,7 @@ class Repository:
         if self.properties.encrypted:
             logger.debug(
                 'New key (unencrypted):\n%s',
-                json.dumps(key, indent=4, default=utils.type_hint)
+                json.dumps(key, indent=4, default=utils.type_hint),
             )
             key['encrypted'] = self.properties.encrypt(
                 self.serialize(key.pop('private')), self.properties.userkey
@@ -351,7 +355,7 @@ class Repository:
             # Fixed-size dictionary for thread safety
             file_ranges=dict.fromkeys(files),
             files_finished=set(),
-            current_file=None
+            current_file=None,
         )
         snapshot_files = {}
         bytes_tracker = tqdm(
@@ -371,7 +375,7 @@ class Repository:
             position=1,
             file=sys.stdout,
             disable=not self._progress,
-            leave=True
+            leave=True,
         )
         loop = asyncio.get_event_loop()
         tasks = set()
@@ -397,7 +401,7 @@ class Repository:
                         'name': file.name,
                         'path': str(file.resolve()),
                         'chunks': [],
-                        'metadata': self.read_metadata(file)
+                        'metadata': self.read_metadata(file),
                     }
 
                 snapshot_files[file]['chunks'].append(
@@ -406,7 +410,7 @@ class Repository:
                         'start': chunk_lo,
                         'end': chunk_hi,
                         'digest': chunk.digest.hex(),
-                        'counter': chunk.counter
+                        'counter': chunk.counter,
                     }
                 )
 
@@ -422,43 +426,37 @@ class Repository:
                 chunk.encrypted_contents,
                 desc=f'Chunk #{chunk.counter:06}',
                 slot=chunk.slot,
-                progress=self._progress
+                progress=self._progress,
             )
             await self.as_coroutine(self.backend.upload, chunk.location, io_wrapper)
             _done_chunk(chunk)
 
-        def _chunk_generator():
-            # XXX: reset chunker
+        def _stream_files():
             for file, source_chunk in utils.fs.stream_files(files):
-                if _stop.is_set():
-                    logging.debug('Stopping chunk generator')
-                    return
-
                 if state.file_ranges[file] is None:
-                    logger.debug('Started chunking file %r', str(file))
+                    logger.debug('Started streaming file %r', str(file))
                     # First chunk from this file
                     start = state.bytes_read
                     if state.current_file is not None:
+                        logger.debug(
+                            'Finished streaming file %r', str(state.current_file)
+                        )
                         state.files_finished.add(state.current_file)
+
                     state.current_file = file
                 else:
                     start, _ = state.file_ranges[file]
 
                 state.bytes_read += len(source_chunk)
                 state.file_ranges[file] = (start, state.bytes_read)
+                yield source_chunk
 
-                for output_chunk in self.properties.next_chunks([source_chunk]):
-                    start = state.bytes_chunked
-                    state.bytes_chunked += len(output_chunk)
-                    asyncio.run_coroutine_threadsafe(
-                        chunk_queue.put((start, output_chunk)), loop=loop
-                    )
+        def _chunk_generator():
+            for output_chunk in self.properties.chunkify(_stream_files()):
+                if _stop.is_set():
+                    logging.debug('Stopping chunk generator')
+                    return
 
-                logger.debug('Finished chunking file %r', str(file))
-
-            state.files_finished.add(state.current_file)
-
-            for output_chunk in self.properties.chunker.finalize():
                 start = state.bytes_chunked
                 state.bytes_chunked += len(output_chunk)
                 asyncio.run_coroutine_threadsafe(
@@ -484,16 +482,15 @@ class Repository:
                 counter=state.chunk_counter,
                 start=starts_at,
                 end=starts_at + len(output_chunk),
-                slot=slot
+                slot=slot,
             )
 
             matching = await self.as_coroutine(self.backend.list_files, chunk.location)
             if next(iter(matching), None) is not None:
-                # Reuse the same chunk
                 logger.info('Will reuse chunk %s', chunk.name)
                 try:
                     _done_chunk(chunk)
-                except:
+                except BaseException:
                     _stop.set()
                     raise
                 else:
@@ -507,7 +504,7 @@ class Repository:
             def cb(fut, slot=slot):
                 try:
                     fut.result()
-                except:
+                except BaseException:
                     _stop.set()
                     raise
                 else:
@@ -531,7 +528,7 @@ class Repository:
         }
         logger.debug(
             'Generated snashot: %s',
-            json.dumps(snapshot, indent=4, sort_keys=True, default=utils.type_hint)
+            json.dumps(snapshot, indent=4, sort_keys=True, default=utils.type_hint),
         )
         encrypted_snapshot = self.properties.encrypt(
             self.serialize(snapshot), self.properties.userkey

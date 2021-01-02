@@ -5,7 +5,6 @@ logger = logging.getLogger(__name__)
 
 
 class Backend(abc.ABC):
-
     def __init__(self, connection_string, **ka):
         pass
 

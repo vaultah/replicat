@@ -6,7 +6,8 @@ from base64 import standard_b64encode
 from concurrent.futures import ThreadPoolExecutor
 
 import pytest
-from replicat import utils, exceptions
+
+from replicat import exceptions, utils
 
 # TODO: tests for make_parser
 
@@ -61,10 +62,10 @@ def test_flat_to_nested():
         dict.fromkeys(['a.b', 'a.b.c.d']),
         dict.fromkeys(['a.b.c.d', 'a.b']),
         dict.fromkeys(['a', 'a.b']),
-        dict.fromkeys(['a.b.c', 'a.b'])
+        dict.fromkeys(['a.b.c', 'a.b']),
     ]
     for x in bad:
-        with pytest.raises(exceptions.ReplicatError) as e:
+        with pytest.raises(exceptions.ReplicatError):
             utils.flat_to_nested(x)
 
 
@@ -83,9 +84,9 @@ def test_safe_kwargs():
 
 
 # NOTE: `list.append` may not be thread-safe in other implementations
-@pytest.mark.parametrize('backend_type',
-    [PlainBackend, AsyncBackend],
-    ids=['threads', 'async'])
+@pytest.mark.parametrize(
+    'backend_type', [PlainBackend, AsyncBackend], ids=['threads', 'async']
+)
 @pytest.mark.asyncio
 async def test_requires_auth(backend_type):
     jobs, rs = 20, []

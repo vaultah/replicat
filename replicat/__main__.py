@@ -1,5 +1,6 @@
 import asyncio
 import logging
+
 from .replicat import utils
 from .replicat.repository import Repository
 
@@ -10,8 +11,7 @@ async def main(args, unknown):
     backend_type, connection_string = args.repo
     backend_params = utils.safe_kwargs(backend_type, vars(args))
     backend = backend_type(connection_string, **backend_params)
-    repo = Repository(backend, concurrent=args.concurrent,
-                progress=args.progress)
+    repo = Repository(backend, concurrent=args.concurrent, progress=args.progress)
 
     if args.action == 'init':
         pairs = zip(unknown[::2], unknown[1::2])

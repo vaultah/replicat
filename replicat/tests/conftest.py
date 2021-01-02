@@ -1,5 +1,7 @@
-import pytest
 from types import SimpleNamespace
+
+import pytest
+
 from replicat.backends import local
 
 

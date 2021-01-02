@@ -13,8 +13,10 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import httpx
+
 from .. import exceptions
-from . import adapters, fs
+from . import adapters
+
 
 def _backend_tuple(uri):
     parts = uri.split(':', 1)
@@ -26,8 +28,10 @@ def _backend_tuple(uri):
     mod = importlib.import_module(f'..backends.{name}', package=__package__)
     return (mod.Client, connection_string)
 
+
 def _read_bytes(arg):
     return Path(arg).read_bytes()
+
 
 # NOTE: Python uses the file system encoding in surrograteescape mode
 # for command line arguments AND os.environ. And we need bytes. So yeah.
@@ -42,18 +46,31 @@ def _get_environb(var, default=None):
     finally:
         return value
 
+
 common_options = argparse.ArgumentParser(add_help=False)
-common_options.add_argument('-r', '--repository', type=_backend_tuple, dest='repo',
-            default=os.environ.get('REPLICAT_REPOSITORY', str(Path())))
-common_options.add_argument('-q', '--hide-progress', dest='progress', action='store_false')
+common_options.add_argument(
+    '-r',
+    '--repository',
+    type=_backend_tuple,
+    dest='repo',
+    default=os.environ.get('REPLICAT_REPOSITORY', str(Path())),
+)
+common_options.add_argument(
+    '-q', '--hide-progress', dest='progress', action='store_false'
+)
 common_options.add_argument('-c', '--concurrent', default=5, type=int)
 common_options.add_argument('-v', '--verbose', action='count', default=0)
 common_options.add_argument('-k', '--key', metavar='KEYFILE', type=_read_bytes)
 # All the different ways to provide a repo password
 password_options = common_options.add_mutually_exclusive_group()
 password_options.add_argument('-p', '--password', type=os.fsencode)
-password_options.add_argument('-P', '--password-file', dest='password',
-                        metavar='PASSWORD_FILE_PATH', type=_read_bytes)
+password_options.add_argument(
+    '-P',
+    '--password-file',
+    dest='password',
+    metavar='PASSWORD_FILE_PATH',
+    type=_read_bytes,
+)
 common_options.set_defaults(password=_get_environb('REPLICAT_PASSWORD'))
 
 
@@ -93,8 +110,12 @@ def parser_from_callable(cls):
             default = os.environ.get(f'{cls.__name__.upper()}_{name.upper()}')
 
         name = name.replace('_', '-')
-        parser.add_argument(f'--{name}', required=arg.default is arg.empty,
-                        default=default, type=guess_type)
+        parser.add_argument(
+            f'--{name}',
+            required=arg.default is arg.empty,
+            default=default,
+            type=guess_type,
+        )
 
     return parser
 
@@ -149,8 +170,11 @@ def type_reverse(object):
 
 def safe_kwargs(func, args):
     params = inspect.signature(func).parameters
-    return {name: args[name] for name, arg in params.items()
-                if arg.kind is arg.KEYWORD_ONLY and name in args}
+    return {
+        name: args[name]
+        for name, arg in params.items()
+        if arg.kind is arg.KEYWORD_ONLY and name in args
+    }
 
 
 _async_locks = weakref.WeakKeyDictionary()
@@ -163,6 +187,7 @@ def requires_auth(func):
         the decorator will call authenticate to refresh it """
     # TODO: logging?
     if inspect.iscoroutinefunction(func):
+
         async def wrapper(self, *a, **ka):
             try:
                 self._async_auth_lock
@@ -188,7 +213,9 @@ def requires_auth(func):
                         pass
 
                 return await wrapper(self, *a, **ka)
+
     else:
+
         def wrapper(self, *a, **ka):
             try:
                 self._auth_lock
