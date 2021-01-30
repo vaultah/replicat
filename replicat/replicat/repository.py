@@ -184,7 +184,7 @@ class Repository:
 
         # Deduplication params
         chunker = settings.get('chunking', {})
-        chunker.setdefault('name', 'simple_chunker')
+        chunker.setdefault('name', 'gclmulchunker')
         chunker, chunker_args = utils.adapter_from_config(**chunker)
         config['chunking'] = dict(chunker_args, name=type(chunker).__name__)
 

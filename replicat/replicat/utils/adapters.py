@@ -1,12 +1,17 @@
 import hashlib
 import os
-import struct
 
 from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives.ciphers import aead
 from cryptography.hazmat.primitives.kdf.scrypt import Scrypt
 
 _backend = default_backend()
+
+
+try:
+    import _replicat_adapters
+except ImportError:
+    _replicat_adapters = None
 
 
 class _cipher_adapter:
@@ -82,78 +87,35 @@ class blake2b:
         return hashlib.blake2b(data, digest_size=self.digest_size).digest()
 
 
-class simple_chunker:
+class gclmulchunker:
 
     # Chunk lengths in bytes
     MIN_LENGTH = 128_000
     MAX_LENGTH = 8_192_000
 
     def __init__(self, *, min_length=MIN_LENGTH, max_length=MAX_LENGTH):
+        assert _replicat_adapters is not None, 'XXX: bindings not available'
+        # Data will be aligned to 4-byte boundaries
+        min_length = (min_length + 3) & -4
         if min_length > max_length:
-            raise ValueError('Minimum length is greater than the maximum one')
+            raise ValueError(
+                f'Minimum length ({min_length}) is greater '
+                f'than the maximum one ({max_length})'
+            )
 
         self.min_length, self.max_length = min_length, max_length
 
-    def _fnv_1a_from_bytes(self, buffer):
-        rv = 0xCBF2_9CE4_8422_2325
-        for x in buffer:
-            rv ^= x
-            rv = (rv * 0x0000_0100_0000_01B3) & 0xFFFF_FFFF_FFFF_FFFF
-
-        return rv
-
-    def _fnv_1a_from_int32_with_xor_fold(self, buffer32, basis):
-        basis ^= buffer32 & 0xFF
-        basis = (basis * 0x0000_0100_0000_01B3) & 0xFFFF_FFFF_FFFF_FFFF
-
-        basis ^= buffer32 >> 8 & 0xFF
-        basis = (basis * 0x0000_0100_0000_01B3) & 0xFFFF_FFFF_FFFF_FFFF
-
-        basis ^= buffer32 >> 16 & 0xFF
-        basis = (basis * 0x0000_0100_0000_01B3) & 0xFFFF_FFFF_FFFF_FFFF
-
-        basis ^= buffer32 >> 24
-        basis = (basis * 0x0000_0100_0000_01B3) & 0xFFFF_FFFF_FFFF_FFFF
-        return (basis >> 32) ^ basis & 0xFFFF_FFFF
-
-    def _next_cut(self, buffer, *, offset_basis):
-        def _key(
-            i,
-            _unpack_from=struct.unpack_from,
-            _fnv=self._fnv_1a_from_int32_with_xor_fold,
-            _buffer=buffer,
-            _basis=offset_basis,
-        ):
-            prev, cur = _unpack_from('<LL', _buffer, offset=i - 4)
-            return _fnv(prev ^ cur, _basis)
-
-        start_index = (self.min_length + 3) & -4
-        return max(
-            range(start_index, min(self.max_length, len(buffer)), 4),
-            key=_key,
-            default=start_index,
-        )
-
-    def _finalize(self, buffer):
-        if len(buffer) <= self.max_length:
-            chunks = [buffer]
-        elif len(buffer) < self.max_length + self.min_length:
-            # TODO: something better for weirder limits?
-            chunks = [buffer[: len(buffer) // 2], buffer[len(buffer) // 2 :]]
-        else:
-            chunks = [buffer[: self.max_length], buffer[self.max_length :]]
-
-        return chunks
-
     def __call__(self, chunk_iterator, *, params=None):
         if not params:
-            params = b''
+            params = b'\xFF' * 16
         else:
-            while len(params) < 64:
+            while len(params) < 16:
                 params += params
-            params = params[:64]
+            params = params[:16]
 
-        offset_basis = self._fnv_1a_from_bytes(params)
+        chunker = _replicat_adapters._gclmulchunker(
+            self.min_length, self.max_length, params
+        )
         buffer = b''
         it = iter(chunk_iterator)
         chunk = next(it, None)
@@ -162,14 +124,14 @@ class simple_chunker:
             buffer += chunk
             next_chunk = next(it, None)
 
-            while len(buffer) // self.max_length > (next_chunk is None):
-                pos = self._next_cut(buffer, offset_basis=offset_basis)
+            while True:
+                pos = chunker.next_cut(buffer, bool(next_chunk is None))
+                if not pos:
+                    break
                 yield buffer[:pos]
                 buffer = buffer[pos:]
 
             chunk = next_chunk
 
-        yield from self._finalize(buffer)
-
     def chunking_params(self):
-        return os.urandom(64)
+        return os.urandom(16)
