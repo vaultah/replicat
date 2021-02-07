@@ -22,7 +22,7 @@ Highlights/goals
   - API that exists
 
 This project borrows heavily from those other projects, but not enough to be considered
-a copycat 😉
+a copycat.
 
 # Introduction
 
