@@ -91,7 +91,7 @@ class gclmulchunker:
 
     # Chunk lengths in bytes
     MIN_LENGTH = 128_000
-    MAX_LENGTH = 8_192_000
+    MAX_LENGTH = 5_120_000
 
     def __init__(self, *, min_length=MIN_LENGTH, max_length=MAX_LENGTH):
         assert _replicat_adapters is not None, 'XXX: bindings not available'

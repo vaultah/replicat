@@ -4,9 +4,9 @@ from pathlib import Path
 
 def recursive_scandir(start_entry, *, follow_symlinks=False):
     # Just recursively yield all *files* below `start_entry`
-    if not start_entry.is_dir(follow_symlinks=follow_symlinks):
+    if start_entry.is_file(follow_symlinks=follow_symlinks):
         yield start_entry.path
-    else:
+    elif start_entry.is_dir(follow_symlinks=follow_symlinks):
         with os.scandir(start_entry.path) as it:
             for entry in it:
                 yield from recursive_scandir(entry, follow_symlinks=follow_symlinks)

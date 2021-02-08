@@ -20,7 +20,7 @@ async def main(args, unknown):
     else:
         await repo.unlock(password=args.password, key=args.key)
         if args.action == 'snapshot':
-            await repo.snapshot(paths=args.path)
+            await repo.snapshot(paths=args.path, rate_limit=args.rate_limit)
 
 
 if __name__ == '__main__':

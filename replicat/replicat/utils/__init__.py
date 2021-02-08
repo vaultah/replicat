@@ -7,15 +7,37 @@ import functools
 import importlib
 import inspect
 import os
+import re
 import threading
 import weakref
+from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
 
 import httpx
 
 from .. import exceptions
-from . import adapters
+from . import adapters, fs  # noqa
+
+PREFIXES_TABLE = {
+    'k': 1000,
+    'K': 1000,
+    'Ki': 1024,
+    'ki': 1024,
+    'M': 1000 ** 2,
+    'm': 1000 ** 2,
+    'Mi': 1024 ** 2,
+    'mi': 1024 ** 2,
+    'g': 1000 ** 3,
+    'G': 1000 ** 3,
+    'gi': 1024 ** 3,
+    'Gi': 1024 ** 3,
+}
+UNITS_TABLE = {'B': 1, 'b': Decimal('0.125')}
+HUMAN_SIZE_REGEX = (
+    r'(?P<value>([\d]*[.])?[\d]+)\s*?(?P<prefix>%s)?(?P<unit>[Bb])?'
+    % "|".join(PREFIXES_TABLE)
+)
 
 
 def _backend_tuple(uri):
@@ -89,6 +111,9 @@ def make_parser(*parent_parsers):
     subparsers.add_parser('init', parents=parent_parsers)
     snapshot_parser = subparsers.add_parser('snapshot', parents=parent_parsers)
     snapshot_parser.add_argument('path', nargs='+', type=Path)
+    snapshot_parser.add_argument(
+        '--limit-rate', '-L', dest='rate_limit', type=human_to_bytes
+    )
     return parser
 
 
@@ -118,6 +143,19 @@ def parser_from_callable(cls):
         )
 
     return parser
+
+
+def human_to_bytes(value):
+    match = re.fullmatch(HUMAN_SIZE_REGEX, value)
+    if match is None:
+        raise ValueError
+    groups = match.groupdict()
+    bytes_amount = Decimal(groups['value'])
+    if groups['prefix'] is not None:
+        bytes_amount *= PREFIXES_TABLE[groups['prefix']]
+    if groups['unit'] is not None:
+        bytes_amount *= UNITS_TABLE[groups['unit']]
+    return int(bytes_amount)
 
 
 def guess_type(value):

@@ -6,8 +6,10 @@ import io
 import json
 import logging
 import os
+import queue
 import sys
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime
@@ -28,8 +30,34 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 
+class _RateLimiter:
+    def __init__(self, limit):
+        self.lock = threading.Lock()
+        self.limit = limit
+        self.checkpoint = None
+        self.bytes_since_checkpoint = None
+
+    def available(self):
+        with self.lock:
+            checkpoint = int(time.monotonic())
+            if self.checkpoint is None or self.checkpoint < checkpoint:
+                self.bytes_since_checkpoint = 0
+                self.checkpoint = checkpoint
+
+            return self.limit - self.bytes_since_checkpoint
+
+    def consumed(self, bytes_amount):
+        with self.lock:
+            checkpoint = int(time.monotonic())
+            if self.checkpoint is None or self.checkpoint < checkpoint:
+                self.bytes_since_checkpoint = bytes_amount
+                self.checkpoint = checkpoint
+            else:
+                self.bytes_since_checkpoint += bytes_amount
+
+
 @dataclass
-class _chunk:
+class _Chunk:
     _properties: utils.DefaultNamespace
     contents: bytes
     start: int
@@ -62,10 +90,11 @@ class _chunk:
         return f'data/{self.name[:2]}/{self.name}'
 
 
-class TrackedBytesIO(io.BytesIO):
-    def __init__(self, initial_bytes, *, desc, slot, progress):
+class _TrackedBytesIO(io.BytesIO):
+    def __init__(self, initial_bytes, *, desc, slot, progress, rate_limiter):
         super().__init__(initial_bytes)
         self.initial_bytes = initial_bytes
+        self.rate_limiter = rate_limiter
 
         if _tqdm_installed:
             self._tracker = tqdm(
@@ -81,11 +110,17 @@ class TrackedBytesIO(io.BytesIO):
         else:
             self._tracker = None
 
-    def read(self, *args, **kwargs):
-        # TODO: rate limit
-        data = super().read(*args, **kwargs)
+    def read(self, size):
+        if self.rate_limiter is not None:
+            size = min(max(self.rate_limiter.available(), 1), size, 16_384)
+            data = super().read(size)
+            self.rate_limiter.consumed(len(data))
+        else:
+            data = super().read(size)
+
         if self._tracker is not None:
             self._tracker.update(len(data))
+
         return data
 
     def seek(self, *args, **kwargs):
@@ -167,7 +202,7 @@ class Repository:
 
     @cached_property
     def _chunk_type(self):
-        return partial(_chunk, _properties=self.properties)
+        return partial(_Chunk, _properties=self.properties)
 
     def _config_and_key_from_settings(self, settings):
         # Create a raw and unencrypted combination of config and key, using
@@ -225,7 +260,7 @@ class Repository:
                     'mac': dict(mac_args, name=type(mac).__name__),
                     'shared_encryption_secret': shared_kdf.derivation_params(),
                     'mac_key': mac.mac_params(),
-                    'chunker_personalization': chunker.chunking_params(),
+                    'chunker_secret': chunker.chunking_params(),
                 },
             }
 
@@ -283,7 +318,7 @@ class Repository:
             )
             # Chunking
             properties.chunkify = functools.partial(
-                properties.chunker, params=private['chunker_personalization']
+                properties.chunker, params=private['chunker_secret']
             )
         else:
             properties.chunkify = properties.chunker
@@ -332,7 +367,7 @@ class Repository:
         print('Generated config (stored in repository):', pretty_config, sep='\n')
         return utils.DefaultNamespace(config=config, key=key)
 
-    async def snapshot(self, *, paths):
+    async def snapshot(self, *, paths, rate_limit=None):
         files = []
 
         for path in utils.fs.flatten_paths(paths, follow_symlinks=True):
@@ -379,10 +414,15 @@ class Repository:
         )
         loop = asyncio.get_event_loop()
         tasks = set()
-        chunk_queue = asyncio.Queue(maxsize=self._concurrent * 5)
-        _stop = threading.Event()
+        chunk_queue = queue.Queue(maxsize=self._concurrent * 10)
+        stop_event = threading.Event()
 
-        def _done_chunk(chunk: _chunk):
+        if rate_limit is not None:
+            rate_limiter = _RateLimiter(rate_limit)
+        else:
+            rate_limiter = None
+
+        def _done_chunk(chunk: _Chunk):
             logger.info('Chunk %s processed successfully', chunk.name)
 
             for file, ranges in state.file_ranges.items():
@@ -422,11 +462,12 @@ class Repository:
             bytes_tracker.update(chunk.end - chunk.start)
 
         async def _upload_chunk(chunk):
-            io_wrapper = TrackedBytesIO(
+            io_wrapper = _TrackedBytesIO(
                 chunk.encrypted_contents,
                 desc=f'Chunk #{chunk.counter:06}',
                 slot=chunk.slot,
                 progress=self._progress,
+                rate_limiter=rate_limiter,
             )
             await self.as_coroutine(self.backend.upload, chunk.location, io_wrapper)
             _done_chunk(chunk)
@@ -451,28 +492,31 @@ class Repository:
                 state.file_ranges[file] = (start, state.bytes_read)
                 yield source_chunk
 
-        def _chunk_generator():
-            for output_chunk in self.properties.chunkify(_stream_files()):
-                if _stop.is_set():
-                    logging.debug('Stopping chunk generator')
-                    return
+            if state.current_file is not None:
+                logger.debug(
+                    'Finished streaming file %r (last)', str(state.current_file)
+                )
+                state.files_finished.add(state.current_file)
 
+        def _chunk_producer():
+            for output_chunk in self.properties.chunkify(_stream_files()):
+                if stop_event.is_set():
+                    logging.debug('Stopping chunk producer')
+                    return
                 start = state.bytes_chunked
                 state.bytes_chunked += len(output_chunk)
-                asyncio.run_coroutine_threadsafe(
-                    chunk_queue.put((start, output_chunk)), loop=loop
-                )
+                chunk_queue.put((start, output_chunk))
 
-        chunk_generator = loop.run_in_executor(
-            ThreadPoolExecutor(max_workers=1), _chunk_generator
+        chunk_producer = loop.run_in_executor(
+            ThreadPoolExecutor(max_workers=1), _chunk_producer
         )
-        chunk_generator.add_done_callback(lambda fut: fut.result())
+        chunk_producer.add_done_callback(lambda fut: fut.result())
 
-        while not chunk_queue.empty() or not chunk_generator.done():
+        while not chunk_queue.empty() or not chunk_producer.done():
             try:
                 starts_at, output_chunk = chunk_queue.get_nowait()
-            except asyncio.QueueEmpty:
-                await asyncio.sleep(0.02)
+            except queue.Empty:
+                await asyncio.sleep(0.025)
                 continue
 
             state.chunk_counter += 1
@@ -491,7 +535,7 @@ class Repository:
                 try:
                     _done_chunk(chunk)
                 except BaseException:
-                    _stop.set()
+                    stop_event.set()
                     raise
                 else:
                     continue
@@ -500,21 +544,20 @@ class Repository:
 
             logger.info('Uploading chunk %s', chunk.name)
             task = asyncio.create_task(_upload_chunk(chunk))
+            tasks.add(task)
 
-            def cb(fut, slot=slot):
+            def cb(fut, slot=slot, task=task):
                 try:
                     fut.result()
                 except BaseException:
-                    _stop.set()
+                    stop_event.set()
                     raise
                 else:
-                    # Allow the chunk to be garbage-collected
-                    tasks.discard(task)
+                    tasks.remove(task)
                 finally:
                     self._slots.put_nowait(slot)
 
             task.add_done_callback(cb)
-            tasks.add(task)
 
         if tasks:
             await asyncio.wait(tasks, return_when=asyncio.FIRST_EXCEPTION)
