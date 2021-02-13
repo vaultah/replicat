@@ -35,3 +35,10 @@ def test_upload_download(local_backend):
     assert (local_backend.path / file).exists()
     # ... and its contents are as expected
     assert local_backend.download(file) == b'<stuff>'
+
+
+def test_exists(local_backend):
+    file = 'a'
+    assert not local_backend.exists(file)
+    local_backend.upload(file, b'')
+    assert local_backend.exists(file)

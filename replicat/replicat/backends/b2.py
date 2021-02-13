@@ -3,7 +3,6 @@ import functools
 import io
 import logging
 import sys
-from contextlib import suppress
 
 import backoff
 import httpx
@@ -53,23 +52,21 @@ async def on_backoff_reauth(details):
 
         if exc.response.status_code == httpx.codes.TOO_MANY_REQUESTS:
             return
-
-    # Trigger re-auth as per B2 guidelines
-    raise exceptions.AuthRequired
+        else:
+            # Trigger re-auth as per B2 guidelines
+            raise exceptions.AuthRequired
 
 
 async def on_backoff_no_reauth(details):
     # Simply suppress it
-    with suppress(exceptions.AuthRequired):
+    try:
         await on_backoff_reauth(details)
+    except exceptions.AuthRequired:
+        pass
 
 
 backoff_decorator = functools.partial(
-    backoff.on_exception,
-    backoff.expo,
-    httpx.RequestError,
-    max_time=60,
-    giveup=forbidden,
+    backoff.on_exception, backoff.expo, httpx.HTTPError, max_time=64, giveup=forbidden,
 )
 backoff_no_reauth = backoff_decorator(on_backoff=[on_backoff_no_reauth])
 backoff_reauth = backoff_decorator(on_backoff=[on_backoff_reauth])
@@ -80,9 +77,30 @@ class B2(Backend):
     client = utils.async_client()
 
     def __init__(self, connection_string, *, key_id, application_key):
-        # TODO: Allow bucket name later?
-        self.bucket_id = connection_string
+        # Name or id
+        self.bucket_identifier = connection_string
         self.key_id, self.application_key = key_id, application_key
+
+    async def _list_buckets(self):
+        url = f'{self.auth.apiUrl}/b2api/v{B2_API_VERSION}/b2_list_buckets'
+        headers = {'Authorization': self.auth.authorizationToken}
+        params = {'accountId': self.auth.accountId}
+        response = await self.client.post(url, headers=headers, json=params)
+        response.raise_for_status()
+        return response.json()['buckets']
+
+    async def _get_bucket_info(self):
+        try:
+            return self._bucket_info
+        except AttributeError:
+            for bucket in await self._list_buckets():
+                if self.bucket_identifier in {bucket['bucketId'], bucket['bucketName']}:
+                    self._bucket_info = utils.DefaultNamespace(**bucket)
+                    return self._bucket_info
+
+            raise exceptions.ReplicatError(
+                f'Bucket {self.bucket_identifier} was not found'
+            )
 
     @backoff_no_reauth
     async def authenticate(self):
@@ -98,9 +116,27 @@ class B2(Backend):
     @utils.requires_auth
     @backoff_reauth
     @on_error
+    async def exists(self, name):
+        bucket_info = await self._get_bucket_info()
+        url = f'{self.auth.downloadUrl}/file/{bucket_info.bucketName}/{name}'
+        headers = {'Authorization': self.auth.authorizationToken}
+        try:
+            response = await self.client.head(url, headers=headers)
+            response.raise_for_status()
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == httpx.codes.NOT_FOUND:
+                return False
+            raise
+        else:
+            return True
+
+    @utils.requires_auth
+    @backoff_reauth
+    @on_error
     async def upload(self, name, contents):
         url = f'{self.auth.apiUrl}/b2api/v{B2_API_VERSION}/b2_get_upload_url'
-        params = {'bucketId': self.bucket_id}
+        bucket_info = await self._get_bucket_info()
+        params = {'bucketId': bucket_info.bucketId}
         headers = {'Authorization': self.auth.authorizationToken}
 
         response = await self.client.post(url, json=params, headers=headers)
@@ -132,13 +168,10 @@ class B2(Backend):
     @backoff_reauth
     @on_error
     async def download(self, name):
-        # TODO: optimize somehow?
-        url = f'{self.auth.downloadUrl}/b2api/v{B2_API_VERSION}/b2_download_file_by_id'
-        versions = await self.list_files(prefix=name)
-        upload_id = next(x['fileId'] for x in versions if x['action'] == 'upload')
-        params = {'fileId': upload_id}
+        bucket_info = await self._get_bucket_info()
+        url = f'{self.auth.downloadUrl}/file/{bucket_info.bucketName}/{name}'
         headers = {'Authorization': self.auth.authorizationToken}
-        response = await self.client.get(url, params=params, headers=headers)
+        response = await self.client.get(url, headers=headers)
         response.raise_for_status()
         return response.read()
 
@@ -146,15 +179,22 @@ class B2(Backend):
     @backoff_reauth
     @on_error
     async def list_files(self, prefix=''):
-        files = []
         url = f'{self.auth.apiUrl}/b2api/v{B2_API_VERSION}/b2_list_file_versions'
-        params = {'bucketId': self.bucket_id, 'maxFileCount': 10_000, 'prefix': prefix}
+        bucket_info = await self._get_bucket_info()
+        files = []
+        params = {
+            'bucketId': bucket_info.bucketId,
+            'maxFileCount': 10_000,
+            'prefix': prefix,
+        }
         headers = {'Authorization': self.auth.authorizationToken}
 
         while True:
             response = await self.client.post(url, json=params, headers=headers)
             decoded = response.json()
-            files.extend(decoded['files'])
+            for file in decoded['files']:
+                files.append(file['fileName'])
+
             if decoded['nextFileName'] is None and decoded['nextFileId'] is None:
                 break
 
@@ -168,7 +208,8 @@ class B2(Backend):
     @on_error
     async def hide_file(self, name):
         url = f'{self.auth.apiUrl}/b2api/v{B2_API_VERSION}/b2_hide_file'
-        params = {'bucketId': self.bucket_id, 'fileName': name}
+        bucket_info = await self._get_bucket_info()
+        params = {'bucketId': bucket_info.bucketId, 'fileName': name}
         headers = {'Authorization': self.auth.authorizationToken}
         response = await self.client.post(url, json=params, headers=headers)
         response.raise_for_status()

@@ -13,6 +13,6 @@ setup(
     description='Configurable and lightweight backup utility with '
     'deduplication, encryption and stuff.',
     packages=find_packages(),
-    install_requires=['httpx', 'cryptography', 'backoff', 'pybind11'],
+    install_requires=['httpx', 'cryptography', 'backoff', 'pybind11', 'appdirs'],
     extras_require=extras_require,
 )

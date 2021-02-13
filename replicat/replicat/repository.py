@@ -63,7 +63,6 @@ class _Chunk:
     start: int
     end: int
     counter: int
-    slot: int = None
 
     @cached_property
     def digest(self):
@@ -326,7 +325,7 @@ class Repository:
         return properties
 
     async def unlock(self, *, password=None, key=None):
-        print('Loading config...')
+        print('Loading config')
         data = await self.as_coroutine(self.backend.download, 'config')
         config = self.deserialize(data)
 
@@ -334,14 +333,14 @@ class Repository:
         if isinstance(key, collections.abc.ByteString):
             key = self.deserialize(key)
 
-        print('Unlocking repository...')
+        print('Unlocking repository')
         self.properties = self._prepare_config(config, password=password, key=key)
 
     async def init(self, *, password=None, settings=None):
         if settings is None:
             settings = {}
 
-        print('Generating config and key...')
+        print('Generating config and key')
         config, key = self._config_and_key_from_settings(utils.flat_to_nested(settings))
         self.properties = self._prepare_config(config, password=password, key=key)
 
@@ -366,6 +365,63 @@ class Repository:
         )
         print('Generated config (stored in repository):', pretty_config, sep='\n')
         return utils.DefaultNamespace(config=config, key=key)
+
+    async def list(self):
+        headers = {
+            'snapshot': lambda x: x[0],
+            'timestamp (utc)': lambda x: x[1]['utc_timestamp'],
+            'files': lambda x: len(x[1]['files']),
+        }
+        snapshots = {}
+        aws = []
+        semaphore = asyncio.Semaphore(self._concurrent)
+        stored_snapshots = await self.as_coroutine(
+            self.backend.list_files, 'snapshots/'
+        )
+
+        async def _download_snapshot(path):
+            async with semaphore:
+                logger.info('Downloading %s', path)
+                contents = await self.as_coroutine(self.backend.download, path)
+
+            logger.info('Caching %s', path)
+            utils.fs.store_cached(path, contents)
+            logger.info('Decrypting %s', path)
+            snapshots[path] = self.deserialize(
+                self.properties.decrypt(contents, self.properties.userkey)
+            )
+
+        for cached_snapshot in utils.fs.list_cached('snapshots/'):
+            logger.info('Decrypting %s', cached_snapshot)
+            snapshots[str(cached_snapshot)] = self.deserialize(
+                self.properties.decrypt(
+                    utils.fs.get_cached(cached_snapshot), self.properties.userkey
+                )
+            )
+
+        for path in stored_snapshots:
+            if path in snapshots:
+                logger.info('%s is cached', path)
+                continue
+            aws.append(_download_snapshot(path))
+
+        if aws:
+            await asyncio.gather(*aws)
+
+        if not snapshots:
+            return
+
+        ordered_snapshots = sorted(
+            snapshots.items(), key=lambda x: x[1]['utc_timestamp'], reverse=True
+        )
+        columns = []
+        for header, getter in headers.items():
+            max_length = max(len(str(getter(x))) for x in ordered_snapshots)
+            columns.append(header.upper().center(max_length))
+
+        print(*columns)
+        for x in ordered_snapshots:
+            print(*(g(x) for g in headers.values()))
 
     async def snapshot(self, *, paths, rate_limit=None):
         files = []
@@ -415,7 +471,7 @@ class Repository:
         loop = asyncio.get_event_loop()
         tasks = set()
         chunk_queue = queue.Queue(maxsize=self._concurrent * 10)
-        stop_event = threading.Event()
+        abort = threading.Event()
 
         if rate_limit is not None:
             rate_limiter = _RateLimiter(rate_limit)
@@ -461,11 +517,11 @@ class Repository:
 
             bytes_tracker.update(chunk.end - chunk.start)
 
-        async def _upload_chunk(chunk):
+        async def _upload_chunk(chunk, slot):
             io_wrapper = _TrackedBytesIO(
                 chunk.encrypted_contents,
                 desc=f'Chunk #{chunk.counter:06}',
-                slot=chunk.slot,
+                slot=slot,
                 progress=self._progress,
                 rate_limiter=rate_limiter,
             )
@@ -500,42 +556,41 @@ class Repository:
 
         def _chunk_producer():
             for output_chunk in self.properties.chunkify(_stream_files()):
-                if stop_event.is_set():
+                if abort.is_set():
                     logging.debug('Stopping chunk producer')
                     return
+
+                state.chunk_counter += 1
                 start = state.bytes_chunked
                 state.bytes_chunked += len(output_chunk)
-                chunk_queue.put((start, output_chunk))
+                chunk = self._chunk_type(
+                    contents=output_chunk,
+                    counter=state.chunk_counter,
+                    start=start,
+                    end=start + len(output_chunk),
+                )
+                chunk_queue.put(chunk)
 
         chunk_producer = loop.run_in_executor(
-            ThreadPoolExecutor(max_workers=1), _chunk_producer
+            ThreadPoolExecutor(max_workers=1, thread_name_prefix='chunk-producer'),
+            _chunk_producer,
         )
         chunk_producer.add_done_callback(lambda fut: fut.result())
 
         while not chunk_queue.empty() or not chunk_producer.done():
             try:
-                starts_at, output_chunk = chunk_queue.get_nowait()
+                chunk = chunk_queue.get_nowait()
             except queue.Empty:
                 await asyncio.sleep(0.025)
                 continue
 
-            state.chunk_counter += 1
             slot = await self._slots.get()
-            chunk = self._chunk_type(
-                contents=output_chunk,
-                counter=state.chunk_counter,
-                start=starts_at,
-                end=starts_at + len(output_chunk),
-                slot=slot,
-            )
-
-            matching = await self.as_coroutine(self.backend.list_files, chunk.location)
-            if next(iter(matching), None) is not None:
+            if await self.as_coroutine(self.backend.exists, chunk.location):
                 logger.info('Will reuse chunk %s', chunk.name)
                 try:
                     _done_chunk(chunk)
                 except BaseException:
-                    stop_event.set()
+                    abort.set()
                     raise
                 else:
                     continue
@@ -543,14 +598,14 @@ class Repository:
                     self._slots.put_nowait(slot)
 
             logger.info('Uploading chunk %s', chunk.name)
-            task = asyncio.create_task(_upload_chunk(chunk))
+            task = asyncio.create_task(_upload_chunk(chunk, slot))
             tasks.add(task)
 
             def cb(fut, slot=slot, task=task):
                 try:
                     fut.result()
                 except BaseException:
-                    stop_event.set()
+                    abort.set()
                     raise
                 else:
                     tasks.remove(task)

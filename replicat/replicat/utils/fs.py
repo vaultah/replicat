@@ -1,6 +1,10 @@
 import os
 from pathlib import Path
 
+from appdirs import user_cache_dir
+
+CACHE_DIRECTORY = user_cache_dir('replicat', 'replicat')
+
 
 def recursive_scandir(start_entry, *, follow_symlinks=False):
     # Just recursively yield all *files* below `start_entry`
@@ -33,3 +37,21 @@ def stream_files(files, *, chunk_size=16_777_216):
                 yield file, chunk
                 if not chunk:
                     break
+
+
+def list_cached(path):
+    start = Path(CACHE_DIRECTORY, path)
+    start.mkdir(parents=True, exist_ok=True)
+
+    for path in flatten_paths([start]):
+        yield path.relative_to(CACHE_DIRECTORY)
+
+
+def get_cached(path):
+    return Path(CACHE_DIRECTORY, path).read_bytes()
+
+
+def store_cached(path, data):
+    file = Path(CACHE_DIRECTORY, path)
+    file.parent.mkdir(parents=True, exist_ok=True)
+    file.write_bytes(data)

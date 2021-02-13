@@ -15,6 +15,9 @@ class Local(Backend):
     def __init__(self, connection_string):
         self.path = Path(connection_string)
 
+    def exists(self, name):
+        return os.path.exists(self.path / name)
+
     def upload(self, name, contents):
         destination = self.path / name
         destination.parent.mkdir(parents=True, exist_ok=True)

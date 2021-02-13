@@ -9,6 +9,11 @@ class Backend(abc.ABC):
         pass
 
     @abc.abstractmethod
+    async def exists(self, name):
+        """ Either async or plain function """
+        return None
+
+    @abc.abstractmethod
     async def upload(self, name, contents, **ka):
         """ Either async or plain function """
         return None

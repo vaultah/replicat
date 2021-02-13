@@ -21,6 +21,8 @@ async def main(args, unknown):
         await repo.unlock(password=args.password, key=args.key)
         if args.action == 'snapshot':
             await repo.snapshot(paths=args.path, rate_limit=args.rate_limit)
+        elif args.action == 'list':
+            await repo.list()
 
 
 if __name__ == '__main__':

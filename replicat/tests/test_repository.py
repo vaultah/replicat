@@ -86,8 +86,8 @@ class TestSnapshot:
             result.data['files'], key=lambda x: x['name'], reverse=True
         )
         assert len(canonical_files) == len(snapshot_files)
-        restored_files = []
 
+        restored_files = []
         for file, snapshot_data in zip(canonical_files, snapshot_files):
             file_snapshot = b''
 
@@ -96,13 +96,12 @@ class TestSnapshot:
                 (chunk_path,) = local_backend.list_files(
                     f'data/{chunk_name[:2]}/{chunk_name}'
                 )
-                path = local_backend.path / chunk_path
-                contents = path.read_bytes()
-
                 shared_key = repo.properties.derive_shared_key(
                     bytes.fromhex(chunk['digest'])
                 )
-                decrypted_chunk = repo.properties.decrypt(contents, shared_key)
+                decrypted_chunk = repo.properties.decrypt(
+                    (local_backend.path / chunk_path).read_bytes(), shared_key
+                )
                 file_snapshot += decrypted_chunk[chunk['start'] : chunk['end']]
 
             restored_files.append(file_snapshot)
