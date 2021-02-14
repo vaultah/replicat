@@ -109,10 +109,7 @@ class TestSnapshot:
         assert all(x.read_bytes() == y for x, y in zip(canonical_files, restored_files))
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize('method', ['list_files', 'upload'])
-    async def test_snapshot_backend_error_propagation(
-        self, local_backend, tmp_path, method
-    ):
+    async def test_backend_error_propagation(self, local_backend, tmp_path):
         repo = Repository(backend=local_backend, concurrent=5)
         params = await repo.init(
             password=b'<password>',
@@ -137,7 +134,7 @@ class TestSnapshot:
         assert len([*local_backend.list_files('snapshots')]) == 0
 
     @pytest.mark.asyncio
-    async def test_snapshot_wait_for_chunk_upload(self, local_backend, tmp_path):
+    async def test_wait_for_chunk_upload(self, local_backend, tmp_path):
         repo = Repository(backend=local_backend, concurrent=5)
         params = await repo.init(
             password=b'<password>',

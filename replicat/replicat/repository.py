@@ -10,6 +10,7 @@ import queue
 import sys
 import threading
 import time
+import weakref
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime
@@ -373,7 +374,7 @@ class Repository:
             'files': lambda x: len(x[1]['files']),
         }
         snapshots = {}
-        aws = []
+        tasks = []
         semaphore = asyncio.Semaphore(self._concurrent)
         stored_snapshots = await self.as_coroutine(
             self.backend.list_files, 'snapshots/'
@@ -403,10 +404,10 @@ class Repository:
             if path in snapshots:
                 logger.info('%s is cached', path)
                 continue
-            aws.append(_download_snapshot(path))
+            tasks.append(asyncio.create_task(_download_snapshot(path)))
 
-        if aws:
-            await asyncio.gather(*aws)
+        if tasks:
+            await asyncio.wait(tasks, return_when=asyncio.FIRST_EXCEPTION)
 
         if not snapshots:
             return
@@ -469,7 +470,7 @@ class Repository:
             leave=True,
         )
         loop = asyncio.get_event_loop()
-        tasks = set()
+        tasks = weakref.WeakSet()
         chunk_queue = queue.Queue(maxsize=self._concurrent * 10)
         abort = threading.Event()
 
@@ -518,15 +519,21 @@ class Repository:
             bytes_tracker.update(chunk.end - chunk.start)
 
         async def _upload_chunk(chunk, slot):
-            io_wrapper = _TrackedBytesIO(
-                chunk.encrypted_contents,
-                desc=f'Chunk #{chunk.counter:06}',
-                slot=slot,
-                progress=self._progress,
-                rate_limiter=rate_limiter,
-            )
-            await self.as_coroutine(self.backend.upload, chunk.location, io_wrapper)
-            _done_chunk(chunk)
+            try:
+                io_wrapper = _TrackedBytesIO(
+                    chunk.encrypted_contents,
+                    desc=f'Chunk #{chunk.counter:06}',
+                    slot=slot,
+                    progress=self._progress,
+                    rate_limiter=rate_limiter,
+                )
+                await self.as_coroutine(self.backend.upload, chunk.location, io_wrapper)
+                _done_chunk(chunk)
+            except BaseException:
+                abort.set()
+                raise
+            finally:
+                self._slots.put_nowait(slot)
 
         def _stream_files():
             for file, source_chunk in utils.fs.stream_files(files):
@@ -575,8 +582,6 @@ class Repository:
             ThreadPoolExecutor(max_workers=1, thread_name_prefix='chunk-producer'),
             _chunk_producer,
         )
-        chunk_producer.add_done_callback(lambda fut: fut.result())
-
         while not chunk_queue.empty() or not chunk_producer.done():
             try:
                 chunk = chunk_queue.get_nowait()
@@ -599,21 +604,10 @@ class Repository:
 
             logger.info('Uploading chunk %s', chunk.name)
             task = asyncio.create_task(_upload_chunk(chunk, slot))
+            task.add_done_callback(lambda fut: fut.result())
             tasks.add(task)
 
-            def cb(fut, slot=slot, task=task):
-                try:
-                    fut.result()
-                except BaseException:
-                    abort.set()
-                    raise
-                else:
-                    tasks.remove(task)
-                finally:
-                    self._slots.put_nowait(slot)
-
-            task.add_done_callback(cb)
-
+        await chunk_producer
         if tasks:
             await asyncio.wait(tasks, return_when=asyncio.FIRST_EXCEPTION)
 
