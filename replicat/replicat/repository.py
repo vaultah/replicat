@@ -7,7 +7,6 @@ import json
 import logging
 import os
 import queue
-import sys
 import threading
 import time
 import weakref
@@ -85,10 +84,6 @@ class _Chunk:
         else:
             return self.digest.hex()
 
-    @cached_property
-    def location(self):
-        return f'data/{self.name[:2]}/{self.name}'
-
 
 class _TrackedBytesIO(io.BytesIO):
     def __init__(self, initial_bytes, *, desc, slot, progress, rate_limiter):
@@ -103,7 +98,6 @@ class _TrackedBytesIO(io.BytesIO):
                 total=len(initial_bytes),
                 unit_scale=True,
                 position=slot,
-                file=sys.stdout,
                 disable=not progress,
                 leave=False,
             )
@@ -148,6 +142,9 @@ class _TrackedBytesIO(io.BytesIO):
 
 
 class Repository:
+    CHUNK_PREFIX = 'data/'
+    SNAPSHOT_PREFIX = 'snapshots/'
+
     def __init__(self, backend, *, concurrent, progress=False):
         self._concurrent = concurrent
         self._slots = asyncio.Queue(maxsize=concurrent)
@@ -186,6 +183,22 @@ class Repository:
 
     def deserialize(self, data):
         return json.loads(data, object_hook=utils.type_reverse)
+
+    def chunk_name_to_location(self, name):
+        return os.path.join(self.CHUNK_PREFIX, name[:2], name)
+
+    def chunk_location_to_name(self, location):
+        _, tail = os.path.split(location)
+        assert tail
+        return tail
+
+    def snapshot_name_to_location(self, name):
+        return os.path.join(self.SNAPSHOT_PREFIX, name)
+
+    def snapshot_location_to_name(self, location):
+        _, tail = os.path.split(location)
+        assert tail
+        return tail
 
     def read_metadata(self, path):
         # TODO: Cache stat result?
@@ -369,7 +382,7 @@ class Repository:
 
     async def list(self):
         headers = {
-            'snapshot': lambda x: x[0],
+            'snapshot': lambda x: self.snapshot_location_to_name(x[0]),
             'timestamp (utc)': lambda x: x[1]['utc_timestamp'],
             'files': lambda x: len(x[1]['files']),
         }
@@ -377,7 +390,7 @@ class Repository:
         tasks = []
         semaphore = asyncio.Semaphore(self._concurrent)
         stored_snapshots = await self.as_coroutine(
-            self.backend.list_files, 'snapshots/'
+            self.backend.list_files, self.SNAPSHOT_PREFIX
         )
 
         async def _download_snapshot(path):
@@ -392,7 +405,7 @@ class Repository:
                 self.properties.decrypt(contents, self.properties.userkey)
             )
 
-        for cached_snapshot in utils.fs.list_cached('snapshots/'):
+        for cached_snapshot in utils.fs.list_cached(self.SNAPSHOT_PREFIX):
             logger.info('Decrypting %s', cached_snapshot)
             snapshots[str(cached_snapshot)] = self.deserialize(
                 self.properties.decrypt(
@@ -456,7 +469,6 @@ class Repository:
             unit_scale=True,
             total=None,
             position=0,
-            file=sys.stdout,
             disable=not self._progress,
             leave=True,
         )
@@ -465,7 +477,6 @@ class Repository:
             unit='',
             total=len(files),
             position=1,
-            file=sys.stdout,
             disable=not self._progress,
             leave=True,
         )
@@ -527,7 +538,11 @@ class Repository:
                     progress=self._progress,
                     rate_limiter=rate_limiter,
                 )
-                await self.as_coroutine(self.backend.upload, chunk.location, io_wrapper)
+                await self.as_coroutine(
+                    self.backend.upload,
+                    self.chunk_name_to_location(chunk.name),
+                    io_wrapper,
+                )
                 _done_chunk(chunk)
             except BaseException:
                 abort.set()
@@ -590,7 +605,9 @@ class Repository:
                 continue
 
             slot = await self._slots.get()
-            if await self.as_coroutine(self.backend.exists, chunk.location):
+            if await self.as_coroutine(
+                self.backend.exists, self.chunk_name_to_location(chunk.name)
+            ):
                 logger.info('Will reuse chunk %s', chunk.name)
                 try:
                     _done_chunk(chunk)
@@ -627,6 +644,8 @@ class Repository:
         )
         snapshot_name = self.properties.digest(encrypted_snapshot).hex()
         await self.as_coroutine(
-            self.backend.upload, f'snapshots/{snapshot_name}', encrypted_snapshot
+            self.backend.upload,
+            self.snapshot_name_to_location(snapshot_name),
+            encrypted_snapshot,
         )
         return utils.DefaultNamespace(snapshot=snapshot_name, data=snapshot)
