@@ -1,18 +1,13 @@
 #include <cstddef>
 #include <cstdint>
-#include <string_view>
+#include <emmintrin.h>
 #include <immintrin.h>
-#include <cstring>
 #include <pybind11/pybind11.h>
+#include <stdexcept>
+#include <string_view>
 
 namespace py = pybind11;
 using namespace std;
-
-union M128 {
-    uint8_t i8[16];
-    uint64_t i64[2];
-    __m128i i128;
-};
 
 
 /* We abuse the idea from https://crypto.stackexchange.com/a/87426
@@ -28,19 +23,20 @@ public:
         if (min_length > max_length)
             throw std::invalid_argument("Minimum length is greater than the maximum one");
 
-        memcpy(reinterpret_cast<char *>(params.i8), key.data(), 16);
-        if (params.i64[0] == 0)
+        params = _mm_loadu_si128(reinterpret_cast<const __m128i*>(key.data()));
+        auto k0 = _mm_extract_epi64(params, 0);
+        if (k0 == 0)
             throw std::invalid_argument("Bad key contents");
 
-        k0 = params.i64[1];
-        params.i64[1] = 27;
+        // We only care about the lower 64 bits here
+        k1 = _mm_bsrli_si128(params, 8);
+        params = _mm_set_epi64x(27, k0);
     };
     uint64_t key(const char*, size_t);
     size_t next_cut(string_view, bool);
 
     size_t min_length, max_length;
-    uint64_t k0;
-    M128 params;
+    __m128i params, k1;
 };
 
 size_t gclmulchunker::next_cut(string_view buffer, bool final = false) {
@@ -69,12 +65,12 @@ size_t gclmulchunker::next_cut(string_view buffer, bool final = false) {
 }
 
 uint64_t gclmulchunker::key(const char* buffer, size_t offset) {
-    M128 u = params, v{};
-    memcpy(reinterpret_cast<char *>(v.i8), &buffer[offset - 4], 8);
-    v.i128 = _mm_clmulepi64_si128(u.i128, v.i128, 0);
-    u.i128 = _mm_clmulepi64_si128(u.i128, v.i128, 0b00010001);
-    return k0 ^ u.i64[0] ^ v.i64[0];
+    __m128i u = params, v = _mm_loadu_si64(&buffer[offset - 4]);
+    v = _mm_clmulepi64_si128(u, v, 0);
+    u = _mm_clmulepi64_si128(u, v, 0b00010001);
+    return _mm_extract_epi64(_mm_xor_si128(_mm_xor_si128(k1, u), v), 0);
 }
+
 
 PYBIND11_MODULE(_replicat_adapters, m) {
     py::class_<gclmulchunker>(m, "_gclmulchunker")
