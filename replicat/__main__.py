@@ -22,7 +22,12 @@ async def main(args, unknown):
         if args.action == 'snapshot':
             await repo.snapshot(paths=args.path, rate_limit=args.rate_limit)
         elif args.action == 'list':
-            await repo.list()
+            if args.list_files:
+                await repo.list_files(
+                    snapshot_regex=args.snapshot_regex, files_regex=args.files_regex,
+                )
+            else:
+                await repo.list_snapshots(snapshot_regex=args.snapshot_regex)
 
 
 if __name__ == '__main__':

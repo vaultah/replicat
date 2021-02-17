@@ -80,7 +80,7 @@ common_options.add_argument(
 common_options.add_argument(
     '-q', '--hide-progress', dest='progress', action='store_false'
 )
-common_options.add_argument('-c', '--concurrent', default=5, type=int)
+common_options.add_argument('--concurrent', default=5, type=int)
 common_options.add_argument('-v', '--verbose', action='count', default=0)
 common_options.add_argument('-k', '--key', metavar='KEYFILE', type=_read_bytes)
 # All the different ways to provide a repo password
@@ -109,7 +109,22 @@ def make_parser(*parent_parsers):
     # TODO: argparse is broken
     subparsers = parser.add_subparsers(dest='action', required=True)
     subparsers.add_parser('init', parents=parent_parsers)
-    subparsers.add_parser('list', parents=parent_parsers)
+
+    list_parser = subparsers.add_parser('list', parents=parent_parsers)
+    list_parser.add_argument('-S', '--snapshot-regex', help='Regex to filter snapshots')
+    list_parser.add_argument('-F', '--files-regex', help='Regex to filter files')
+
+    list_group = list_parser.add_mutually_exclusive_group()
+    list_group.add_argument(
+        '-s',
+        dest='list_snapshots',
+        help='List snapshots (the default)',
+        action='store_true',
+    )
+    list_group.add_argument(
+        '-f', dest='list_files', help='List files', action='store_true'
+    )
+
     snapshot_parser = subparsers.add_parser('snapshot', parents=parent_parsers)
     snapshot_parser.add_argument('path', nargs='+', type=Path)
     snapshot_parser.add_argument(

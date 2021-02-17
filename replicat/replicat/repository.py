@@ -7,6 +7,7 @@ import json
 import logging
 import os
 import queue
+import re
 import threading
 import time
 import weakref
@@ -380,12 +381,7 @@ class Repository:
         print('Generated config (stored in repository):', pretty_config, sep='\n')
         return utils.DefaultNamespace(config=config, key=key)
 
-    async def list(self):
-        headers = {
-            'snapshot': lambda x: self.snapshot_location_to_name(x[0]),
-            'timestamp (utc)': lambda x: x[1]['utc_timestamp'],
-            'files': lambda x: len(x[1]['files']),
-        }
+    async def _load_snapshots(self, *, snapshot_regex=None):
         snapshots = {}
         tasks = []
         semaphore = asyncio.Semaphore(self._concurrent)
@@ -405,37 +401,101 @@ class Repository:
                 self.properties.decrypt(contents, self.properties.userkey)
             )
 
-        for cached_snapshot in utils.fs.list_cached(self.SNAPSHOT_PREFIX):
-            logger.info('Decrypting %s', cached_snapshot)
-            snapshots[str(cached_snapshot)] = self.deserialize(
-                self.properties.decrypt(
-                    utils.fs.get_cached(cached_snapshot), self.properties.userkey
-                )
-            )
+        cached_snapshots = {str(x) for x in utils.fs.list_cached(self.SNAPSHOT_PREFIX)}
 
-        for path in stored_snapshots:
-            if path in snapshots:
-                logger.info('%s is cached', path)
+        for snapshot_path in stored_snapshots:
+            snapshot_name = self.snapshot_location_to_name(snapshot_path)
+            if snapshot_regex is not None:
+                if re.search(snapshot_regex, snapshot_name) is None:
+                    continue
+
+            if snapshot_path in cached_snapshots:
+                logger.info('%s is cached, decrypting', snapshot_path)
+                snapshots[snapshot_path] = self.deserialize(
+                    self.properties.decrypt(
+                        utils.fs.get_cached(snapshot_path), self.properties.userkey
+                    )
+                )
                 continue
-            tasks.append(asyncio.create_task(_download_snapshot(path)))
+
+            tasks.append(asyncio.create_task(_download_snapshot(snapshot_path)))
 
         if tasks:
             await asyncio.wait(tasks, return_when=asyncio.FIRST_EXCEPTION)
 
-        if not snapshots:
+        return snapshots
+
+    async def list_snapshots(self, *, snapshot_regex=None):
+        snapshots_mapping = await self._load_snapshots(snapshot_regex=snapshot_regex)
+        if not snapshots_mapping:
             return
 
-        ordered_snapshots = sorted(
-            snapshots.items(), key=lambda x: x[1]['utc_timestamp'], reverse=True
-        )
+        snapshots = []
+        for snapshot_path, snapshot_data in snapshots_mapping.items():
+            snapshots.append(
+                utils.DefaultNamespace(
+                    snapshot_path=snapshot_path, snapshot=snapshot_data,
+                )
+            )
+
+        snapshot_columns = {
+            'snapshot': lambda x: self.snapshot_location_to_name(x.snapshot_path),
+            'timestamp (utc)': lambda x: datetime.fromisoformat(
+                x.snapshot['utc_timestamp']
+            ).isoformat(sep=' ', timespec='seconds'),
+            'files': lambda x: len(x.snapshot['files']),
+        }
+        snapshots.sort(key=lambda x: x.snapshot['utc_timestamp'], reverse=True)
         columns = []
-        for header, getter in headers.items():
-            max_length = max(len(str(getter(x))) for x in ordered_snapshots)
+
+        for header, getter in snapshot_columns.items():
+            max_length = max(len(str(getter(x))) for x in snapshots)
             columns.append(header.upper().center(max_length))
 
         print(*columns)
-        for x in ordered_snapshots:
-            print(*(g(x) for g in headers.values()))
+        for x in snapshots:
+            print(*(g(x) for g in snapshot_columns.values()))
+
+    async def list_files(self, *, snapshot_regex=None, files_regex=None):
+        snapshots_mapping = await self._load_snapshots(snapshot_regex=snapshot_regex)
+        if not snapshots_mapping:
+            return
+
+        files = []
+        for snapshot_path, snapshot_data in snapshots_mapping.items():
+            for file_data in snapshot_data['files']:
+                if files_regex is not None:
+                    if re.search(files_regex, file_data['path']) is None:
+                        continue
+
+                files.append(
+                    utils.DefaultNamespace(
+                        snapshot_path=snapshot_path,
+                        snapshot=snapshot_data,
+                        file=file_data,
+                    )
+                )
+
+        if not files:
+            return
+
+        file_columns = {
+            'snapshot date': lambda x: datetime.fromisoformat(
+                x.snapshot['utc_timestamp']
+            ).isoformat(sep=' ', timespec='seconds'),
+            'name': lambda x: x.file['name'],
+            'chunks count': lambda x: len(x.file['chunks']),
+            'size': lambda x: sum(y['end'] - y['start'] for y in x.file['chunks']),
+        }
+        files.sort(key=lambda x: x.snapshot['utc_timestamp'], reverse=True)
+        columns = []
+        for header, getter in file_columns.items():
+            max_length = max(len(str(getter(x))) for x in files)
+            columns.append(header.upper().center(max_length))
+
+        print(*columns)
+        for x in files:
+            print(*(g(x) for g in file_columns.values()))
 
     async def snapshot(self, *, paths, rate_limit=None):
         files = []

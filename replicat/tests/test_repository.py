@@ -109,6 +109,37 @@ class TestSnapshot:
         assert all(x.read_bytes() == y for x, y in zip(canonical_files, restored_files))
 
     @pytest.mark.asyncio
+    async def test_deduplicated_references(self, local_backend, tmp_path):
+        repo = Repository(backend=local_backend, concurrent=5)
+        params = await repo.init(
+            password=b'<password>',
+            settings={
+                'encryption.kdf.n': 4,
+                'chunking.min_length': 256,
+                'chunking.max_length': 512,
+            },
+        )
+        await repo.unlock(password=b'<password>', key=params.key)
+        contents = os.urandom(4) * 1024
+        file = tmp_path / 'file'
+        file.write_bytes(contents)
+
+        result = await repo.snapshot(paths=[file])
+        assert len(result.data['files']) == 1
+
+        referenced = [x['digest'] for x in result.data['files'][0]['chunks']]
+        assert len(referenced) == 16
+        assert len(set(referenced)) == 1
+
+        chunks = list(local_backend.list_files('data'))
+        assert len(chunks) == 1
+        shared_key = repo.properties.derive_shared_key(bytes.fromhex(referenced[0]))
+        decrypted = repo.properties.decrypt(
+            (local_backend.path / chunks[0]).read_bytes(), shared_key
+        )
+        assert decrypted * 16 == contents
+
+    @pytest.mark.asyncio
     async def test_backend_error_propagation(self, local_backend, tmp_path):
         repo = Repository(backend=local_backend, concurrent=5)
         params = await repo.init(
