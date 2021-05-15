@@ -21,13 +21,12 @@ async def main(args, unknown):
         await repo.unlock(password=args.password, key=args.key)
         if args.action == 'snapshot':
             await repo.snapshot(paths=args.path, rate_limit=args.rate_limit)
-        elif args.action == 'list':
-            if args.list_files:
-                await repo.list_files(
-                    snapshot_regex=args.snapshot_regex, files_regex=args.files_regex,
-                )
-            else:
-                await repo.list_snapshots(snapshot_regex=args.snapshot_regex)
+        elif args.action in {'lf', 'list-files'}:
+            await repo.list_files(
+                snapshot_regex=args.snapshot_regex, files_regex=args.files_regex,
+            )
+        elif args.action in {'ls', 'list-snapshots'}:
+            await repo.list_snapshots(snapshot_regex=args.snapshot_regex)
 
 
 if __name__ == '__main__':

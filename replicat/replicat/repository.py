@@ -483,7 +483,7 @@ class Repository:
             'snapshot date': lambda x: datetime.fromisoformat(
                 x.snapshot['utc_timestamp']
             ).isoformat(sep=' ', timespec='seconds'),
-            'name': lambda x: x.file['name'],
+            'path': lambda x: x.file['path'],
             'chunks count': lambda x: len(x.file['chunks']),
             'size': lambda x: sum(y['end'] - y['start'] for y in x.file['chunks']),
         }

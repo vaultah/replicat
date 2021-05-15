@@ -110,19 +110,19 @@ def make_parser(*parent_parsers):
     subparsers = parser.add_subparsers(dest='action', required=True)
     subparsers.add_parser('init', parents=parent_parsers)
 
-    list_parser = subparsers.add_parser('list', parents=parent_parsers)
-    list_parser.add_argument('-S', '--snapshot-regex', help='Regex to filter snapshots')
-    list_parser.add_argument('-F', '--files-regex', help='Regex to filter files')
-
-    list_group = list_parser.add_mutually_exclusive_group()
-    list_group.add_argument(
-        '-s',
-        dest='list_snapshots',
-        help='List snapshots (the default)',
-        action='store_true',
+    list_files_parser = subparsers.add_parser(
+        'list-files', parents=parent_parsers, aliases=['lf']
     )
-    list_group.add_argument(
-        '-f', dest='list_files', help='List files', action='store_true'
+    list_files_parser.add_argument(
+        '-S', '--snapshot-regex', help='Regex to filter snapshots'
+    )
+    list_files_parser.add_argument('-F', '--files-regex', help='Regex to filter files')
+
+    list_snapshots_parser = subparsers.add_parser(
+        'list-snapshots', parents=parent_parsers, aliases=['ls']
+    )
+    list_snapshots_parser.add_argument(
+        '-S', '--snapshot-regex', help='Regex to filter snapshots'
     )
 
     snapshot_parser = subparsers.add_parser('snapshot', parents=parent_parsers)
