@@ -1,9 +1,12 @@
 import hashlib
 import os
 
+import cryptography.exceptions
 from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives.ciphers import aead
 from cryptography.hazmat.primitives.kdf.scrypt import Scrypt
+
+from replicat import exceptions
 
 _backend = default_backend()
 
@@ -14,7 +17,7 @@ except ImportError:
     _replicat_adapters = None
 
 
-class _cipher_adapter:
+class _aead_cipher_adapter:
     def __init__(self):
         self.key_bytes, self.nonce_bytes = self.key_bits // 8, self.nonce_bits // 8
 
@@ -26,10 +29,13 @@ class _cipher_adapter:
     def decrypt(self, data, key):
         cipher = self.cipher(key)
         nonce, ciphertext = data[: self.nonce_bytes], data[self.nonce_bytes :]
-        return cipher.decrypt(nonce, ciphertext, None)
+        try:
+            return cipher.decrypt(nonce, ciphertext, None)
+        except cryptography.exceptions.InvalidTag as e:
+            raise exceptions.ReplicatError('Decryption failed') from e
 
 
-class aes_gcm(_cipher_adapter):
+class aes_gcm(_aead_cipher_adapter):
     cipher = aead.AESGCM
 
     def __init__(self, *, key_bits=256, nonce_bits=96):
@@ -37,7 +43,7 @@ class aes_gcm(_cipher_adapter):
         super().__init__()
 
 
-class chacha20_poly1305(_cipher_adapter):
+class chacha20_poly1305(_aead_cipher_adapter):
     cipher = aead.ChaCha20Poly1305
     key_bits = 256
     nonce_bits = 96

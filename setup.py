@@ -2,7 +2,7 @@
 
 from setuptools import find_packages, setup
 
-extras_require = {'test': ['pytest', 'pytest-asyncio'], 'progress': ['tqdm']}
+extras_require = {'test': ['pytest', 'pytest-asyncio']}
 extras_require['all'] = [y for x in extras_require.values() for y in x]
 
 

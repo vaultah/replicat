@@ -2,7 +2,79 @@ import os
 
 import pytest
 
+from replicat import exceptions
 from replicat.utils import adapters
+
+
+class TestAESGCM:
+    def test_bad_key(self):
+        adapter = adapters.aes_gcm(key_bits=256)
+        key = b'<key>'.ljust(32, b'\x00')
+        encrypted_data = adapter.encrypt(b'<some data>', key)
+        with pytest.raises(exceptions.ReplicatError):
+            adapter.decrypt(encrypted_data, b'<bad key>'.ljust(32, b'\x00'))
+
+    def test_corrupted(self):
+        adapter = adapters.aes_gcm(key_bits=256)
+        key = b'<key>'.ljust(32, b'\x00')
+        encrypted_data = adapter.encrypt(b'<some data>', key)
+        with pytest.raises(exceptions.ReplicatError):
+            adapter.decrypt(b'\x00' + encrypted_data[1:], key)
+
+    def test_ok(self):
+        adapter = adapters.aes_gcm(key_bits=256)
+        key = b'<key>'.ljust(32, b'\x00')
+        encrypted_data = adapter.encrypt(b'<some data>', key)
+        assert adapter.decrypt(encrypted_data, key) == b'<some data>'
+
+
+class TestChaCha20Poly1305:
+    def test_bad_key(self):
+        adapter = adapters.chacha20_poly1305()
+        key = b'<key>'.ljust(32, b'\x00')
+        encrypted_data = adapter.encrypt(b'<some data>', key)
+        with pytest.raises(exceptions.ReplicatError):
+            adapter.decrypt(encrypted_data, b'<bad key>'.ljust(32, b'\x00'))
+
+    def test_corrupted(self):
+        adapter = adapters.chacha20_poly1305()
+        key = b'<key>'.ljust(32, b'\x00')
+        encrypted_data = adapter.encrypt(b'<some data>', key)
+        with pytest.raises(exceptions.ReplicatError):
+            adapter.decrypt(b'\x00' + encrypted_data[1:], key)
+
+    def test_ok(self):
+        adapter = adapters.chacha20_poly1305()
+        key = b'<key>'.ljust(32, b'\x00')
+        encrypted_data = adapter.encrypt(b'<some data>', key)
+        assert adapter.decrypt(encrypted_data, key) == b'<some data>'
+
+
+class TestScrypt:
+    def test_derive(self):
+        adapter = adapters.scrypt(length=17, n=4)
+        params = adapter.derivation_params()
+        key = adapter.derive(b'<password>', params=params)
+        assert len(key) == 17
+
+
+class TestBlake2B:
+    def test_derive(self):
+        adapter = adapters.blake2b(length=17)
+        params = adapter.derivation_params()
+        key = adapter.derive(b'<password>', params=params)
+        assert len(key) == 17
+
+    def test_mac(self):
+        adapter = adapters.blake2b(length=17)
+        params = adapter.mac_params()
+        mac = adapter.mac(b'<data>', params=params)
+        assert len(mac) == 17
+
+    def test_digest(self):
+        adapter = adapters.blake2b(length=17)
+        digest = adapter.digest(b'<data>')
+        assert len(digest) == 17
 
 
 class TestGCLMULChunker:

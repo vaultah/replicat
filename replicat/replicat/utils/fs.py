@@ -1,4 +1,5 @@
 import os
+from contextlib import closing
 from pathlib import Path
 
 from appdirs import user_cache_dir
@@ -30,13 +31,16 @@ def flatten_paths(paths, *, follow_symlinks=False):
 
 
 def stream_files(files, *, chunk_size=16_777_216):
-    for file in files:
-        with file.open('rb') as obj:
-            while True:
-                chunk = obj.read(chunk_size)
-                yield file, chunk
-                if not chunk:
-                    break
+    def _stream():
+        for path in files:
+            with path.open('rb') as file:
+                while True:
+                    chunk = file.read(chunk_size)
+                    yield path, chunk
+                    if not chunk:
+                        break
+
+    return closing(_stream())
 
 
 def list_cached(path):

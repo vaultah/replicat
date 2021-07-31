@@ -130,6 +130,12 @@ def make_parser(*parent_parsers):
     snapshot_parser.add_argument(
         '--limit-rate', '-L', dest='rate_limit', type=human_to_bytes
     )
+
+    restore_parser = subparsers.add_parser('restore', parents=parent_parsers)
+    restore_parser.add_argument(
+        '-S', '--snapshot-regex', help='Regex to filter snapshots'
+    )
+    restore_parser.add_argument('-F', '--files-regex', help='Regex to filter files')
     return parser
 
 
@@ -172,6 +178,19 @@ def human_to_bytes(value):
     if groups['unit'] is not None:
         bytes_amount *= UNITS_TABLE[groups['unit']]
     return int(bytes_amount)
+
+
+def bytes_to_human(value):
+    if value < 1_000:
+        divisor, unit = 1, 'B'
+    elif 1_000 <= value < 1_000 ** 2:
+        divisor, unit = 1_000, 'K'
+    elif 1_000 ** 2 <= value < 1_000 ** 3:
+        divisor, unit = 1_000 ** 2, 'M'
+    else:
+        divisor, unit = 1_000 ** 3, 'G'
+
+    return f'{value / divisor:.2f}{unit}'
 
 
 def guess_type(value):
@@ -231,8 +250,10 @@ def safe_kwargs(func, args):
     }
 
 
-_async_locks = weakref.WeakKeyDictionary()
-_sync_locks = weakref.WeakKeyDictionary()
+_async_auth_glock = asyncio.Lock()
+_async_auth_locks = weakref.WeakKeyDictionary()
+_sync_auth_glock = threading.Lock()
+_sync_auth_locks = weakref.WeakKeyDictionary()
 
 
 def requires_auth(func):
@@ -246,7 +267,11 @@ def requires_auth(func):
             try:
                 self._async_auth_lock
             except AttributeError:
-                lock = _async_locks.setdefault(self, asyncio.Lock())
+                async with _async_auth_glock:
+                    try:
+                        lock = _async_auth_locks[self]
+                    except KeyError:
+                        lock = _async_auth_locks[self] = asyncio.Lock()
 
                 if not lock.locked():
                     async with lock:
@@ -274,8 +299,11 @@ def requires_auth(func):
             try:
                 self._auth_lock
             except AttributeError:
-                # NOTE: *slightly* wasteful, but thread-safe
-                lock = _sync_locks.setdefault(self, threading.Lock())
+                with _sync_auth_glock:
+                    try:
+                        lock = _sync_auth_locks[self]
+                    except KeyError:
+                        lock = _sync_auth_locks[self] = threading.Lock()
 
                 if lock.acquire(blocking=False):
                     self.authenticate()
@@ -305,24 +333,20 @@ def requires_auth(func):
 
 class async_client:
 
-    """ Creates and stores an httpx client when accessed
-        through the parent object. It should be accessed from
-        within an async function. """
+    """ Creates and stores an httpx.AsyncClient instance when accessed through
+        the parent object. It should be only accessed from within async methods.
+        """
 
     def __init__(self, *args, **kwargs):
         self.args, self.kwargs = args, kwargs
 
     def __get__(self, instance, owner):
         try:
-            return self.session
+            return self._session
         except AttributeError:
-            # async loop should be picked up automatically
-            self.session = httpx.AsyncClient(*self.args, **self.kwargs)
-            return self.session
-
-    # TODO: atexit?
-    def close(self):
-        self.session.close()
+            # loop should be picked up automatically
+            self._session = httpx.AsyncClient(*self.args, **self.kwargs)
+            return self._session
 
 
 class DefaultNamespace(SimpleNamespace):

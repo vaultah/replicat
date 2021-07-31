@@ -214,5 +214,9 @@ class B2(Backend):
         response = await self.client.post(url, json=params, headers=headers)
         response.raise_for_status()
 
+    async def close(self):
+        await self.client.aclose()
+        del self.auth
+
 
 Client = B2

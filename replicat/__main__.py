@@ -11,22 +11,28 @@ async def main(args, unknown):
     backend_type, connection_string = args.repo
     backend_params = utils.safe_kwargs(backend_type, vars(args))
     backend = backend_type(connection_string, **backend_params)
-    repo = Repository(backend, concurrent=args.concurrent, progress=args.progress)
+    repository = Repository(backend, concurrent=args.concurrent, progress=args.progress)
 
     if args.action == 'init':
         pairs = zip(unknown[::2], unknown[1::2])
         settings = {k.lstrip('-'): utils.guess_type(v) for k, v in pairs}
-        await repo.init(password=args.password, settings=settings)
+        await repository.init(password=args.password, settings=settings)
     else:
-        await repo.unlock(password=args.password, key=args.key)
+        await repository.unlock(password=args.password, key=args.key)
         if args.action == 'snapshot':
-            await repo.snapshot(paths=args.path, rate_limit=args.rate_limit)
+            await repository.snapshot(paths=args.path, rate_limit=args.rate_limit)
+        elif args.action == 'restore':
+            await repository.restore(
+                snapshot_regex=args.snapshot_regex, files_regex=args.files_regex
+            )
         elif args.action in {'lf', 'list-files'}:
-            await repo.list_files(
+            await repository.list_files(
                 snapshot_regex=args.snapshot_regex, files_regex=args.files_regex,
             )
         elif args.action in {'ls', 'list-snapshots'}:
-            await repo.list_snapshots(snapshot_regex=args.snapshot_regex)
+            await repository.list_snapshots(snapshot_regex=args.snapshot_regex)
+
+    await repository.close()
 
 
 if __name__ == '__main__':

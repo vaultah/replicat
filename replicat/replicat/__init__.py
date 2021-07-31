@@ -37,3 +37,7 @@ class Backend(abc.ABC):
         """ Either async or plain function. Also, it's optional, and must
             have the same type as the methods that need authentication """
         raise NotImplementedError
+
+    async def close(self):
+        """ Either async or plain function """
+        pass
