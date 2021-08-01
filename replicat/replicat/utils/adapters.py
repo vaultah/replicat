@@ -6,7 +6,7 @@ from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives.ciphers import aead
 from cryptography.hazmat.primitives.kdf.scrypt import Scrypt
 
-from replicat import exceptions
+from .. import exceptions
 
 _backend = default_backend()
 

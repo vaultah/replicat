@@ -190,7 +190,7 @@ def bytes_to_human(value):
     else:
         divisor, unit = 1_000 ** 3, 'G'
 
-    return f'{value / divisor:.2f}{unit}'
+    return f'{round(value / divisor, 2):g}{unit}'
 
 
 def guess_type(value):

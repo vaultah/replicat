@@ -83,37 +83,6 @@ class AsyncBackend:
         self.results.append('AUTH')
 
 
-def test_flat_to_nested():
-    good = {'a': 1, 'b.a': 2, 'b.b': 3, 'c.d.e': 4}
-    good_expected = {'a': 1, 'b': {'a': 2, 'b': 3}, 'c': {'d': {'e': 4}}}
-    assert utils.flat_to_nested(good) == good_expected
-
-    # Order of keys must not change anything
-    bad = [
-        dict.fromkeys(['a.b', 'a.b.c.d']),
-        dict.fromkeys(['a.b.c.d', 'a.b']),
-        dict.fromkeys(['a', 'a.b']),
-        dict.fromkeys(['a.b.c', 'a.b']),
-    ]
-    for x in bad:
-        with pytest.raises(exceptions.ReplicatError):
-            utils.flat_to_nested(x)
-
-
-def test_bytestring_serialization():
-    raw = b'<bytes>'
-    serialized = utils.type_hint(raw)
-    assert serialized == {'!bytes': str(standard_b64encode(raw), 'ascii')}
-    deserialized = utils.type_reverse(serialized)
-    assert deserialized == raw
-
-
-def test_safe_kwargs():
-    mixed_args = lambda a, b=1, *c, d, e=1, **f: None
-    args = {x: x for x in mixed_args.__code__.co_varnames}
-    assert utils.safe_kwargs(mixed_args, args) == {'d': 'd', 'e': 'e'}
-
-
 @pytest.mark.asyncio
 async def test_requires_auth_async():
     jobs, rs = 10, []
@@ -134,7 +103,7 @@ async def test_requires_auth_async():
 
 
 # NOTE: `list.append` may not be thread-safe in other implementations
-def test_requires_auth_sync():
+def test_requires_auth_threads():
     jobs, rs = 10, []
     backend = PlainBackend(rs, raise_on=jobs)
     executor = ThreadPoolExecutor(max_workers=jobs)
@@ -152,3 +121,133 @@ def test_requires_auth_sync():
     assert rs.count('CALL') == jobs + rs.count('ERROR')
     # There must be exactly two authentications (including the first one)
     assert rs.count('AUTH') == 2
+
+
+def test_flat_to_nested():
+    good = {'a': 1, 'b.a': 2, 'b.b': 3, 'c.d.e': 4}
+    good_expected = {'a': 1, 'b': {'a': 2, 'b': 3}, 'c': {'d': {'e': 4}}}
+    assert utils.flat_to_nested(good) == good_expected
+
+    # Order of keys must not change anything
+    bad = [
+        dict.fromkeys(['a.b', 'a.b.c.d']),
+        dict.fromkeys(['a.b.c.d', 'a.b']),
+        dict.fromkeys(['a', 'a.b']),
+        dict.fromkeys(['a.b.c', 'a.b']),
+    ]
+    for x in bad:
+        with pytest.raises(exceptions.ReplicatError):
+            utils.flat_to_nested(x)
+
+
+def test_type_hint_bytestring():
+    raw = b'<bytes>'
+    serialized = utils.type_hint(raw)
+    assert serialized == {'!bytes': str(standard_b64encode(raw), 'ascii')}
+
+
+def test_type_hint_reverse_bytestring():
+    serialized = {'!bytes': str(standard_b64encode(b'<bytes>'), 'ascii')}
+    deserialized = utils.type_reverse(serialized)
+    assert deserialized == b'<bytes>'
+
+
+def test_safe_kwargs():
+    mixed_args = lambda a, b=1, *c, d, e=1, **f: None
+    args = {x: x for x in mixed_args.__code__.co_varnames}
+    assert utils.safe_kwargs(mixed_args, args) == {'d': 'd', 'e': 'e'}
+
+
+@pytest.mark.parametrize(
+    'value, expected',
+    [
+        ('none', None),
+        ('None', None),
+        ('true', True),
+        ('True', True),
+        ('False', False),
+        ('false', False),
+        ('1', 1),
+        ('2.0', 2.0),
+        ('3j', 3j),
+        ('unknown', 'unknown'),
+    ],
+)
+def test_guess_type(value, expected):
+    guessed = utils.guess_type(value)
+    assert guessed == expected
+    assert type(guessed) is type(expected)
+
+
+@pytest.mark.parametrize(
+    'human, bytes_amount',
+    [
+        ('1b', 0),
+        ('1B', 1),
+        ('2kB', 2_000),
+        ('3K', 3_000),
+        ('4.5KB', 4_500),
+        ('4KiB', 4_096),
+        ('5kiB', 5_120),
+        ('6m', 6_000_000),
+        ('7M', 7_000_000),
+        ('8Mi', 8_388_608),
+        ('9g', 9_000_000_000),
+        ('10.1Gi', 10_844_792_422),
+    ],
+)
+def test_human_to_bytes(human, bytes_amount):
+    assert utils.human_to_bytes(human) == bytes_amount
+
+
+@pytest.mark.parametrize(
+    'bytes_amount, human',
+    [
+        (0, '0B'),
+        (1, '1B'),
+        (999, '999B'),
+        (1000, '1K'),
+        (1_001, '1K'),
+        (1_100, '1.1K'),
+        (9_900_000, '9.9M'),
+        (9_999_999, '10M'),
+        (11_116_000_000, '11.12G'),
+    ],
+)
+def test_bytes_to_human(bytes_amount, human):
+    assert utils.bytes_to_human(bytes_amount) == human
+
+
+def test_parser_from_callable():
+    weird_default = object()
+
+    class A:
+        def __init__(
+            self,
+            positional,
+            *args,
+            a=0x6CAB0F071,
+            b='<default string>',
+            c=weird_default,
+            d=False,
+            e=True,
+            f=None,
+            g=None,
+            h,
+            j,
+            **kwargs,
+        ):
+            pass
+
+    parser = utils.parser_from_callable(A)
+    known, unknown = parser.parse_known_args(['--g', 'true', '--h', 'H', '--j', '2'])
+    assert not unknown
+    assert known.a == 0x6CAB0F071
+    assert known.b == '<default string>'
+    assert known.c is weird_default
+    assert known.d is False
+    assert known.e is True
+    assert known.f is None
+    assert known.g is True
+    assert known.h == 'H'
+    assert known.j == 2

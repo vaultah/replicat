@@ -1,61 +1,89 @@
 import os
+from hashlib import blake2b, scrypt
 
 import pytest
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM, ChaCha20Poly1305
 
 from replicat import exceptions
 from replicat.utils import adapters
 
 
 class TestAESGCM:
-    def test_bad_key(self):
-        adapter = adapters.aes_gcm(key_bits=256)
+    def test_encrypt(self):
+        adapter = adapters.aes_gcm(key_bits=256, nonce_bits=96)
         key = b'<key>'.ljust(32, b'\x00')
-        encrypted_data = adapter.encrypt(b'<some data>', key)
-        with pytest.raises(exceptions.ReplicatError):
-            adapter.decrypt(encrypted_data, b'<bad key>'.ljust(32, b'\x00'))
+        return_value = adapter.encrypt(b'<some data>', key)
+        ciphertext = AESGCM(key).encrypt(return_value[:12], b'<some data>', None)
+        assert return_value[12:] == ciphertext
 
-    def test_corrupted(self):
-        adapter = adapters.aes_gcm(key_bits=256)
+    def test_decrypt_bad_key(self):
+        adapter = adapters.aes_gcm(key_bits=256, nonce_bits=96)
         key = b'<key>'.ljust(32, b'\x00')
-        encrypted_data = adapter.encrypt(b'<some data>', key)
+        nonce = os.urandom(12)
+        ciphertext = AESGCM(key).encrypt(nonce, b'<some data>', None)
         with pytest.raises(exceptions.ReplicatError):
-            adapter.decrypt(b'\x00' + encrypted_data[1:], key)
+            adapter.decrypt(nonce + ciphertext, b'<bad key>'.ljust(32, b'\x00'))
 
-    def test_ok(self):
-        adapter = adapters.aes_gcm(key_bits=256)
+    def test_decrypt_corrupted(self):
+        adapter = adapters.aes_gcm(key_bits=256, nonce_bits=96)
         key = b'<key>'.ljust(32, b'\x00')
-        encrypted_data = adapter.encrypt(b'<some data>', key)
-        assert adapter.decrypt(encrypted_data, key) == b'<some data>'
+        nonce = os.urandom(12)
+        ciphertext = AESGCM(key).encrypt(nonce, b'<some data>', None)
+        with pytest.raises(exceptions.ReplicatError):
+            adapter.decrypt(
+                b'\x00' + nonce + ciphertext, b'<bad key>'.ljust(32, b'\x00')
+            )
+
+    def test_decrypt(self):
+        adapter = adapters.aes_gcm(key_bits=256, nonce_bits=96)
+        key = b'<key>'.ljust(32, b'\x00')
+        nonce = os.urandom(12)
+        ciphertext = AESGCM(key).encrypt(nonce, b'<some data>', None)
+        assert adapter.decrypt(nonce + ciphertext, key) == b'<some data>'
 
 
 class TestChaCha20Poly1305:
-    def test_bad_key(self):
+    def test_encrypt(self):
         adapter = adapters.chacha20_poly1305()
         key = b'<key>'.ljust(32, b'\x00')
-        encrypted_data = adapter.encrypt(b'<some data>', key)
-        with pytest.raises(exceptions.ReplicatError):
-            adapter.decrypt(encrypted_data, b'<bad key>'.ljust(32, b'\x00'))
+        return_value = adapter.encrypt(b'<some data>', key)
+        ciphertext = ChaCha20Poly1305(key).encrypt(
+            return_value[:12], b'<some data>', None
+        )
+        assert return_value[12:] == ciphertext
 
-    def test_corrupted(self):
+    def test_decrypt_bad_key(self):
         adapter = adapters.chacha20_poly1305()
         key = b'<key>'.ljust(32, b'\x00')
-        encrypted_data = adapter.encrypt(b'<some data>', key)
+        nonce = os.urandom(12)
+        ciphertext = ChaCha20Poly1305(key).encrypt(nonce, b'<some data>', None)
         with pytest.raises(exceptions.ReplicatError):
-            adapter.decrypt(b'\x00' + encrypted_data[1:], key)
+            adapter.decrypt(nonce + ciphertext, b'<bad key>'.ljust(32, b'\x00'))
 
-    def test_ok(self):
+    def test_decrypt_corrupted(self):
         adapter = adapters.chacha20_poly1305()
         key = b'<key>'.ljust(32, b'\x00')
-        encrypted_data = adapter.encrypt(b'<some data>', key)
-        assert adapter.decrypt(encrypted_data, key) == b'<some data>'
+        nonce = os.urandom(12)
+        ciphertext = ChaCha20Poly1305(key).encrypt(nonce, b'<some data>', None)
+        with pytest.raises(exceptions.ReplicatError):
+            adapter.decrypt(
+                b'\x00' + nonce + ciphertext, b'<bad key>'.ljust(32, b'\x00')
+            )
+
+    def test_decrypt(self):
+        adapter = adapters.chacha20_poly1305()
+        key = b'<key>'.ljust(32, b'\x00')
+        nonce = os.urandom(12)
+        ciphertext = ChaCha20Poly1305(key).encrypt(nonce, b'<some data>', None)
+        assert adapter.decrypt(nonce + ciphertext, key) == b'<some data>'
 
 
 class TestScrypt:
     def test_derive(self):
-        adapter = adapters.scrypt(length=17, n=4)
+        adapter = adapters.scrypt(length=17, n=4, r=8, p=1)
         params = adapter.derivation_params()
         key = adapter.derive(b'<password>', params=params)
-        assert len(key) == 17
+        assert key == scrypt(b'<password>', n=4, r=8, p=1, dklen=17, salt=params)
 
 
 class TestBlake2B:
@@ -63,18 +91,18 @@ class TestBlake2B:
         adapter = adapters.blake2b(length=17)
         params = adapter.derivation_params()
         key = adapter.derive(b'<password>', params=params)
-        assert len(key) == 17
+        assert key == blake2b(b'<password>', digest_size=17, key=params).digest()
 
     def test_mac(self):
         adapter = adapters.blake2b(length=17)
         params = adapter.mac_params()
         mac = adapter.mac(b'<data>', params=params)
-        assert len(mac) == 17
+        assert mac == blake2b(b'<data>', digest_size=17, key=params).digest()
 
     def test_digest(self):
         adapter = adapters.blake2b(length=17)
         digest = adapter.digest(b'<data>')
-        assert len(digest) == 17
+        assert digest == blake2b(b'<data>', digest_size=17).digest()
 
 
 class TestGCLMULChunker:
@@ -126,7 +154,7 @@ class TestGCLMULChunker:
 
     @pytest.mark.parametrize('person', [None, b'', b'abcd', os.urandom(64)])
     @pytest.mark.parametrize('repeating_bytes', [1_500, 5_000, 20_000, 50_000])
-    def test_repetion(self, person, repeating_bytes):
+    def test_repetition(self, person, repeating_bytes):
         data = os.urandom(repeating_bytes)
         counts = []
 
