@@ -6,15 +6,10 @@ from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives.ciphers import aead
 from cryptography.hazmat.primitives.kdf.scrypt import Scrypt
 
+import _replicat_adapters
 from .. import exceptions
 
 _backend = default_backend()
-
-
-try:
-    import _replicat_adapters
-except ImportError:
-    _replicat_adapters = None
 
 
 class _aead_cipher_adapter:
@@ -100,7 +95,6 @@ class gclmulchunker:
     MAX_LENGTH = 5_120_000
 
     def __init__(self, *, min_length=MIN_LENGTH, max_length=MAX_LENGTH):
-        assert _replicat_adapters is not None, 'XXX: bindings not available'
         # Data will be aligned to 4-byte boundaries
         min_length = (min_length + 3) & -4
         if min_length > max_length:
