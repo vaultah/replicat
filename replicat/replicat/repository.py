@@ -152,6 +152,9 @@ class Repository:
         return os.path.join(self.CHUNK_PREFIX, name[:2], name)
 
     def chunk_location_to_name(self, location):
+        if not location.startswith(self.CHUNK_PREFIX):
+            raise ValueError('Not a chunk location')
+
         _, tail = os.path.split(location)
         assert tail
         return tail
@@ -160,6 +163,9 @@ class Repository:
         return os.path.join(self.SNAPSHOT_PREFIX, name)
 
     def snapshot_location_to_name(self, location):
+        if not location.startswith(self.SNAPSHOT_PREFIX):
+            raise ValueError('Not a snapshot location')
+
         _, tail = os.path.split(location)
         assert tail
         return tail
@@ -699,9 +705,14 @@ class Repository:
             self.snapshot_name_to_location(snapshot_name),
             encrypted_snapshot,
         )
-        return utils.DefaultNamespace(snapshot=snapshot_name, data=snapshot_data)
+        return utils.DefaultNamespace(name=snapshot_name, data=snapshot_data)
 
-    async def restore(self, *, snapshot_regex=None, files_regex=None):
+    async def restore(self, *, snapshot_regex=None, files_regex=None, path=None):
+        if path is None:
+            path = Path().resolve()
+        else:
+            path = path.resolve()
+
         snapshots_mapping = await self._load_snapshots(snapshot_regex=snapshot_regex)
         ordered_snapshots = sorted(
             snapshots_mapping.values(), key=lambda x: x['utc_timestamp'], reverse=True
@@ -713,6 +724,7 @@ class Repository:
         )
         glock = threading.Lock()
         flocks = {}
+        flocks_refcounts = {}
         loop = asyncio.get_event_loop()
         seen_files = set()
         total_bytes = 0
@@ -723,6 +735,9 @@ class Repository:
                     flock = flocks[ref.path]
                 except KeyError:
                     flock = flocks[ref.path] = threading.Lock()
+                    flocks_refcounts[ref.path] = 1
+                else:
+                    flocks_refcounts[ref.path] += 1
 
             with flock:
                 ref.path.parent.mkdir(parents=True, exist_ok=True)
@@ -735,8 +750,10 @@ class Repository:
                     file.write(contents[ref.start : ref.end])
 
             with glock:
-                flocks.pop(ref.path, None)
                 bytes_tracker.update(ref.end - ref.start)
+                flocks_refcounts[ref.path] -= 1
+                if not flocks_refcounts[ref.path]:
+                    del flocks_refcounts[ref.path], flocks[ref.path]
 
         async def _download_chunk(name, *, slot):
             try:
@@ -773,7 +790,7 @@ class Repository:
                     if re.search(files_regex, file_data['path']) is None:
                         continue
 
-                restore_to = Path(*Path(file_data['path']).parts[1:]).resolve()
+                restore_to = Path(path, *Path(file_data['path']).parts[1:]).resolve()
                 ordered_chunks = sorted(file_data['chunks'], key=lambda x: x['counter'])
                 chunk_position = 0
 
@@ -818,6 +835,8 @@ class Repository:
 
         if tasks:
             await asyncio.wait(tasks, return_when=asyncio.FIRST_EXCEPTION)
+
+        return utils.DefaultNamespace(files=list(seen_files))
 
     async def close(self):
         # Closes associated resources

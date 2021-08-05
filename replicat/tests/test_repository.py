@@ -1,4 +1,5 @@
 import os
+import re
 import threading
 import time
 from unittest.mock import patch
@@ -177,7 +178,7 @@ class TestSnapshot:
         snapshots = list(local_backend.list_files('snapshots'))
         assert len(snapshots) == 1
 
-        snapshot_location = repo.snapshot_name_to_location(result.snapshot)
+        snapshot_location = repo.snapshot_name_to_location(result.name)
         assert snapshots[0] == snapshot_location
         assert repo.properties.decrypt(
             local_backend.download(snapshot_location), repo.properties.userkey,
@@ -221,7 +222,7 @@ class TestSnapshot:
         snapshots = list(local_backend.list_files('snapshots'))
         assert len(snapshots) == 1
 
-        snapshot_location = repo.snapshot_name_to_location(result.snapshot)
+        snapshot_location = repo.snapshot_name_to_location(result.name)
         assert snapshots[0] == snapshot_location
         assert local_backend.download(snapshot_location) == repo.serialize(result.data)
 
@@ -363,3 +364,104 @@ class TestSnapshot:
         assert len(chunks) > 0
         assert len(snapshots) + len(chunks) == upload_mock.call_count
         assert len(result.data['files'][0]['chunks']) == len(chunks)
+
+
+class TestRestore:
+    @pytest.mark.asyncio
+    async def test_encrypted_data(self, local_backend, tmp_path):
+        repo = Repository(backend=local_backend, concurrent=5)
+        await repo.init(
+            password=b'<password>',
+            settings={
+                'encryption.kdf.n': 4,
+                'chunking.min_length': 256,
+                'chunking.max_length': 512,
+            },
+        )
+
+        first_data = os.urandom(4_096)
+        first_file = tmp_path / 'first_file'
+        first_file.write_bytes(first_data)
+
+        second_data = os.urandom(4_096)
+        second_file = tmp_path / 'directory/second_directory/second_file'
+        second_file.parent.mkdir(exist_ok=True, parents=True)
+        second_file.write_bytes(second_data)
+
+        snapshot_params = await repo.snapshot(paths=[first_file, second_file])
+        result = await repo.restore(snapshot_regex=snapshot_params.name, path=tmp_path)
+        assert set(result.files) == {str(first_file), str(second_file)}
+        assert tmp_path.joinpath(*first_file.parts[1:]).read_bytes() == first_data
+        assert tmp_path.joinpath(*second_file.parts[1:]).read_bytes() == second_data
+
+    @pytest.mark.asyncio
+    async def test_unencrypted_data(self, local_backend, tmp_path):
+        repo = Repository(backend=local_backend, concurrent=5)
+        await repo.init(
+            settings={
+                'encryption': None,
+                'chunking.min_length': 256,
+                'chunking.max_length': 512,
+            },
+        )
+
+        first_data = os.urandom(4_096)
+        first_file = tmp_path / 'first_file'
+        first_file.write_bytes(first_data)
+
+        second_data = os.urandom(4_096)
+        second_file = tmp_path / 'directory/second_directory/second_file'
+        second_file.parent.mkdir(exist_ok=True, parents=True)
+        second_file.write_bytes(second_data)
+
+        await repo.snapshot(paths=[first_file, second_file])
+        result = await repo.restore(path=tmp_path)
+        assert set(result.files) == {str(first_file), str(second_file)}
+        assert tmp_path.joinpath(*first_file.parts[1:]).read_bytes() == first_data
+        assert tmp_path.joinpath(*second_file.parts[1:]).read_bytes() == second_data
+
+    @pytest.mark.asyncio
+    async def test_defaults_to_latest_file_version(self, local_backend, tmp_path):
+        repo = Repository(backend=local_backend, concurrent=5)
+        await repo.init(
+            settings={
+                'encryption': None,
+                'chunking.min_length': 256,
+                'chunking.max_length': 512,
+            },
+        )
+
+        file = tmp_path / 'file'
+        file.write_bytes(os.urandom(4_096))
+        await repo.snapshot(paths=[file])
+
+        second_version = os.urandom(4_096)
+        file.write_bytes(second_version)
+        await repo.snapshot(paths=[file])
+
+        result = await repo.restore(files_regex=re.escape(str(file)), path=tmp_path)
+        assert result.files == [str(file)]
+        assert tmp_path.joinpath(*file.parts[1:]).read_bytes() == second_version
+
+    @pytest.mark.asyncio
+    async def test_snapshot_version(self, local_backend, tmp_path):
+        repo = Repository(backend=local_backend, concurrent=5)
+        await repo.init(
+            settings={
+                'encryption': None,
+                'chunking.min_length': 256,
+                'chunking.max_length': 512,
+            },
+        )
+
+        file = tmp_path / 'file'
+        first_version = os.urandom(4_096)
+        file.write_bytes(first_version)
+        first_snapshot = await repo.snapshot(paths=[file])
+
+        file.write_bytes(os.urandom(4_096))
+        await repo.snapshot(paths=[file])
+
+        result = await repo.restore(snapshot_regex=first_snapshot.name, path=tmp_path)
+        assert result.files == [str(file)]
+        assert tmp_path.joinpath(*file.parts[1:]).read_bytes() == first_version
