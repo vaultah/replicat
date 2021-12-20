@@ -96,19 +96,34 @@ password_options.add_argument(
 common_options.set_defaults(password=_get_environb('REPLICAT_PASSWORD'))
 
 
-def adapter_from_config(name, **kwargs):
-    adapter_type = getattr(adapters, name)
-    bound_args = inspect.signature(adapter_type).bind(**kwargs)
-    bound_args.apply_defaults()
-    adapter_args = bound_args.arguments
-    return adapter_type(**adapter_args), adapter_args
-
-
-def make_parser(*parent_parsers):
+def make_main_parser(*parent_parsers):
     parser = argparse.ArgumentParser(add_help=True)
     # TODO: argparse is broken
     subparsers = parser.add_subparsers(dest='action', required=True)
-    subparsers.add_parser('init', parents=parent_parsers)
+    init_parser = subparsers.add_parser('init', parents=parent_parsers)
+    init_parser.add_argument(
+        '-o',
+        '--output-file',
+        help='Where to save the new repository key (the default is to write to standard output)',
+        type=Path,
+    )
+
+    add_key_parser = subparsers.add_parser('add-key', parents=parent_parsers)
+    add_key_password_options = add_key_parser.add_mutually_exclusive_group()
+    add_key_password_options.add_argument('-n', '--new-password', type=os.fsencode)
+    add_key_password_options.add_argument(
+        '-N',
+        '--new-password-file',
+        dest='new_password',
+        metavar='NEW_PASSWORD_FILE_PATH',
+        type=_read_bytes,
+    )
+    add_key_parser.add_argument(
+        '-o',
+        '--output-file',
+        help='Where to save the new repository key (the default is to write to standard output)',
+        type=Path,
+    )
 
     list_files_parser = subparsers.add_parser(
         'list-files', parents=parent_parsers, aliases=['lf']
@@ -139,10 +154,19 @@ def make_parser(*parent_parsers):
     return parser
 
 
-def parser_from_callable(cls):
-    """ Create an ArgumentParser instance based on the keyword-only
-        arguments of `cls`'s constructor """
-    parser = argparse.ArgumentParser(add_help=False)
+def parser_from_callable(cls, *, inherit_common=True):
+    """Create a parser instance that inherits arguments from the common parser
+    and adds arguments based on the callable's signature
+    """
+    if inherit_common:
+        parent_parsers = [common_options]
+    else:
+        parent_parsers = []
+
+    parser = argparse.ArgumentParser(add_help=False, parents=parent_parsers)
+    group = parser.add_argument_group(
+        f'arguments specific to the {cls.__name__} backend'
+    )
     params = inspect.signature(cls).parameters
 
     for name, arg in params.items():
@@ -157,7 +181,7 @@ def parser_from_callable(cls):
             default = os.environ.get(f'{cls.__name__.upper()}_{name.upper()}')
 
         name = name.replace('_', '-')
-        parser.add_argument(
+        group.add_argument(
             f'--{name}',
             required=arg.default is arg.empty,
             default=default,
@@ -165,6 +189,38 @@ def parser_from_callable(cls):
         )
 
     return parser
+
+
+def parse_unknown_args(args_list):
+    stack = list(args_list)
+    mapping = {}
+    group = []
+
+    while stack:
+        last = stack.pop()
+        if last.startswith('--') and group:
+            if len(group) > 1:
+                group.reverse()
+                value = group
+            else:
+                (value,) = group
+
+            mapping[last.lstrip('-').replace('-', '_')] = value
+            group = []
+        elif last.startswith('-'):
+            group = []
+        else:
+            group.append(guess_type(last))
+
+    return mapping
+
+
+def adapter_from_config(name, **kwargs):
+    adapter_type = getattr(adapters, name)
+    bound_args = inspect.signature(adapter_type).bind(**kwargs)
+    bound_args.apply_defaults()
+    adapter_args = bound_args.arguments
+    return adapter_type, adapter_args
 
 
 def human_to_bytes(value):
@@ -204,8 +260,8 @@ def guess_type(value):
 
 
 def flat_to_nested(flat, *, sep='.'):
-    """ Convert a flat mapping to the equivalent nested/hierarchical
-        mapping by splitting keys by the separator """
+    """Convert a flat mapping to the equivalent nested/hierarchical
+    mapping by splitting keys by the separator"""
     root = {}
 
     for key, value in sorted(flat.items()):
@@ -222,8 +278,8 @@ def flat_to_nested(flat, *, sep='.'):
 
 
 def type_hint(object):
-    """ Gets called for objects that can't normally be serialized in JSON.
-        We only expect to deal with byte strings right now """
+    """Gets called for objects that can't normally be serialized in JSON.
+    We only expect to deal with byte strings right now"""
     # TODO: add memoryview?
     if isinstance(object, collections.abc.ByteString):
         return {'!bytes': str(base64.standard_b64encode(object), 'ascii')}
@@ -231,8 +287,8 @@ def type_hint(object):
 
 
 def type_reverse(object):
-    """ Intended to be used as an object_hook. Converts the JSON object
-        returned from type_hint to a Python object of appropriate type """
+    """Intended to be used as an object_hook. Converts the JSON object
+    returned from type_hint to a Python object of appropriate type"""
     try:
         encoded = object.pop('!bytes')
     except KeyError:
@@ -257,9 +313,9 @@ _sync_auth_locks = weakref.WeakKeyDictionary()
 
 
 def requires_auth(func):
-    """ If a decorated backend method (async or plain) raises AuthRequired,
-        indicating that the backend authorization is no longer valid,
-        the decorator will call authenticate to refresh it """
+    """If a decorated backend method (async or plain) raises AuthRequired,
+    indicating that the backend authorization is no longer valid,
+    the decorator will call authenticate to refresh it"""
     # TODO: logging?
     if inspect.iscoroutinefunction(func):
 
@@ -333,9 +389,9 @@ def requires_auth(func):
 
 class async_client:
 
-    """ Creates and stores an httpx.AsyncClient instance when accessed through
-        the parent object. It should be only accessed from within async methods.
-        """
+    """Creates and stores an httpx.AsyncClient instance when accessed through
+    the parent object. It should only be accessed from within async methods.
+    """
 
     def __init__(self, *args, **kwargs):
         self.args, self.kwargs = args, kwargs

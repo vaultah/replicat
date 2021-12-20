@@ -66,7 +66,11 @@ async def on_backoff_no_reauth(details):
 
 
 backoff_decorator = functools.partial(
-    backoff.on_exception, backoff.expo, httpx.HTTPError, max_time=64, giveup=forbidden,
+    backoff.on_exception,
+    backoff.expo,
+    httpx.HTTPError,
+    max_time=64,
+    giveup=forbidden,
 )
 backoff_no_reauth = backoff_decorator(on_backoff=[on_backoff_no_reauth])
 backoff_reauth = backoff_decorator(on_backoff=[on_backoff_reauth])

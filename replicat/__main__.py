@@ -14,12 +14,20 @@ async def main(args, unknown):
     repository = Repository(backend, concurrent=args.concurrent, progress=args.progress)
 
     if args.action == 'init':
-        pairs = zip(unknown[::2], unknown[1::2])
-        settings = {k.lstrip('-'): utils.guess_type(v) for k, v in pairs}
-        await repository.init(password=args.password, settings=settings)
+        settings = utils.flat_to_nested(utils.parse_unknown_args(unknown))
+        await repository.init(
+            password=args.password, settings=settings, output_file=args.output_file
+        )
     else:
         await repository.unlock(password=args.password, key=args.key)
-        if args.action == 'snapshot':
+        if args.action == 'add-key':
+            settings = utils.flat_to_nested(utils.parse_unknown_args(unknown))
+            await repository.add_key(
+                password=args.new_password,
+                settings=settings,
+                output_file=args.output_file,
+            )
+        elif args.action == 'snapshot':
             await repository.snapshot(paths=args.path, rate_limit=args.rate_limit)
         elif args.action == 'restore':
             await repository.restore(
@@ -27,7 +35,8 @@ async def main(args, unknown):
             )
         elif args.action in {'lf', 'list-files'}:
             await repository.list_files(
-                snapshot_regex=args.snapshot_regex, files_regex=args.files_regex,
+                snapshot_regex=args.snapshot_regex,
+                files_regex=args.files_regex,
             )
         elif args.action in {'ls', 'list-snapshots'}:
             await repository.list_snapshots(snapshot_regex=args.snapshot_regex)
@@ -38,8 +47,8 @@ async def main(args, unknown):
 if __name__ == '__main__':
     common, _ = utils.common_options.parse_known_args()
     backend_type, _ = common.repo
-    backend_args = utils.parser_from_callable(backend_type)
-    parser = utils.make_parser(utils.common_options, backend_args)
+    backend_args_parser = utils.parser_from_callable(backend_type)
+    parser = utils.make_main_parser(backend_args_parser)
     args, unknown = parser.parse_known_args()
 
     if args.verbose >= 2:

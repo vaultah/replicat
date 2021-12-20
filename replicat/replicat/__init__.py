@@ -10,34 +10,34 @@ class Backend(abc.ABC):
 
     @abc.abstractmethod
     async def exists(self, name):
-        """ Either async or plain function """
+        """Either async or plain function"""
         return None
 
     @abc.abstractmethod
     async def upload(self, name, contents, **ka):
-        """ Either async or plain function """
+        """Either async or plain function"""
         return None
 
     @abc.abstractmethod
     async def download(self, name, **ka):
-        """ Either async or plain function """
+        """Either async or plain function"""
         return None
 
     @abc.abstractmethod
     async def list_files(self, prefix='', **ka):
-        """ Either async or plain function """
+        """Either async or plain function"""
         return None
 
     @abc.abstractmethod
     async def hide_file(self, name):
-        """ Either async or plain function """
+        """Either async or plain function"""
         return None
 
     async def authenticate(self):
-        """ Either async or plain function. Also, it's optional, and must
-            have the same type as the methods that need authentication """
+        """Either async or plain function. Also, it's optional, and must
+        have the same type as the methods that need authentication"""
         raise NotImplementedError
 
     async def close(self):
-        """ Either async or plain function """
+        """Either async or plain function"""
         pass

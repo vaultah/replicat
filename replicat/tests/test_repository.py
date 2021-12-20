@@ -24,7 +24,10 @@ class TestInit:
         repo = Repository(local_backend, concurrent=1)
         result = await repo.init(
             password=b'<password>',
-            settings={'encryption.kdf.n': 4, 'chunking.min_length': 12_345},
+            settings={
+                'chunking': {'min_length': 12_345},
+                'encryption': {'kdf': {'n': 4}},
+            },
         )
 
         assert local_backend.download('config') == repo.serialize(result.config)
@@ -51,8 +54,14 @@ class TestInit:
         assert isinstance(result.key['key_derivation_params'], bytes)
         assert len(result.key['key_derivation_params']) == 32
 
-        cipher, _ = utils.adapter_from_config(**result.config['encryption']['cipher'])
-        kdf, _ = utils.adapter_from_config(**result.key['kdf'])
+        cipher_type, cipher_args = utils.adapter_from_config(
+            **result.config['encryption']['cipher']
+        )
+        cipher = cipher_type(**cipher_args)
+
+        kdf_type, kdf_args = utils.adapter_from_config(**result.key['kdf'])
+        kdf = kdf_type(**kdf_args)
+
         private = repo.deserialize(
             cipher.decrypt(
                 result.key['encrypted'],
@@ -73,7 +82,7 @@ class TestInit:
         repo = Repository(local_backend, concurrent=1)
         result = await repo.init(
             password=b'<password>',
-            settings={'encryption': None, 'chunking.max_length': 128_129},
+            settings={'encryption': None, 'chunking': {'max_length': 128_129}},
         )
 
         assert local_backend.download('config') == repo.serialize(result.config)
@@ -92,7 +101,7 @@ class TestEncryptedUnlock:
     @pytest.fixture
     async def init_params(self, local_backend):
         return await Repository(local_backend, concurrent=1).init(
-            password=b'<password>', settings={'encryption.kdf.n': 4}
+            password=b'<password>', settings={'encryption': {'kdf': {'n': 4}}}
         )
 
     @pytest.mark.asyncio
@@ -134,6 +143,48 @@ class TestUnencryptedUnlock:
         assert not repo.properties.encrypted
 
 
+class TestAddKey:
+    @pytest.mark.asyncio
+    async def test_unencrypted_repository(self, local_backend):
+        repo = Repository(local_backend, concurrent=1)
+        await repo.init(settings={'encryption': None})
+        await repo.unlock()
+        with pytest.raises(exceptions.ReplicatError):
+            await repo.add_key(password=b'<password>')
+
+    @pytest.mark.asyncio
+    async def test_encrypted_repository(self, local_backend):
+        repo = Repository(local_backend, concurrent=1)
+        params = await repo.init(
+            password=b'<password>', settings={'encryption': {'kdf': {'n': 4}}}
+        )
+        await repo.unlock(password=b'<password>', key=params.key)
+
+        result = await repo.add_key(
+            password=b'<different password>',
+            settings={
+                'encryption': {
+                    'kdf': {'n': 8, 'r': 4},
+                    'cipher': {'name': 'chacha20_poly1305'},
+                },
+            },
+        )
+        assert result.new_key.keys() == {'kdf', 'key_derivation_params', 'encrypted'}
+        assert result.new_key['kdf'] == {
+            'name': 'scrypt',
+            'n': 8,
+            'r': 4,
+            'p': 1,
+            'length': 32,
+        }
+        assert isinstance(result.new_key['key_derivation_params'], bytes)
+        assert len(result.new_key['key_derivation_params']) == 32
+
+        fresh_repo = Repository(local_backend, concurrent=1)
+        await fresh_repo.unlock(password=b'<different password>', key=result.new_key)
+        assert fresh_repo.properties.private == repo.properties.private
+
+
 class TestSnapshot:
     @pytest.fixture
     def source_files(self, tmp_path):
@@ -168,9 +219,11 @@ class TestSnapshot:
         await repo.init(
             password=b'<password>',
             settings={
-                'encryption.kdf.n': 4,
-                'chunking.min_length': 256,
-                'chunking.max_length': 512,
+                'encryption': {'kdf': {'n': 4}},
+                'chunking': {
+                    'min_length': 256,
+                    'max_length': 512,
+                },
             },
         )
         result = await repo.snapshot(paths=source_files)
@@ -180,9 +233,13 @@ class TestSnapshot:
 
         snapshot_location = repo.snapshot_name_to_location(result.name)
         assert snapshots[0] == snapshot_location
-        assert repo.properties.decrypt(
-            local_backend.download(snapshot_location), repo.properties.userkey,
-        ) == repo.serialize(result.data)
+        assert (
+            repo.properties.decrypt(
+                local_backend.download(snapshot_location),
+                repo.properties.userkey,
+            )
+            == repo.serialize(result.data)
+        )
 
         # Small files come first
         source_files.reverse()
@@ -213,8 +270,10 @@ class TestSnapshot:
         await repo.init(
             settings={
                 'encryption': None,
-                'chunking.min_length': 256,
-                'chunking.max_length': 512,
+                'chunking': {
+                    'min_length': 256,
+                    'max_length': 512,
+                },
             }
         )
         result = await repo.snapshot(paths=source_files)
@@ -252,9 +311,11 @@ class TestSnapshot:
         await repo.init(
             password=b'<password>',
             settings={
-                'encryption.kdf.n': 4,
-                'chunking.min_length': 256,
-                'chunking.max_length': 512,
+                'encryption': {'kdf': {'n': 4}},
+                'chunking': {
+                    'min_length': 256,
+                    'max_length': 512,
+                },
             },
         )
 
@@ -284,8 +345,10 @@ class TestSnapshot:
         await repo.init(
             settings={
                 'encryption': None,
-                'chunking.min_length': 256,
-                'chunking.max_length': 512,
+                'chunking': {
+                    'min_length': 256,
+                    'max_length': 512,
+                },
             }
         )
         contents = os.urandom(4) * 1024
@@ -308,8 +371,10 @@ class TestSnapshot:
         await repo.init(
             settings={
                 'encryption': None,
-                'chunking.min_length': 256,
-                'chunking.max_length': 512,
+                'chunking': {
+                    'min_length': 256,
+                    'max_length': 512,
+                },
             }
         )
 
@@ -331,8 +396,10 @@ class TestSnapshot:
         await repo.init(
             settings={
                 'encryption': None,
-                'chunking.min_length': 256,
-                'chunking.max_length': 512,
+                'chunking': {
+                    'min_length': 256,
+                    'max_length': 512,
+                },
             }
         )
 
@@ -373,9 +440,11 @@ class TestRestore:
         await repo.init(
             password=b'<password>',
             settings={
-                'encryption.kdf.n': 4,
-                'chunking.min_length': 256,
-                'chunking.max_length': 512,
+                'encryption': {'kdf': {'n': 4}},
+                'chunking': {
+                    'min_length': 256,
+                    'max_length': 512,
+                },
             },
         )
 
@@ -400,9 +469,11 @@ class TestRestore:
         await repo.init(
             settings={
                 'encryption': None,
-                'chunking.min_length': 256,
-                'chunking.max_length': 512,
-            },
+                'chunking': {
+                    'min_length': 256,
+                    'max_length': 512,
+                },
+            }
         )
 
         first_data = os.urandom(4_096)
@@ -426,8 +497,10 @@ class TestRestore:
         await repo.init(
             settings={
                 'encryption': None,
-                'chunking.min_length': 256,
-                'chunking.max_length': 512,
+                'chunking': {
+                    'min_length': 256,
+                    'max_length': 512,
+                },
             },
         )
 
@@ -449,8 +522,10 @@ class TestRestore:
         await repo.init(
             settings={
                 'encryption': None,
-                'chunking.min_length': 256,
-                'chunking.max_length': 512,
+                'chunking': {
+                    'min_length': 256,
+                    'max_length': 512,
+                },
             },
         )
 

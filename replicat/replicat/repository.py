@@ -16,6 +16,7 @@ from datetime import datetime
 from functools import partial
 from pathlib import Path
 
+from sty import ef
 from tqdm import tqdm
 
 from . import exceptions, utils
@@ -114,6 +115,14 @@ class _TrackedBytesIO(io.BytesIO):
 class Repository:
     CHUNK_PREFIX = 'data/'
     SNAPSHOT_PREFIX = 'snapshots/'
+    # These correspond to the names of adapters
+    DEFAULT_CHUNKER_NAME = 'gclmulchunker'
+    DEFAULT_CIPHER_NAME = 'aes_gcm'
+    DEFAULT_HASHER_NAME = 'blake2b'
+    DEFAULT_MAC_NAME = 'blake2b'
+    DEFAULT_USER_KDF_NAME = 'scrypt'
+    # Fast KDF for high-entropy inputs (used for shared data)
+    DEFAULT_SHARED_KDF_NAME = 'blake2b'
 
     def __init__(self, backend, *, concurrent, progress=False):
         self._concurrent = concurrent
@@ -134,7 +143,7 @@ class Repository:
 
     @property
     def executor(self):
-        """ Executor for non-async methods of `backend` """
+        """Executor for non-async methods of the backend instance"""
         try:
             return self._executor
         except AttributeError:
@@ -191,52 +200,57 @@ class Repository:
 
         # Hashing algorithm for chunks
         hashing_config = settings.get('hashing', {})
-        hashing_config.setdefault('name', 'blake2b')
-        hasher, hasher_args = utils.adapter_from_config(**hashing_config)
-        config['hashing'] = dict(hasher_args, name=type(hasher).__name__)
+        hashing_config.setdefault('name', self.DEFAULT_HASHER_NAME)
+        hasher_type, hasher_args = utils.adapter_from_config(**hashing_config)
+        config['hashing'] = dict(hasher_args, name=hasher_type.__name__)
 
         # Deduplication params
-        chunker = settings.get('chunking', {})
-        chunker.setdefault('name', 'gclmulchunker')
-        chunker, chunker_args = utils.adapter_from_config(**chunker)
-        config['chunking'] = dict(chunker_args, name=type(chunker).__name__)
+        chunking_config = settings.get('chunking', {})
+        chunking_config.setdefault('name', self.DEFAULT_CHUNKER_NAME)
+        chunker_type, chunker_args = utils.adapter_from_config(**chunking_config)
+        chunker = chunker_type(**chunker_args)
+        config['chunking'] = dict(chunker_args, name=chunker_type.__name__)
 
-        encryption = settings.get('encryption', {})
+        encryption_config = settings.get('encryption', {})
 
-        if encryption is not None:
+        if encryption_config is not None:
             # Cipher for user data
-            cipher_config = encryption.get('cipher', {})
-            cipher_config.setdefault('name', 'aes_gcm')
-            cipher, cipher_args = utils.adapter_from_config(**cipher_config)
+            cipher_config = encryption_config.get('cipher', {})
+            cipher_config.setdefault('name', self.DEFAULT_CIPHER_NAME)
+            cipher_type, cipher_args = utils.adapter_from_config(**cipher_config)
+            cipher = cipher_type(**cipher_args)
             config['encryption'] = {
-                'cipher': dict(cipher_args, name=type(cipher).__name__)
+                'cipher': dict(cipher_args, name=cipher_type.__name__)
             }
 
             # KDF for user personal data
-            kdf_config = encryption.get('kdf', {})
-            kdf_config.setdefault('name', 'scrypt')
-            kdf, kdf_args = utils.adapter_from_config(
+            kdf_config = encryption_config.get('kdf', {})
+            kdf_config.setdefault('name', self.DEFAULT_USER_KDF_NAME)
+            kdf_type, kdf_args = utils.adapter_from_config(
                 **kdf_config, length=cipher.key_bytes
             )
+            kdf = kdf_type(**kdf_args)
 
-            # NOTE: *FAST* KDF for shared data. Yes, it's non-standard. Don't @ me.
-            shared_config = encryption.get('shared_kdf', {})
-            shared_config.setdefault('name', 'blake2b')
-            shared_kdf, shared_args = utils.adapter_from_config(
+            # KDF for shared data
+            shared_config = encryption_config.get('shared_kdf', {})
+            shared_config.setdefault('name', self.DEFAULT_SHARED_KDF_NAME)
+            shared_kdf_type, shared_args = utils.adapter_from_config(
                 **shared_config, length=cipher.key_bytes
             )
+            shared_kdf = shared_kdf_type(**shared_args)
 
-            mac_config = encryption.get('mac', {})
-            mac_config.setdefault('name', 'blake2b')
-            mac, mac_args = utils.adapter_from_config(**mac_config)
+            mac_config = encryption_config.get('mac', {})
+            mac_config.setdefault('name', self.DEFAULT_MAC_NAME)
+            mac_type, mac_args = utils.adapter_from_config(**mac_config)
+            mac = mac_type(**mac_args)
 
             key = {
-                'kdf': dict(kdf_args, name=type(kdf).__name__),
+                'kdf': dict(kdf_args, name=kdf_type.__name__),
                 'key_derivation_params': kdf.derivation_params(),
                 'private': {
-                    'shared_kdf': dict(shared_args, name=type(shared_kdf).__name__),
-                    'mac': dict(mac_args, name=type(mac).__name__),
+                    'shared_kdf': dict(shared_args, name=shared_kdf_type.__name__),
                     'shared_encryption_secret': shared_kdf.derivation_params(),
+                    'mac': dict(mac_args, name=mac_type.__name__),
                     'mac_key': mac.mac_params(),
                     'chunker_secret': chunker.chunking_params(),
                 },
@@ -247,8 +261,11 @@ class Repository:
     def _prepare_config(self, config, *, password=None, key=None):
         properties = utils.DefaultNamespace()
 
-        properties.chunker, _ = utils.adapter_from_config(**config['chunking'])
-        properties.hasher, _ = utils.adapter_from_config(**config['hashing'])
+        chunker_type, chunker_args = utils.adapter_from_config(**config['chunking'])
+        properties.chunker = chunker_type(**chunker_args)
+
+        hasher_type, hasher_args = utils.adapter_from_config(**config['hashing'])
+        properties.hasher = hasher_type(**hasher_args)
         properties.digest = properties.hasher.digest
 
         encryption = config.get('encryption')
@@ -258,16 +275,18 @@ class Repository:
         if properties.encrypted:
             if password is None or key is None:
                 raise exceptions.ReplicatError(
-                    'Password and key are needed to unlock this repository'
+                    'Both password and key are needed to unlock this repository'
                 )
 
             # Encryption
-            properties.cipher, _ = utils.adapter_from_config(**encryption['cipher'])
+            cipher_type, cipher_args = utils.adapter_from_config(**encryption['cipher'])
+            properties.cipher = cipher_type(**cipher_args)
             properties.encrypt = properties.cipher.encrypt
             properties.decrypt = properties.cipher.decrypt
 
             # Key derivation
-            properties.kdf, _ = utils.adapter_from_config(**key['kdf'])
+            kdf_type, kdf_args = utils.adapter_from_config(**key['kdf'])
+            properties.kdf = kdf_type(**kdf_args)
             properties.derive_key = partial(
                 properties.kdf.derive, params=key['key_derivation_params']
             )
@@ -282,15 +301,20 @@ class Repository:
                 )
                 private = self.deserialize(decrypted_private)
 
+            properties.private = private
+
             # Message authentication
-            properties.authenticator, _ = utils.adapter_from_config(**private['mac'])
+            mac_type, mac_args = utils.adapter_from_config(**private['mac'])
+            properties.authenticator = mac_type(**mac_args)
             properties.mac = partial(
                 properties.authenticator.mac, params=private['mac_key']
             )
+
             # KDF for shared data
-            properties.shared_kdf, _ = utils.adapter_from_config(
+            shared_kdf_type, shared_kdf_args = utils.adapter_from_config(
                 **private['shared_kdf']
             )
+            properties.shared_kdf = shared_kdf_type(**shared_kdf_args)
             properties.derive_shared_key = partial(
                 properties.shared_kdf.derive, params=private['shared_encryption_secret']
             )
@@ -304,7 +328,7 @@ class Repository:
         return properties
 
     async def unlock(self, *, password=None, key=None):
-        print('Loading config')
+        print(ef.bold + 'Loading config' + ef.rs)
         data = await self.as_coroutine(self.backend.download, 'config')
         config = self.deserialize(data)
 
@@ -312,15 +336,15 @@ class Repository:
         if isinstance(key, collections.abc.ByteString):
             key = self.deserialize(key)
 
-        print('Unlocking repository')
+        print(ef.bold + 'Unlocking repository' + ef.rs)
         self.properties = self._prepare_config(config, password=password, key=key)
 
-    async def init(self, *, password=None, settings=None):
+    async def init(self, *, password=None, settings=None, output_file=None):
         if settings is None:
             settings = {}
 
-        print('Generating config and key')
-        config, key = self._config_and_key_from_settings(utils.flat_to_nested(settings))
+        print(ef.bold + 'Generating config and key' + ef.rs)
+        config, key = self._config_and_key_from_settings(settings)
         self.properties = self._prepare_config(config, password=password, key=key)
 
         if self.properties.encrypted:
@@ -331,19 +355,68 @@ class Repository:
             key['encrypted'] = self.properties.encrypt(
                 self.serialize(key.pop('private')), self.properties.userkey
             )
-            pretty_key = json.dumps(key, indent=4, default=utils.type_hint)
-            # TODO: store in the repository?
-            # TODO: warn on overwrite?
-            key_path = Path('replicat.key').resolve()
-            key_path.write_text(pretty_key)
-            print(f'New key (stored in {key_path}):', pretty_key, sep='\n')
+            # TODO: store it in the repository?
+            if output_file is not None:
+                serialized_key = self.serialize(key)
+                key_path = Path(output_file).resolve()
+                key_path.write_bytes(serialized_key)
+                print(ef.bold + f'Generated key saved to {key_path}' + ef.rs)
+            else:
+                pretty_key = json.dumps(key, indent=4, default=utils.type_hint)
+                print(ef.bold + 'New key:' + ef.rs, pretty_key, sep='\n')
 
         await self.as_coroutine(self.backend.upload, 'config', self.serialize(config))
         pretty_config = json.dumps(
             config, indent=4, sort_keys=True, default=utils.type_hint
         )
-        print('Generated config (stored in repository):', pretty_config, sep='\n')
+        print(
+            ef.bold + 'Generated config (stored in repository):' + ef.rs,
+            pretty_config,
+            sep='\n',
+        )
         return utils.DefaultNamespace(config=config, key=key)
+
+    async def add_key(self, password, settings=None, output_file=None):
+        if not self.properties.encrypted:
+            raise exceptions.ReplicatError('Repository is not encrypted')
+
+        if password is None:
+            raise exceptions.ReplicatError(
+                'The password is required to generate a new key'
+            )
+
+        if settings is None:
+            settings = {}
+
+        encryption_config = settings.get('encryption', {})
+        # Allow a different KDF for the new user
+        kdf_config = encryption_config.get('kdf', {})
+        kdf_config.setdefault('name', self.DEFAULT_USER_KDF_NAME)
+        kdf_type, kdf_args = utils.adapter_from_config(
+            **kdf_config, length=self.properties.cipher.key_bytes
+        )
+        kdf = kdf_type(**kdf_args)
+        key_derivation_params = kdf.derivation_params()
+        new_key = {
+            'kdf': dict(kdf_args, name=kdf_type.__name__),
+            'key_derivation_params': key_derivation_params,
+            'encrypted': self.properties.cipher.encrypt(
+                self.serialize(self.properties.private),
+                kdf.derive(password, params=key_derivation_params),
+            ),
+        }
+
+        # TODO: store it in the repository?
+        if output_file is not None:
+            serialized_key = self.serialize(new_key)
+            key_path = Path(output_file).resolve()
+            key_path.write_bytes(serialized_key)
+            print(ef.bold + f'Generated key saved to {key_path}' + ef.rs)
+        else:
+            pretty_key = json.dumps(new_key, indent=4, default=utils.type_hint)
+            print(ef.bold + 'New key:' + ef.rs, pretty_key, sep='\n')
+
+        return utils.DefaultNamespace(new_key=new_key)
 
     async def _load_snapshots(self, *, snapshot_regex=None):
         snapshots = {}
@@ -403,7 +476,8 @@ class Repository:
         for snapshot_path, snapshot_data in snapshots_mapping.items():
             snapshots.append(
                 utils.DefaultNamespace(
-                    snapshot_path=snapshot_path, snapshot=snapshot_data,
+                    snapshot_path=snapshot_path,
+                    snapshot=snapshot_data,
                 )
             )
 
@@ -687,9 +761,7 @@ class Repository:
         }
         logger.debug(
             'Generated snashot: %s',
-            json.dumps(
-                snapshot_data, indent=4, sort_keys=True, default=utils.type_hint
-            ),
+            json.dumps(snapshot_data, indent=4, sort_keys=True, default=utils.type_hint),
         )
         if self.properties.encrypted:
             encrypted_snapshot = self.properties.encrypt(

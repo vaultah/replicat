@@ -8,7 +8,7 @@ import pytest
 
 from replicat import exceptions, utils
 
-# TODO: tests for make_parser
+# TODO: tests for make_main_parser
 
 
 class PlainBackend:
@@ -251,3 +251,26 @@ def test_parser_from_callable():
     assert known.g is True
     assert known.h == 'H'
     assert known.j == 2
+
+
+def test_parse_unknown_args():
+    args_list = [
+        '--first-long-name.very-empty',
+        '--second-long-name.single-value',
+        'true',
+        '--third-long-name.multiple-values',
+        '1',
+        '2',
+        '3',
+        '-a',
+        '4',
+        '5',
+        '--fourth-long-name.final',
+        'abc',
+        'def',
+    ]
+    parsed_args = utils.parse_unknown_args(args_list)
+    assert len(parsed_args) == 3
+    assert parsed_args['second_long_name.single_value'] is True
+    assert parsed_args['third_long_name.multiple_values'] == [1, 2, 3]
+    assert parsed_args['fourth_long_name.final'] == ['abc', 'def']

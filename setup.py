@@ -50,9 +50,7 @@ class CMakeBuild(build_ext):
                 # CMake 3.12+ only.
                 build_args += [f"-j{self.parallel}"]
 
-        subprocess.check_call(
-            ["cmake", ext.sourcedir] + cmake_args, cwd=self.build_temp
-        )
+        subprocess.check_call(["cmake", ext.sourcedir] + cmake_args, cwd=self.build_temp)
         subprocess.check_call(
             ["cmake", "--build", "."] + build_args, cwd=self.build_temp
         )
@@ -69,7 +67,15 @@ setup(
     description='Configurable and lightweight backup utility with '
     'deduplication, encryption and stuff.',
     packages=find_packages(),
-    install_requires=['httpx', 'cryptography', 'backoff', 'pybind11', 'appdirs'],
+    install_requires=[
+        'httpx',
+        'cryptography',
+        'backoff',
+        'pybind11',
+        'appdirs',
+        'tqdm',
+        'sty',
+    ],
     extras_require=extras_require,
     ext_modules=[CMakeExtension('_replicat_adapters')],
     cmdclass={'build_ext': CMakeBuild},
