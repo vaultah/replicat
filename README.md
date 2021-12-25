@@ -103,14 +103,19 @@ Encrypted repositories require a key and a matching password for every operation
 ```bash
 # Unencrypted repository in some/directory. The --encryption none flag disables encryption
 $ replicat init -r some/directory --encryption none
-# Encrypted repository with initial password take from string. The new key will be printed to stdout
+# Encrypted repository with initial password taken from string.
+# The new key will be printed to stdout
 $ replicat init -r some/directory -p 'password string'
-# Encrypted repository with initial password taken from a file. The new key will be written to path/to/key/file
+# Encrypted repository with initial password taken from a file.
+# The new key will be written to path/to/key/file
 $ replicat init -r some/directory -P path/to/password/file -o path/to/key/file
 # Specifies the cipher
 $ replicat init -r some/directory -p '...' --encryption.cipher.name chacha20_poly1305
 # Specifies the cipher name and parameters
-$ replicat init -r some/directory -p '...' --encryption.cipher.name aes_gcm --encryption.cipher.key_bits 128
+$ replicat init -r some/directory \
+    -p '...' \
+    --encryption.cipher.name aes_gcm \
+    --encryption.cipher.key_bits 128
 # Specifies the KDF name and parameters (for the key)
 $ replicat init -r some/directory -p '...' --encryption.kdf.name scrypt --encryption.kdf.n 1048576
 # Specifies the chunking parameters
@@ -156,7 +161,10 @@ $ replicat lf -r some/directory -P path/to/password/file -K path/to/key/file -F 
 
 ```bash
 # Unlocks the repository and restores the latest versions of all files to 'target-directory'
-$ replicat restore -r some/directory -P path/to/password/file -K path/to/key/file target-directory
+$ replicat restore -r some/directory \
+    -P path/to/password/file \
+    -K path/to/key/file \
+    target-directory
 # Unlocks the repository and restores the latest versions of files with paths matching the
 # -F regex in snapshots matching the -S regex to 'target-directory'
 $ replicat restore -r some/directory \
@@ -176,8 +184,12 @@ $ replicat restore -r some/directory \
 $ replicat add-key -r some/directory -P path/to/password/file -K path/to/key/file
 # Unlocks the repository and creates a shared key (i.e. with shared secrets)
 $ replicat add-key -r some/directory -P path/to/password/file -K path/to/key/file --shared
-# Unlocks the repository and creates an independent key, which will be written to path/to/new/key/file
-$ replicat add-key -r some/directory -P path/to/password/file -K path/to/key/file -o path/to/new/key/file
+# Unlocks the repository and creates an independent key, which will be written
+# to path/to/new/key/file
+$ replicat add-key -r some/directory \
+    -P path/to/password/file \
+    -K path/to/key/file \
+    -o path/to/new/key/file
 # Unlocks the repository and creates an independent key with some custom settings
 # (cipher params as well as chunking and hashing settings are repository-wide)
 $ replicat add-key -r some/directory \
