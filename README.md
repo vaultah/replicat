@@ -117,7 +117,10 @@ $ replicat init -r some/directory \
     --encryption.cipher.name aes_gcm \
     --encryption.cipher.key_bits 128
 # Specifies the KDF name and parameters (for the key)
-$ replicat init -r some/directory -p '...' --encryption.kdf.name scrypt --encryption.kdf.n 1048576
+$ replicat init -r some/directory \
+    -p '...' \
+    --encryption.kdf.name scrypt \
+    --encryption.kdf.n 1048576
 # Specifies the chunking parameters
 $ replicat init -r some/directory -p '...' --chunking.min-length 123 --chunking.max-length 345
 # Equivalent (dashes in argument names are converted to underscores)
