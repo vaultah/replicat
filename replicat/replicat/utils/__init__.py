@@ -47,6 +47,9 @@ def _backend_tuple(uri):
     else:
         name, connection_string = parts
 
+    if not name.isidentifier():
+        raise ValueError
+
     mod = importlib.import_module(f'..backends.{name}', package=__package__)
     return (mod.Client, connection_string)
 
@@ -82,7 +85,9 @@ common_options.add_argument(
 )
 common_options.add_argument('--concurrent', default=5, type=int)
 common_options.add_argument('-v', '--verbose', action='count', default=0)
-common_options.add_argument('-k', '--key', metavar='KEYFILE', type=_read_bytes)
+common_options.add_argument(
+    '-K', '--key-file', metavar='KEYFILE', dest='key', type=_read_bytes
+)
 # All the different ways to provide a repo password
 password_options = common_options.add_mutually_exclusive_group()
 password_options.add_argument('-p', '--password', type=os.fsencode)
@@ -98,12 +103,12 @@ common_options.set_defaults(password=_get_environb('REPLICAT_PASSWORD'))
 
 def make_main_parser(*parent_parsers):
     parser = argparse.ArgumentParser(add_help=True)
-    # TODO: argparse is broken
     subparsers = parser.add_subparsers(dest='action', required=True)
+
     init_parser = subparsers.add_parser('init', parents=parent_parsers)
     init_parser.add_argument(
         '-o',
-        '--output-file',
+        '--key-output-file',
         help='Where to save the new repository key (the default is to write to standard output)',
         type=Path,
     )
@@ -119,8 +124,13 @@ def make_main_parser(*parent_parsers):
         type=_read_bytes,
     )
     add_key_parser.add_argument(
+        '--shared',
+        action='store_true',
+        help='Whether to share encrypted chunks with the owner of that key',
+    )
+    add_key_parser.add_argument(
         '-o',
-        '--output-file',
+        '--key-output-file',
         help='Where to save the new repository key (the default is to write to standard output)',
         type=Path,
     )
@@ -147,16 +157,18 @@ def make_main_parser(*parent_parsers):
     )
 
     restore_parser = subparsers.add_parser('restore', parents=parent_parsers)
+    restore_parser.add_argument('path', nargs='?', type=Path)
     restore_parser.add_argument(
         '-S', '--snapshot-regex', help='Regex to filter snapshots'
     )
     restore_parser.add_argument('-F', '--files-regex', help='Regex to filter files')
+
     return parser
 
 
-def parser_from_callable(cls, *, inherit_common=True):
+def parser_from_backend_class(cls, *, inherit_common=True):
     """Create a parser instance that inherits arguments from the common parser
-    and adds arguments based on the callable's signature
+    and adds arguments based on the class constructor signature
     """
     if inherit_common:
         parent_parsers = [common_options]

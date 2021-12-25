@@ -27,7 +27,7 @@ class _aead_cipher_adapter:
         try:
             return cipher.decrypt(nonce, ciphertext, None)
         except cryptography.exceptions.InvalidTag as e:
-            raise exceptions.ReplicatError('Decryption failed') from e
+            raise exceptions.DecryptionError from e
 
 
 class aes_gcm(_aead_cipher_adapter):

@@ -20,7 +20,7 @@ class TestInit:
             await repo.init()
 
     @pytest.mark.asyncio
-    async def test_encrypted_ok(self, local_backend):
+    async def test_encrypted_ok(self, local_backend, tmp_path):
         repo = Repository(local_backend, concurrent=1)
         result = await repo.init(
             password=b'<password>',
@@ -28,6 +28,7 @@ class TestInit:
                 'chunking': {'min_length': 12_345},
                 'encryption': {'kdf': {'n': 4}},
             },
+            key_output_path=tmp_path / 'output.key',
         )
 
         assert local_backend.download('config') == repo.serialize(result.config)
@@ -43,6 +44,7 @@ class TestInit:
             },
         }
 
+        assert (tmp_path / 'output.key').read_bytes() == repo.serialize(result.key)
         assert result.key.keys() == {'kdf', 'key_derivation_params', 'encrypted'}
         assert result.key['kdf'] == {
             'name': 'scrypt',
@@ -76,6 +78,7 @@ class TestInit:
         assert len(private['mac_key']) == 64
         assert isinstance(private['chunker_secret'], bytes)
         assert len(private['chunker_secret']) == 16
+        assert repo.properties.private == private
 
     @pytest.mark.asyncio
     async def test_unencrypted_ok(self, local_backend):
@@ -119,7 +122,7 @@ class TestEncryptedUnlock:
     @pytest.mark.asyncio
     async def test_bad_password(self, local_backend, init_params):
         repo = Repository(local_backend, concurrent=1)
-        with pytest.raises(exceptions.ReplicatError):
+        with pytest.raises(exceptions.DecryptionError):
             await repo.unlock(password=b'<no-pass word>', key=init_params.key)
 
     @pytest.mark.asyncio
@@ -153,7 +156,7 @@ class TestAddKey:
             await repo.add_key(password=b'<password>')
 
     @pytest.mark.asyncio
-    async def test_encrypted_repository(self, local_backend):
+    async def test_encrypted_repository_shared_key(self, local_backend, tmp_path):
         repo = Repository(local_backend, concurrent=1)
         params = await repo.init(
             password=b'<password>', settings={'encryption': {'kdf': {'n': 4}}}
@@ -165,10 +168,12 @@ class TestAddKey:
             settings={
                 'encryption': {
                     'kdf': {'n': 8, 'r': 4},
-                    'cipher': {'name': 'chacha20_poly1305'},
                 },
             },
+            shared=True,
+            key_output_path=tmp_path / 'output.key',
         )
+        assert (tmp_path / 'output.key').read_bytes() == repo.serialize(result.new_key)
         assert result.new_key.keys() == {'kdf', 'key_derivation_params', 'encrypted'}
         assert result.new_key['kdf'] == {
             'name': 'scrypt',
@@ -183,6 +188,56 @@ class TestAddKey:
         fresh_repo = Repository(local_backend, concurrent=1)
         await fresh_repo.unlock(password=b'<different password>', key=result.new_key)
         assert fresh_repo.properties.private == repo.properties.private
+
+    @pytest.mark.asyncio
+    async def test_encrypted_repository_independent_key(self, local_backend, tmp_path):
+        repo = Repository(local_backend, concurrent=1)
+        params = await repo.init(
+            password=b'<password>', settings={'encryption': {'kdf': {'n': 4}}}
+        )
+        await repo.unlock(password=b'<password>', key=params.key)
+        private = repo.properties.private
+
+        result = await repo.add_key(
+            password=b'<different password>',
+            settings={
+                'encryption': {
+                    'kdf': {'n': 8, 'r': 4},
+                },
+            },
+            shared=False,
+            key_output_path=tmp_path / 'output.key',
+        )
+        assert (tmp_path / 'output.key').read_bytes() == repo.serialize(result.new_key)
+        assert result.new_key.keys() == {'kdf', 'key_derivation_params', 'encrypted'}
+        assert result.new_key['kdf'] == {
+            'name': 'scrypt',
+            'n': 8,
+            'r': 4,
+            'p': 1,
+            'length': 32,
+        }
+        assert isinstance(result.new_key['key_derivation_params'], bytes)
+        assert len(result.new_key['key_derivation_params']) == 32
+
+        fresh_repo = Repository(local_backend, concurrent=1)
+        await fresh_repo.unlock(password=b'<different password>', key=result.new_key)
+
+        fresh_private = fresh_repo.properties.private
+        assert fresh_private['mac'] == {'name': 'blake2b', 'length': 64}
+        assert fresh_private['shared_kdf'] == {'name': 'blake2b', 'length': 32}
+        assert (
+            fresh_private['shared_encryption_secret']
+            != private['shared_encryption_secret']
+        )
+        assert isinstance(fresh_private['shared_encryption_secret'], bytes)
+        assert len(fresh_private['shared_encryption_secret']) == 64
+        assert fresh_private['mac_key'] != private['mac_key']
+        assert isinstance(fresh_private['mac_key'], bytes)
+        assert len(fresh_private['mac_key']) == 64
+        assert fresh_private['chunker_secret'] != private['chunker_secret']
+        assert isinstance(fresh_private['chunker_secret'], bytes)
+        assert len(fresh_private['chunker_secret']) == 16
 
 
 class TestSnapshot:

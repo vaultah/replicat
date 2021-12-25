@@ -21,7 +21,7 @@ class TestAESGCM:
         key = b'<key>'.ljust(32, b'\x00')
         nonce = os.urandom(12)
         ciphertext = AESGCM(key).encrypt(nonce, b'<some data>', None)
-        with pytest.raises(exceptions.ReplicatError):
+        with pytest.raises(exceptions.DecryptionError):
             adapter.decrypt(nonce + ciphertext, b'<bad key>'.ljust(32, b'\x00'))
 
     def test_decrypt_corrupted(self):
@@ -29,7 +29,7 @@ class TestAESGCM:
         key = b'<key>'.ljust(32, b'\x00')
         nonce = os.urandom(12)
         ciphertext = AESGCM(key).encrypt(nonce, b'<some data>', None)
-        with pytest.raises(exceptions.ReplicatError):
+        with pytest.raises(exceptions.DecryptionError):
             adapter.decrypt(
                 b'\x00' + nonce + ciphertext, b'<bad key>'.ljust(32, b'\x00')
             )
@@ -57,7 +57,7 @@ class TestChaCha20Poly1305:
         key = b'<key>'.ljust(32, b'\x00')
         nonce = os.urandom(12)
         ciphertext = ChaCha20Poly1305(key).encrypt(nonce, b'<some data>', None)
-        with pytest.raises(exceptions.ReplicatError):
+        with pytest.raises(exceptions.DecryptionError):
             adapter.decrypt(nonce + ciphertext, b'<bad key>'.ljust(32, b'\x00'))
 
     def test_decrypt_corrupted(self):
@@ -65,7 +65,7 @@ class TestChaCha20Poly1305:
         key = b'<key>'.ljust(32, b'\x00')
         nonce = os.urandom(12)
         ciphertext = ChaCha20Poly1305(key).encrypt(nonce, b'<some data>', None)
-        with pytest.raises(exceptions.ReplicatError):
+        with pytest.raises(exceptions.DecryptionError):
             adapter.decrypt(
                 b'\x00' + nonce + ciphertext, b'<bad key>'.ljust(32, b'\x00')
             )

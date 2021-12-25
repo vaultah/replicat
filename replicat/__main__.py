@@ -7,7 +7,7 @@ from .replicat.repository import Repository
 logger = logging.getLogger(__name__)
 
 
-async def main(args, unknown):
+async def _cmd_handler(args, unknown):
     backend_type, connection_string = args.repo
     backend_params = utils.safe_kwargs(backend_type, vars(args))
     backend = backend_type(connection_string, **backend_params)
@@ -16,7 +16,9 @@ async def main(args, unknown):
     if args.action == 'init':
         settings = utils.flat_to_nested(utils.parse_unknown_args(unknown))
         await repository.init(
-            password=args.password, settings=settings, output_file=args.output_file
+            password=args.password,
+            settings=settings,
+            key_output_path=args.key_output_file,
         )
     else:
         await repository.unlock(password=args.password, key=args.key)
@@ -25,13 +27,16 @@ async def main(args, unknown):
             await repository.add_key(
                 password=args.new_password,
                 settings=settings,
-                output_file=args.output_file,
+                key_output_path=args.key_output_file,
+                shared=args.shared,
             )
         elif args.action == 'snapshot':
             await repository.snapshot(paths=args.path, rate_limit=args.rate_limit)
         elif args.action == 'restore':
             await repository.restore(
-                snapshot_regex=args.snapshot_regex, files_regex=args.files_regex
+                snapshot_regex=args.snapshot_regex,
+                files_regex=args.files_regex,
+                path=args.path,
             )
         elif args.action in {'lf', 'list-files'}:
             await repository.list_files(
@@ -44,10 +49,10 @@ async def main(args, unknown):
     await repository.close()
 
 
-if __name__ == '__main__':
+def main():
     common, _ = utils.common_options.parse_known_args()
     backend_type, _ = common.repo
-    backend_args_parser = utils.parser_from_callable(backend_type)
+    backend_args_parser = utils.parser_from_backend_class(backend_type)
     parser = utils.make_main_parser(backend_args_parser)
     args, unknown = parser.parse_known_args()
 
@@ -62,4 +67,8 @@ if __name__ == '__main__':
     logging.getLogger('backoff').addHandler(logging.StreamHandler())
     logging.getLogger('backoff').setLevel(log_level)
 
-    asyncio.run(main(args, unknown))
+    asyncio.run(_cmd_handler(args, unknown))
+
+
+if __name__ == '__main__':
+    main()

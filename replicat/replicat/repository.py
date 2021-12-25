@@ -123,6 +123,7 @@ class Repository:
     DEFAULT_USER_KDF_NAME = 'scrypt'
     # Fast KDF for high-entropy inputs (used for shared data)
     DEFAULT_SHARED_KDF_NAME = 'blake2b'
+    EMPTY_TABLE_VALUE = '--'
 
     def __init__(self, backend, *, concurrent, progress=False):
         self._concurrent = concurrent
@@ -150,12 +151,20 @@ class Repository:
             self._executor = ThreadPoolExecutor(max_workers=self._concurrent)
             return self._executor
 
+    def default_serialization_hook(self, data):
+        return utils.type_hint(data)
+
     def serialize(self, object):
-        string = json.dumps(object, separators=(',', ':'), default=utils.type_hint)
+        string = json.dumps(
+            object, separators=(',', ':'), default=self.default_serialization_hook
+        )
         return bytes(string, 'ascii')
 
+    def object_deserialization_hook(self, data):
+        return utils.type_reverse(data)
+
     def deserialize(self, data):
-        return json.loads(data, object_hook=utils.type_reverse)
+        return json.loads(data, object_hook=self.object_deserialization_hook)
 
     def chunk_name_to_location(self, name):
         return os.path.join(self.CHUNK_PREFIX, name[:2], name)
@@ -192,56 +201,53 @@ class Repository:
             'st_ctime': stat_result.st_ctime,
         }
 
-    def _config_and_key_from_settings(self, settings):
+    def _make_initial_config_and_key(self, settings):
         # Create a raw and unencrypted combination of config and key, using
         # user-provided settings and our defaults
         config = {}
-        key = None
 
         # Hashing algorithm for chunks
-        hashing_config = settings.get('hashing', {})
-        hashing_config.setdefault('name', self.DEFAULT_HASHER_NAME)
-        hasher_type, hasher_args = utils.adapter_from_config(**hashing_config)
+        hashing_settings = settings.get('hashing', {})
+        hashing_settings.setdefault('name', self.DEFAULT_HASHER_NAME)
+        hasher_type, hasher_args = utils.adapter_from_config(**hashing_settings)
         config['hashing'] = dict(hasher_args, name=hasher_type.__name__)
 
         # Deduplication params
-        chunking_config = settings.get('chunking', {})
-        chunking_config.setdefault('name', self.DEFAULT_CHUNKER_NAME)
-        chunker_type, chunker_args = utils.adapter_from_config(**chunking_config)
+        chunking_settings = settings.get('chunking', {})
+        chunking_settings.setdefault('name', self.DEFAULT_CHUNKER_NAME)
+        chunker_type, chunker_args = utils.adapter_from_config(**chunking_settings)
         chunker = chunker_type(**chunker_args)
         config['chunking'] = dict(chunker_args, name=chunker_type.__name__)
 
-        encryption_config = settings.get('encryption', {})
-
-        if encryption_config is not None:
+        if (encryption_settings := settings.get('encryption', {})) is not None:
             # Cipher for user data
-            cipher_config = encryption_config.get('cipher', {})
-            cipher_config.setdefault('name', self.DEFAULT_CIPHER_NAME)
-            cipher_type, cipher_args = utils.adapter_from_config(**cipher_config)
+            cipher_settings = encryption_settings.get('cipher', {})
+            cipher_settings.setdefault('name', self.DEFAULT_CIPHER_NAME)
+            cipher_type, cipher_args = utils.adapter_from_config(**cipher_settings)
             cipher = cipher_type(**cipher_args)
             config['encryption'] = {
                 'cipher': dict(cipher_args, name=cipher_type.__name__)
             }
 
             # KDF for user personal data
-            kdf_config = encryption_config.get('kdf', {})
-            kdf_config.setdefault('name', self.DEFAULT_USER_KDF_NAME)
+            kdf_settings = encryption_settings.get('kdf', {})
+            kdf_settings.setdefault('name', self.DEFAULT_USER_KDF_NAME)
             kdf_type, kdf_args = utils.adapter_from_config(
-                **kdf_config, length=cipher.key_bytes
+                **kdf_settings, length=cipher.key_bytes
             )
             kdf = kdf_type(**kdf_args)
 
             # KDF for shared data
-            shared_config = encryption_config.get('shared_kdf', {})
-            shared_config.setdefault('name', self.DEFAULT_SHARED_KDF_NAME)
+            shared_kdf_settings = encryption_settings.get('shared_kdf', {})
+            shared_kdf_settings.setdefault('name', self.DEFAULT_SHARED_KDF_NAME)
             shared_kdf_type, shared_args = utils.adapter_from_config(
-                **shared_config, length=cipher.key_bytes
+                **shared_kdf_settings, length=cipher.key_bytes
             )
             shared_kdf = shared_kdf_type(**shared_args)
 
-            mac_config = encryption_config.get('mac', {})
-            mac_config.setdefault('name', self.DEFAULT_MAC_NAME)
-            mac_type, mac_args = utils.adapter_from_config(**mac_config)
+            mac_settings = encryption_settings.get('mac', {})
+            mac_settings.setdefault('name', self.DEFAULT_MAC_NAME)
+            mac_type, mac_args = utils.adapter_from_config(**mac_settings)
             mac = mac_type(**mac_args)
 
             key = {
@@ -255,22 +261,23 @@ class Repository:
                     'chunker_secret': chunker.chunking_params(),
                 },
             }
+        else:
+            key = None
 
         return config, key
 
-    def _prepare_config(self, config, *, password=None, key=None):
+    def _prepare(self, config, *, password=None, key=None):
         properties = utils.DefaultNamespace()
 
         chunker_type, chunker_args = utils.adapter_from_config(**config['chunking'])
         properties.chunker = chunker_type(**chunker_args)
 
         hasher_type, hasher_args = utils.adapter_from_config(**config['hashing'])
-        properties.hasher = hasher_type(**hasher_args)
-        properties.digest = properties.hasher.digest
+        properties.hash_digest = hasher_type(**hasher_args).digest
 
-        encryption = config.get('encryption')
+        encryption_config = config.get('encryption')
         # NOTE: only symmetric encryption is supported at this point anyway
-        properties.encrypted = bool(encryption)
+        properties.encrypted = bool(encryption_config)
 
         if properties.encrypted:
             if password is None or key is None:
@@ -279,44 +286,40 @@ class Repository:
                 )
 
             # Encryption
-            cipher_type, cipher_args = utils.adapter_from_config(**encryption['cipher'])
+            cipher_type, cipher_args = utils.adapter_from_config(
+                **encryption_config['cipher']
+            )
             properties.cipher = cipher_type(**cipher_args)
             properties.encrypt = properties.cipher.encrypt
             properties.decrypt = properties.cipher.decrypt
 
-            # Key derivation
+            # User key derivation
             kdf_type, kdf_args = utils.adapter_from_config(**key['kdf'])
-            properties.kdf = kdf_type(**kdf_args)
-            properties.derive_key = partial(
-                properties.kdf.derive, params=key['key_derivation_params']
+            properties.derive_user_key = partial(
+                kdf_type(**kdf_args).derive, params=key['key_derivation_params']
             )
-            properties.userkey = properties.derive_key(password)
+            properties.userkey = properties.derive_user_key(password)
 
             try:
                 private = key['private']
             except KeyError:
                 # Private portion of the key is still encrypted
-                decrypted_private = properties.decrypt(
-                    key['encrypted'], properties.userkey
+                private = self.deserialize(
+                    properties.decrypt(key['encrypted'], properties.userkey)
                 )
-                private = self.deserialize(decrypted_private)
 
             properties.private = private
-
             # Message authentication
             mac_type, mac_args = utils.adapter_from_config(**private['mac'])
-            properties.authenticator = mac_type(**mac_args)
-            properties.mac = partial(
-                properties.authenticator.mac, params=private['mac_key']
-            )
+            properties.mac = partial(mac_type(**mac_args).mac, params=private['mac_key'])
 
             # KDF for shared data
             shared_kdf_type, shared_kdf_args = utils.adapter_from_config(
                 **private['shared_kdf']
             )
-            properties.shared_kdf = shared_kdf_type(**shared_kdf_args)
             properties.derive_shared_key = partial(
-                properties.shared_kdf.derive, params=private['shared_encryption_secret']
+                shared_kdf_type(**shared_kdf_args).derive,
+                params=private['shared_encryption_secret'],
             )
             # Chunking
             properties.chunkify = partial(
@@ -326,6 +329,43 @@ class Repository:
             properties.chunkify = properties.chunker
 
         return properties
+
+    async def init(self, *, password=None, settings=None, key_output_path=None):
+        if settings is None:
+            settings = {}
+
+        logger.info('Using provided settings: %r', settings)
+        print(ef.bold + 'Generating config and key' + ef.rs)
+        config, key = self._make_initial_config_and_key(settings)
+        self.properties = self._prepare(config, password=password, key=key)
+
+        if self.properties.encrypted:
+            private = key.pop('private')
+            logger.debug('Private key portion (unencrypted): %r', private)
+            key['encrypted'] = self.properties.encrypt(
+                self.serialize(private), self.properties.userkey
+            )
+            # TODO: store it in the repository?
+            if key_output_path is not None:
+                key_output_path = Path(key_output_path).resolve()
+                key_output_path.write_bytes(self.serialize(key))
+                print(ef.bold + f'Generated key saved to {key_output_path}' + ef.rs)
+            else:
+                pretty_key = json.dumps(
+                    key, indent=4, default=self.default_serialization_hook
+                )
+                print(ef.bold + 'New key:' + ef.rs, pretty_key, sep='\n')
+
+        await self.as_coroutine(self.backend.upload, 'config', self.serialize(config))
+        pretty_config = json.dumps(
+            config, indent=4, default=self.default_serialization_hook
+        )
+        print(
+            ef.bold + 'Generated config (stored in repository):' + ef.rs,
+            pretty_config,
+            sep='\n',
+        )
+        return utils.DefaultNamespace(config=config, key=key)
 
     async def unlock(self, *, password=None, key=None):
         print(ef.bold + 'Loading config' + ef.rs)
@@ -337,46 +377,9 @@ class Repository:
             key = self.deserialize(key)
 
         print(ef.bold + 'Unlocking repository' + ef.rs)
-        self.properties = self._prepare_config(config, password=password, key=key)
+        self.properties = self._prepare(config, password=password, key=key)
 
-    async def init(self, *, password=None, settings=None, output_file=None):
-        if settings is None:
-            settings = {}
-
-        print(ef.bold + 'Generating config and key' + ef.rs)
-        config, key = self._config_and_key_from_settings(settings)
-        self.properties = self._prepare_config(config, password=password, key=key)
-
-        if self.properties.encrypted:
-            logger.debug(
-                'New key (unencrypted):\n%s',
-                json.dumps(key, indent=4, default=utils.type_hint),
-            )
-            key['encrypted'] = self.properties.encrypt(
-                self.serialize(key.pop('private')), self.properties.userkey
-            )
-            # TODO: store it in the repository?
-            if output_file is not None:
-                serialized_key = self.serialize(key)
-                key_path = Path(output_file).resolve()
-                key_path.write_bytes(serialized_key)
-                print(ef.bold + f'Generated key saved to {key_path}' + ef.rs)
-            else:
-                pretty_key = json.dumps(key, indent=4, default=utils.type_hint)
-                print(ef.bold + 'New key:' + ef.rs, pretty_key, sep='\n')
-
-        await self.as_coroutine(self.backend.upload, 'config', self.serialize(config))
-        pretty_config = json.dumps(
-            config, indent=4, sort_keys=True, default=utils.type_hint
-        )
-        print(
-            ef.bold + 'Generated config (stored in repository):' + ef.rs,
-            pretty_config,
-            sep='\n',
-        )
-        return utils.DefaultNamespace(config=config, key=key)
-
-    async def add_key(self, password, settings=None, output_file=None):
+    async def add_key(self, password, settings=None, key_output_path=None, shared=False):
         if not self.properties.encrypted:
             raise exceptions.ReplicatError('Repository is not encrypted')
 
@@ -388,37 +391,65 @@ class Repository:
         if settings is None:
             settings = {}
 
-        encryption_config = settings.get('encryption', {})
+        logger.info('Using provided settings: %r', settings)
+        encryption_settings = settings.get('encryption', {})
         # Allow a different KDF for the new user
-        kdf_config = encryption_config.get('kdf', {})
-        kdf_config.setdefault('name', self.DEFAULT_USER_KDF_NAME)
+        kdf_settings = encryption_settings.get('kdf', {})
+        kdf_settings.setdefault('name', self.DEFAULT_USER_KDF_NAME)
         kdf_type, kdf_args = utils.adapter_from_config(
-            **kdf_config, length=self.properties.cipher.key_bytes
+            **kdf_settings, length=self.properties.cipher.key_bytes
         )
         kdf = kdf_type(**kdf_args)
         key_derivation_params = kdf.derivation_params()
+
+        if shared:
+            private = self.properties.private
+        else:
+            # Allow a different KDF for shared data
+            shared_kdf_settings = encryption_settings.get('shared_kdf', {})
+            shared_kdf_settings.setdefault('name', self.DEFAULT_SHARED_KDF_NAME)
+            shared_kdf_type, shared_args = utils.adapter_from_config(
+                **shared_kdf_settings, length=self.properties.cipher.key_bytes
+            )
+            shared_kdf = shared_kdf_type(**shared_args)
+
+            mac_settings = encryption_settings.get('mac', {})
+            mac_settings.setdefault('name', self.DEFAULT_MAC_NAME)
+            mac_type, mac_args = utils.adapter_from_config(**mac_settings)
+            mac = mac_type(**mac_args)
+
+            private = {
+                'shared_kdf': dict(shared_args, name=shared_kdf_type.__name__),
+                'shared_encryption_secret': shared_kdf.derivation_params(),
+                'mac': dict(mac_args, name=mac_type.__name__),
+                'mac_key': mac.mac_params(),
+                'chunker_secret': self.properties.chunker.chunking_params(),
+            }
+
+        logger.debug('Private portion of the new key (unencrypted): %r', private)
         new_key = {
             'kdf': dict(kdf_args, name=kdf_type.__name__),
             'key_derivation_params': key_derivation_params,
-            'encrypted': self.properties.cipher.encrypt(
-                self.serialize(self.properties.private),
+            'encrypted': self.properties.encrypt(
+                self.serialize(private),
                 kdf.derive(password, params=key_derivation_params),
             ),
         }
 
         # TODO: store it in the repository?
-        if output_file is not None:
-            serialized_key = self.serialize(new_key)
-            key_path = Path(output_file).resolve()
-            key_path.write_bytes(serialized_key)
-            print(ef.bold + f'Generated key saved to {key_path}' + ef.rs)
+        if key_output_path is not None:
+            key_output_path = Path(key_output_path).resolve()
+            key_output_path.write_bytes(self.serialize(new_key))
+            print(ef.bold + f'Generated key saved to {key_output_path}' + ef.rs)
         else:
-            pretty_key = json.dumps(new_key, indent=4, default=utils.type_hint)
+            pretty_key = json.dumps(
+                new_key, indent=4, default=self.default_serialization_hook
+            )
             print(ef.bold + 'New key:' + ef.rs, pretty_key, sep='\n')
 
         return utils.DefaultNamespace(new_key=new_key)
 
-    async def _load_snapshots(self, *, snapshot_regex=None):
+    async def _load_snapshots(self, *, snapshot_regex=None, cache_loaded=True):
         snapshots = {}
         tasks = []
         semaphore = asyncio.Semaphore(self._concurrent)
@@ -426,126 +457,191 @@ class Repository:
             self.backend.list_files, self.SNAPSHOT_PREFIX
         )
         cached_snapshots = {str(x) for x in utils.fs.list_cached(self.SNAPSHOT_PREFIX)}
+        encrypted_snapshots = {}
 
         async def _download_snapshot(path):
             async with semaphore:
                 logger.info('Downloading %s', path)
                 contents = await self.as_coroutine(self.backend.download, path)
 
-            logger.info('Caching %s', path)
-            utils.fs.store_cached(path, contents)
-            if self.properties.encrypted:
-                logger.info('Decrypting %s', path)
-                snapshots[path] = self.deserialize(
-                    self.properties.decrypt(contents, self.properties.userkey)
+            snapshot_name = self.snapshot_location_to_name(path)
+            if snapshot_name != self.properties.hash_digest(contents).hex():
+                raise exceptions.ReplicatError(
+                    f'Snapshot {snapshot_name!r} is corrupted'
                 )
-            else:
-                snapshots[path] = self.deserialize(contents)
+
+            encrypted_snapshots[path] = contents
+
+            if cache_loaded:
+                logger.info('Caching encrypted snapshot %s', path)
+                utils.fs.store_cached(path, contents)
 
         for snapshot_path in stored_snapshots:
-            snapshot_name = self.snapshot_location_to_name(snapshot_path)
             if snapshot_regex is not None:
+                snapshot_name = self.snapshot_location_to_name(snapshot_path)
                 if re.search(snapshot_regex, snapshot_name) is None:
                     continue
 
             if snapshot_path in cached_snapshots:
                 contents = utils.fs.get_cached(snapshot_path)
-                if self.properties.encrypted:
-                    logger.info('%s is cached, decrypting', snapshot_path)
-                    snapshots[snapshot_path] = self.deserialize(
-                        self.properties.decrypt(contents, self.properties.userkey)
-                    )
-                else:
-                    logger.info('%s is cached', snapshot_path)
-                    snapshots[snapshot_path] = self.deserialize(contents)
+                encrypted_snapshots[snapshot_path] = contents
                 continue
 
             tasks.append(asyncio.create_task(_download_snapshot(snapshot_path)))
 
         if tasks:
-            await asyncio.wait(tasks, return_when=asyncio.FIRST_EXCEPTION)
+            await asyncio.gather(*tasks)
+
+        for path, contents in encrypted_snapshots.items():
+            if self.properties.encrypted:
+                logger.info('Decrypting %s', path)
+                try:
+                    decrypted = self.properties.decrypt(
+                        contents, self.properties.userkey
+                    )
+                except exceptions.DecryptionError:
+                    logger.info(
+                        "Decryption of %s failed, but it's not corrupted (different key?)",
+                        path,
+                    )
+                    snapshots[path] = None
+                else:
+                    snapshots[path] = self.deserialize(decrypted)
+            else:
+                snapshots[path] = self.deserialize(contents)
 
         return snapshots
+
+    def _format_snapshot_name(self, path, data):
+        return path
+
+    def _format_snapshot_utc_timestamp(self, path, data):
+        if data is None:
+            return None
+
+        dt = datetime.fromisoformat(data['utc_timestamp'])
+        return dt.isoformat(sep=' ', timespec='seconds')
+
+    def _format_snapshot_files_count(self, path, data):
+        if data is None:
+            return None
+
+        return len(data['files'])
+
+    def _format_snaphot_size(self, path, data):
+        if data is None:
+            return None
+
+        return utils.bytes_to_human(
+            sum(
+                chunk['end'] - chunk['start']
+                for file in data['files']
+                for chunk in file['chunks']
+            )
+        )
 
     async def list_snapshots(self, *, snapshot_regex=None):
         snapshots_mapping = await self._load_snapshots(snapshot_regex=snapshot_regex)
         if not snapshots_mapping:
             return
 
-        snapshots = []
-        for snapshot_path, snapshot_data in snapshots_mapping.items():
-            snapshots.append(
-                utils.DefaultNamespace(
-                    snapshot_path=snapshot_path,
-                    snapshot=snapshot_data,
-                )
-            )
-
-        snapshot_columns = {
-            'snapshot': lambda x: self.snapshot_location_to_name(x.snapshot_path),
-            'timestamp (utc)': lambda x: datetime.fromisoformat(
-                x.snapshot['utc_timestamp']
-            ).isoformat(sep=' ', timespec='seconds'),
-            'files': lambda x: len(x.snapshot['files']),
-            'size': lambda x: utils.bytes_to_human(
-                sum(
-                    chunk['end'] - chunk['start']
-                    for file in x.snapshot['files']
-                    for chunk in file['chunks']
-                )
-            ),
+        columns_getters = {
+            'snapshot': self._format_snapshot_name,
+            'timestamp (utc)': self._format_snapshot_utc_timestamp,
+            'files': self._format_snapshot_files_count,
+            'size': self._format_snaphot_size,
         }
-        snapshots.sort(key=lambda x: x.snapshot['utc_timestamp'], reverse=True)
-        columns = []
+        columns_widths = {}
+        sorted_snapshots = sorted(
+            snapshots_mapping.items(),
+            key=lambda x: x[1]['utc_timestamp'] if x[1] is not None else '',
+            reverse=True,
+        )
+        rows = []
 
-        for header, getter in snapshot_columns.items():
-            max_length = max(len(str(getter(x))) for x in snapshots)
-            columns.append(header.upper().center(max_length))
+        for path, snapshot in sorted_snapshots:
+            row = {}
+            for column, getter in columns_getters.items():
+                value = getter(path, snapshot)
+                if value is None:
+                    value = self.EMPTY_TABLE_VALUE
+                value = str(value)
+                row[column] = value
+                columns_widths[column] = max(len(value), columns_widths.get(column, 0))
 
-        print(*columns)
-        for x in snapshots:
-            print(*(g(x) for g in snapshot_columns.values()))
+            rows.append(row)
+
+        formatted_headers = []
+        for column in columns_widths:
+            width = columns_widths[column] = max(len(column), columns_widths[column])
+            formatted_headers.append(column.upper().center(width))
+
+        print(*formatted_headers)
+        for row in rows:
+            print(*(value.ljust(columns_widths[col]) for col, value in row.items()))
+
+    def _format_file_snapshot_date(self, snapshot_path, snapshot_data, file_data):
+        dt = datetime.fromisoformat(snapshot_data['utc_timestamp'])
+        return dt.isoformat(sep=' ', timespec='seconds')
+
+    def _format_file_path(self, snapshot_path, snapshot_data, file_data):
+        return file_data['path']
+
+    def _format_file_chunks_count(self, snapshot_path, snapshot_data, file_data):
+        return len(file_data['chunks'])
+
+    def _format_file_size(self, snapshot_path, snapshot_data, file_data):
+        return sum(cd['end'] - cd['start'] for cd in file_data['chunks'])
 
     async def list_files(self, *, snapshot_regex=None, files_regex=None):
         snapshots_mapping = await self._load_snapshots(snapshot_regex=snapshot_regex)
         if not snapshots_mapping:
             return
 
+        columns_getters = {
+            'snapshot date': self._format_file_snapshot_date,
+            'path': self._format_file_path,
+            'chunks count': self._format_file_chunks_count,
+            'size': self._format_file_size,
+        }
+        columns_widths = {}
         files = []
+
         for snapshot_path, snapshot_data in snapshots_mapping.items():
+            if snapshot_data is None:
+                continue
+
             for file_data in snapshot_data['files']:
                 if files_regex is not None:
                     if re.search(files_regex, file_data['path']) is None:
                         continue
 
-                files.append(
-                    utils.DefaultNamespace(
-                        snapshot_path=snapshot_path,
-                        snapshot=snapshot_data,
-                        file=file_data,
+                row = {}
+                for column, getter in columns_getters.items():
+                    value = getter(snapshot_path, snapshot_data, file_data)
+                    if value is None:
+                        value = self.EMPTY_TABLE_VALUE
+                    value = str(value)
+                    row[column] = value
+                    columns_widths[column] = max(
+                        len(value), columns_widths.get(column, 0)
                     )
-                )
+
+                files.append((snapshot_data['utc_timestamp'], row))
 
         if not files:
             return
 
-        file_columns = {
-            'snapshot date': lambda x: datetime.fromisoformat(
-                x.snapshot['utc_timestamp']
-            ).isoformat(sep=' ', timespec='seconds'),
-            'path': lambda x: x.file['path'],
-            'chunks count': lambda x: len(x.file['chunks']),
-            'size': lambda x: sum(y['end'] - y['start'] for y in x.file['chunks']),
-        }
-        files.sort(key=lambda x: x.snapshot['utc_timestamp'], reverse=True)
-        columns = []
-        for header, getter in file_columns.items():
-            max_length = max(len(str(getter(x))) for x in files)
-            columns.append(header.upper().center(max_length))
+        files.sort(key=lambda x: x[0], reverse=True)
 
-        print(*columns)
-        for x in files:
-            print(*(g(x) for g in file_columns.values()))
+        formatted_headers = []
+        for column in columns_widths:
+            width = columns_widths[column] = max(len(column), columns_widths[column])
+            formatted_headers.append(column.upper().center(width))
+
+        print(*formatted_headers)
+        for _, row in files:
+            print(*(value.ljust(columns_widths[col]) for col, value in row.items()))
 
     async def snapshot(self, *, paths, rate_limit=None):
         files = []
@@ -696,7 +792,7 @@ class Repository:
                 state.chunk_counter += 1
                 stream_start = state.bytes_chunked
                 state.bytes_chunked += len(output_chunk)
-                digest = self.properties.digest(output_chunk)
+                digest = self.properties.hash_digest(output_chunk)
 
                 if self.properties.encrypted:
                     encrypted_contents = self.properties.encrypt(
@@ -761,7 +857,12 @@ class Repository:
         }
         logger.debug(
             'Generated snashot: %s',
-            json.dumps(snapshot_data, indent=4, sort_keys=True, default=utils.type_hint),
+            json.dumps(
+                snapshot_data,
+                indent=4,
+                sort_keys=True,
+                default=self.default_serialization_hook,
+            ),
         )
         if self.properties.encrypted:
             encrypted_snapshot = self.properties.encrypt(
@@ -770,7 +871,7 @@ class Repository:
         else:
             encrypted_snapshot = self.serialize(snapshot_data)
 
-        snapshot_name = self.properties.digest(encrypted_snapshot).hex()
+        snapshot_name = self.properties.hash_digest(encrypted_snapshot).hex()
 
         await self.as_coroutine(
             self.backend.upload,
@@ -784,6 +885,8 @@ class Repository:
             path = Path().resolve()
         else:
             path = path.resolve()
+
+        logger.info("Will restore files to %s", path)
 
         snapshots_mapping = await self._load_snapshots(snapshot_regex=snapshot_regex)
         ordered_snapshots = sorted(

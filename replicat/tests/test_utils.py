@@ -218,7 +218,7 @@ def test_bytes_to_human(bytes_amount, human):
     assert utils.bytes_to_human(bytes_amount) == human
 
 
-def test_parser_from_callable():
+def test_parser_from_backend_class():
     weird_default = object()
 
     class A:
@@ -239,7 +239,7 @@ def test_parser_from_callable():
         ):
             pass
 
-    parser = utils.parser_from_callable(A)
+    parser = utils.parser_from_backend_class(A)
     known, unknown = parser.parse_known_args(['--g', 'true', '--h', 'H', '--j', '2'])
     assert not unknown
     assert known.a == 0x6CAB0F071

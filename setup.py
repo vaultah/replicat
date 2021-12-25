@@ -79,4 +79,7 @@ setup(
     extras_require=extras_require,
     ext_modules=[CMakeExtension('_replicat_adapters')],
     cmdclass={'build_ext': CMakeBuild},
+    entry_points={
+        'console_scripts': ['replicat = replicat.__main__:main'],
+    },
 )
