@@ -11,7 +11,7 @@ async def _cmd_handler(args, unknown):
     backend_type, connection_string = args.repo
     backend_params = utils.safe_kwargs(backend_type, vars(args))
     backend = backend_type(connection_string, **backend_params)
-    repository = Repository(backend, concurrent=args.concurrent, progress=args.progress)
+    repository = Repository(backend, concurrent=args.concurrent, progress=not args.quiet)
 
     if args.action == 'init':
         settings = utils.flat_to_nested(utils.parse_unknown_args(unknown))

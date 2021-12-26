@@ -78,24 +78,45 @@ common_options.add_argument(
     '--repository',
     type=_backend_tuple,
     dest='repo',
+    help='<backend>:<connection string>. The REPLICAT_REPOSITORY environment '
+    "variable is used as a fallback. If neither is provided, we'll use the CWD.",
     default=os.environ.get('REPLICAT_REPOSITORY', str(Path())),
 )
 common_options.add_argument(
-    '-q', '--hide-progress', dest='progress', action='store_false'
+    '-q',
+    '--hide-progress',
+    dest='quiet',
+    action='store_true',
+    help='Disable progress bar for commands that support it.',
 )
-common_options.add_argument('--concurrent', default=5, type=int)
+common_options.add_argument(
+    '--concurrent',
+    default=5,
+    type=int,
+    help='The number of concurrent connections to the backend.',
+)
 common_options.add_argument('-v', '--verbose', action='count', default=0)
 common_options.add_argument(
     '-K', '--key-file', metavar='KEYFILE', dest='key', type=_read_bytes
 )
-# All the different ways to provide a repo password
+# All the different ways to provide the repository password.
+# We could add a proper description for this group, but there's
+# a long-standing argparse bug https://bugs.python.org/issue16807
 password_options = common_options.add_mutually_exclusive_group()
-password_options.add_argument('-p', '--password', type=os.fsencode)
+password_options.add_argument(
+    '-p',
+    '--password',
+    type=os.fsencode,
+    help="Password as a string. If neither password string nor the password file "
+    "is provided, we'll use the REPLICAT_PASSWORD environment variable.",
+)
 password_options.add_argument(
     '-P',
     '--password-file',
     dest='password',
     metavar='PASSWORD_FILE_PATH',
+    help="Path to a file with the password. If neither password string nor the "
+    "password file is provided, we'll use the REPLICAT_PASSWORD environment variable.",
     type=_read_bytes,
 )
 common_options.set_defaults(password=_get_environb('REPLICAT_PASSWORD'))
@@ -189,8 +210,11 @@ def parser_from_backend_class(cls, *, inherit_common=True):
         # TODO: annotations?
         if arg.default is not arg.empty:
             default = arg.default
+            help_text = None
         else:
-            default = os.environ.get(f'{cls.__name__.upper()}_{name.upper()}')
+            environment_var = f'{cls.__name__.upper()}_{name.upper()}'
+            default = os.environ.get(environment_var)
+            help_text = f"or the {environment_var} environment variable."
 
         name = name.replace('_', '-')
         group.add_argument(
@@ -198,6 +222,7 @@ def parser_from_backend_class(cls, *, inherit_common=True):
             required=arg.default is arg.empty,
             default=default,
             type=guess_type,
+            help=help_text,
         )
 
     return parser

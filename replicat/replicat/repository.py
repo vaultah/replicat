@@ -510,7 +510,7 @@ class Repository:
         return snapshots
 
     def _format_snapshot_name(self, path, data):
-        return path
+        return self.snapshot_location_to_name(path)
 
     def _format_snapshot_utc_timestamp(self, path, data):
         if data is None:
@@ -888,9 +888,9 @@ class Repository:
         logger.info("Will restore files to %s", path)
 
         snapshots_mapping = await self._load_snapshots(snapshot_regex=snapshot_regex)
-        ordered_snapshots = sorted(
-            snapshots_mapping.values(), key=lambda x: x['utc_timestamp'], reverse=True
-        )
+        snapshots = [x for x in snapshots_mapping.values() if x is not None]
+        snapshots.sort(key=lambda x: x['utc_timestamp'], reverse=True)
+
         chunk_mapping = {}
         tasks = weakref.WeakSet()
         executor = ThreadPoolExecutor(
@@ -935,13 +935,17 @@ class Repository:
                 contents = await self.as_coroutine(
                     self.backend.download, self.chunk_name_to_location(name)
                 )
+                digest = chunk_mapping[name].digest
                 if self.props.encrypted:
                     decrypted_contents = self.props.decrypt(
                         contents,
-                        self.props.derive_shared_key(chunk_mapping[name].digest),
+                        self.props.derive_shared_key(digest),
                     )
                 else:
                     decrypted_contents = contents
+
+                if digest != self.props.hash_digest(decrypted_contents):
+                    raise exceptions.ReplicatError(f'Chunk {name} is corrupted')
 
                 decrypted_view = memoryview(decrypted_contents)
                 await asyncio.gather(
@@ -955,7 +959,7 @@ class Repository:
             finally:
                 self._slots.put_nowait(slot)
 
-        for snapshot_data in ordered_snapshots:
+        for snapshot_data in snapshots:
             for file_data in snapshot_data['files']:
                 if file_data['path'] in seen_files:
                     continue

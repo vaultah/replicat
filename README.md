@@ -157,7 +157,7 @@ $ replicat list-files -r some/directory -P path/to/password/file -K path/to/key/
 # Equivalent
 $ replicat lf -r some/directory -P path/to/password/file -K path/to/key/file
 # Only lists files with paths matching the -F regex
-$ replicat lf -r some/directory -P path/to/password/file -K path/to/key/file -F '.*\.(jpg|text)$'
+$ replicat lf -r some/directory -P path/to/password/file -K path/to/key/file -F '\.(jpg|text)$'
 ```
 
 ## `restore` examples
@@ -173,7 +173,7 @@ $ replicat restore -r some/directory \
 $ replicat restore -r some/directory \
     -P path/to/password/file \
     -K path/to/key/file \
-    -F '.*\.(jpg|text)$' \
+    -F '\.(jpg|text)$' \
     -S 'abcdef' \
     target-directory
 
