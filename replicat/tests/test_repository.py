@@ -78,7 +78,7 @@ class TestInit:
         assert len(private['mac_key']) == 64
         assert isinstance(private['chunker_secret'], bytes)
         assert len(private['chunker_secret']) == 16
-        assert repo.properties.private == private
+        assert repo.props.private == private
 
     @pytest.mark.asyncio
     async def test_unencrypted_ok(self, local_backend):
@@ -129,7 +129,7 @@ class TestEncryptedUnlock:
     async def test_ok(self, local_backend, init_params):
         repo = Repository(local_backend, concurrent=1)
         await repo.unlock(password=b'<password>', key=init_params.key)
-        assert repo.properties.encrypted
+        assert repo.props.encrypted
 
 
 class TestUnencryptedUnlock:
@@ -143,7 +143,7 @@ class TestUnencryptedUnlock:
     async def test_ok(self, local_backend, init_params):
         repo = Repository(local_backend, concurrent=1)
         await repo.unlock()
-        assert not repo.properties.encrypted
+        assert not repo.props.encrypted
 
 
 class TestAddKey:
@@ -187,7 +187,7 @@ class TestAddKey:
 
         fresh_repo = Repository(local_backend, concurrent=1)
         await fresh_repo.unlock(password=b'<different password>', key=result.new_key)
-        assert fresh_repo.properties.private == repo.properties.private
+        assert fresh_repo.props.private == repo.props.private
 
     @pytest.mark.asyncio
     async def test_encrypted_repository_independent_key(self, local_backend, tmp_path):
@@ -196,7 +196,7 @@ class TestAddKey:
             password=b'<password>', settings={'encryption': {'kdf': {'n': 4}}}
         )
         await repo.unlock(password=b'<password>', key=params.key)
-        private = repo.properties.private
+        private = repo.props.private
 
         result = await repo.add_key(
             password=b'<different password>',
@@ -223,7 +223,7 @@ class TestAddKey:
         fresh_repo = Repository(local_backend, concurrent=1)
         await fresh_repo.unlock(password=b'<different password>', key=result.new_key)
 
-        fresh_private = fresh_repo.properties.private
+        fresh_private = fresh_repo.props.private
         assert fresh_private['mac'] == {'name': 'blake2b', 'length': 64}
         assert fresh_private['shared_kdf'] == {'name': 'blake2b', 'length': 32}
         assert (
@@ -289,9 +289,9 @@ class TestSnapshot:
         snapshot_location = repo.snapshot_name_to_location(result.name)
         assert snapshots[0] == snapshot_location
         assert (
-            repo.properties.decrypt(
+            repo.props.decrypt(
                 local_backend.download(snapshot_location),
-                repo.properties.userkey,
+                repo.props.userkey,
             )
             == repo.serialize(result.data)
         )
@@ -309,9 +309,9 @@ class TestSnapshot:
 
             for chunk in sorted(snapshot_data['chunks'], key=lambda x: x['counter']):
                 chunk_location = repo.chunk_name_to_location(chunk['name'])
-                chunk_bytes = repo.properties.decrypt(
+                chunk_bytes = repo.props.decrypt(
                     local_backend.download(chunk_location),
-                    repo.properties.derive_shared_key(bytes.fromhex(chunk['digest'])),
+                    repo.props.derive_shared_key(bytes.fromhex(chunk['digest'])),
                 )
                 contents += chunk_bytes[chunk['start'] : chunk['end']]
 
@@ -386,10 +386,8 @@ class TestSnapshot:
         assert len({x['name'] for x in chunks}) == 1
 
         chunk_location = repo.chunk_name_to_location(chunks[0]['name'])
-        shared_key = repo.properties.derive_shared_key(
-            bytes.fromhex(chunks[0]['digest'])
-        )
-        decrypted = repo.properties.decrypt(
+        shared_key = repo.props.derive_shared_key(bytes.fromhex(chunks[0]['digest']))
+        decrypted = repo.props.decrypt(
             local_backend.download(chunk_location), shared_key
         )
         assert decrypted * 16 == contents
