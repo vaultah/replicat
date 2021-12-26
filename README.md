@@ -21,7 +21,7 @@ Highlights/goals
   - unified repository layout
   - API that exists
 
-This project borrows a few things from those other projects, but not enough to be considered
+This project borrows a few ideas from those other projects, but not enough to be considered
 a copycat.
 
 # Introduction
