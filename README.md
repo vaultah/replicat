@@ -136,7 +136,7 @@ $ replicat snapshot -r some/directory \
     -P path/to/password/file \
     -K path/to/key/file \
     -c 10 \
-    image.jpg some-directory another-director and/more.text
+    image.jpg some-directory another-directory and/more.text
 ```
 
 ## `list-snapshots`/`ls` examples
