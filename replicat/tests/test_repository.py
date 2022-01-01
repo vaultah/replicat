@@ -30,7 +30,6 @@ class TestInit:
             },
             key_output_path=tmp_path / 'output.key',
         )
-
         assert local_backend.download('config') == repo.serialize(result.config)
         assert result.config == {
             'chunking': {
@@ -79,6 +78,7 @@ class TestInit:
         assert isinstance(private['chunker_secret'], bytes)
         assert len(private['chunker_secret']) == 16
         assert repo.props.private == private
+        assert repo.props.encrypted
 
     @pytest.mark.asyncio
     async def test_unencrypted_ok(self, local_backend):
@@ -98,6 +98,7 @@ class TestInit:
             'hashing': {'name': 'blake2b', 'length': 64},
         }
         assert result.key is None
+        assert not repo.props.encrypted
 
 
 class TestEncryptedUnlock:
