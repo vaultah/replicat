@@ -33,7 +33,9 @@ async def _cmd_handler(args, unknown):
                 shared=args.shared,
             )
         elif args.action == 'snapshot':
-            await repository.snapshot(paths=args.path, rate_limit=args.rate_limit)
+            await repository.snapshot(
+                paths=args.path, note=args.note, rate_limit=args.rate_limit
+            )
         elif args.action == 'restore':
             await repository.restore(
                 snapshot_regex=args.snapshot_regex,

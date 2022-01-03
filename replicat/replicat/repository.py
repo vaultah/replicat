@@ -9,7 +9,6 @@ import queue
 import re
 import threading
 import time
-import weakref
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime
@@ -512,6 +511,11 @@ class Repository:
     def _format_snapshot_name(self, path, data):
         return self.snapshot_location_to_name(path)
 
+    def _format_snapshot_note(self, path, data):
+        if data is None:
+            return None
+        return data.get('note')
+
     def _format_snapshot_utc_timestamp(self, path, data):
         if data is None:
             return None
@@ -544,6 +548,7 @@ class Repository:
 
         columns_getters = {
             'snapshot': self._format_snapshot_name,
+            'note': self._format_snapshot_note,
             'timestamp (utc)': self._format_snapshot_utc_timestamp,
             'files': self._format_snapshot_files_count,
             'size': self._format_snaphot_size,
@@ -588,7 +593,9 @@ class Repository:
         return len(file_data['chunks'])
 
     def _format_file_size(self, snapshot_path, snapshot_data, file_data):
-        return sum(cd['end'] - cd['start'] for cd in file_data['chunks'])
+        return utils.bytes_to_human(
+            sum(cd['end'] - cd['start'] for cd in file_data['chunks'])
+        )
 
     async def list_files(self, *, snapshot_regex=None, files_regex=None):
         snapshots_mapping = await self._load_snapshots(snapshot_regex=snapshot_regex)
@@ -640,7 +647,7 @@ class Repository:
         for _, row in files:
             print(*(value.ljust(columns_widths[col]) for col, value in row.items()))
 
-    async def snapshot(self, *, paths, rate_limit=None):
+    async def snapshot(self, *, paths, note=None, rate_limit=None):
         files = []
 
         for path in utils.fs.flatten_paths(paths, follow_symlinks=True):
@@ -684,7 +691,6 @@ class Repository:
             leave=True,
         )
         loop = asyncio.get_event_loop()
-        tasks = weakref.WeakSet()
         chunk_queue = queue.Queue(maxsize=self._concurrent * 10)
         abort = threading.Event()
 
@@ -693,7 +699,7 @@ class Repository:
         else:
             rate_limiter = None
 
-        def _done_chunk(chunk: _Chunk):
+        def _chunk_done(chunk: _Chunk):
             logger.info('Chunk %s processed successfully', chunk.name)
 
             for file, ranges in state.file_ranges.items():
@@ -732,27 +738,6 @@ class Repository:
 
             bytes_tracker.update(chunk.stream_end - chunk.stream_start)
 
-        async def _upload_chunk(chunk: _Chunk, slot):
-            try:
-                io_wrapper = _TrackedBytesIO(
-                    chunk.contents,
-                    desc=f'Chunk #{chunk.counter:06}',
-                    slot=slot,
-                    progress=self._progress,
-                    rate_limiter=rate_limiter,
-                )
-                await self.as_coroutine(
-                    self.backend.upload,
-                    self.chunk_name_to_location(chunk.name),
-                    io_wrapper,
-                )
-                _done_chunk(chunk)
-            except BaseException:
-                abort.set()
-                raise
-            finally:
-                self._slots.put_nowait(slot)
-
         def _stream_files():
             with utils.fs.stream_files(files) as stream:
                 for file, source_chunk in stream:
@@ -780,14 +765,11 @@ class Repository:
                 )
                 state.files_finished.add(state.current_file)
 
-        def _chunk_producer():
+        def _chunk_producer(queue_timeout=0.025):
+            # Will run in a different thread, since most of these actions release GIL
             for output_chunk in self.props.chunker(
                 _stream_files(), params=self.props.chunker_params
             ):
-                if abort.is_set():
-                    logging.debug('Stopping chunk producer')
-                    return
-
                 state.chunk_counter += 1
                 stream_start = state.bytes_chunked
                 state.bytes_chunked += len(output_chunk)
@@ -810,50 +792,72 @@ class Repository:
                     stream_start=stream_start,
                     stream_end=stream_start + len(output_chunk),
                 )
-                chunk_queue.put(chunk)
+                while True:
+                    if abort.is_set():
+                        logging.debug('Stopping chunk producer')
+                        return
+
+                    try:
+                        chunk_queue.put(chunk, timeout=queue_timeout)
+                    except queue.Full:
+                        pass
+                    else:
+                        break
+
+        async def _worker(queue_timeout=0.025):
+            while not chunk_queue.empty() or not chunk_producer.done():
+                try:
+                    chunk = chunk_queue.get_nowait()
+                except queue.Empty:
+                    await asyncio.sleep(queue_timeout)
+                    continue
+
+                slot = await self._slots.get()
+                try:
+                    if await self.as_coroutine(
+                        self.backend.exists, self.chunk_name_to_location(chunk.name)
+                    ):
+                        logger.info('Will reuse existing chunk %s', chunk.name)
+                    else:
+                        logger.info('Will upload new chunk %s', chunk.name)
+                        io_wrapper = _TrackedBytesIO(
+                            chunk.contents,
+                            desc=f'Chunk #{chunk.counter:06}',
+                            slot=slot,
+                            progress=self._progress,
+                            rate_limiter=rate_limiter,
+                        )
+                        await self.as_coroutine(
+                            self.backend.upload,
+                            self.chunk_name_to_location(chunk.name),
+                            io_wrapper,
+                        )
+
+                    _chunk_done(chunk)
+                finally:
+                    self._slots.put_nowait(slot)
 
         chunk_producer = loop.run_in_executor(
             ThreadPoolExecutor(max_workers=1, thread_name_prefix='chunk-producer'),
             _chunk_producer,
         )
-        while not chunk_queue.empty() or not chunk_producer.done():
-            try:
-                chunk = chunk_queue.get_nowait()
-            except queue.Empty:
-                await asyncio.sleep(0.025)
-                continue
-
-            slot = await self._slots.get()
-            if await self.as_coroutine(
-                self.backend.exists, self.chunk_name_to_location(chunk.name)
-            ):
-                logger.info('Will reuse chunk %s', chunk.name)
-                try:
-                    _done_chunk(chunk)
-                except BaseException:
-                    abort.set()
-                    raise
-                else:
-                    continue
-                finally:
-                    self._slots.put_nowait(slot)
-
-            logger.info('Uploading chunk %s', chunk.name)
-            task = asyncio.create_task(_upload_chunk(chunk, slot))
-            task.add_done_callback(lambda fut: fut.result())
-            tasks.add(task)
-
-        await chunk_producer
-        if tasks:
-            await asyncio.wait(tasks, return_when=asyncio.FIRST_EXCEPTION)
+        try:
+            await asyncio.gather(*(_worker() for _ in range(self._concurrent)))
+        except BaseException:
+            abort.set()
+            raise
+        finally:
+            await chunk_producer
 
         now = datetime.utcnow()
         snapshot_data = {
             'utc_timestamp': str(now),
-            'unix_timestamp': now.timestamp(),
             'files': list(snapshot_files.values()),
-            # TODO: 'config'
+            # TODO: 'config', 'version', 'uid', 'gid', 'hostname', 'platform'?
         }
+        if note is not None:
+            snapshot_data['note'] = note
+
         logger.debug(
             'Generated snashot: %s',
             json.dumps(
@@ -892,7 +896,6 @@ class Repository:
         snapshots.sort(key=lambda x: x['utc_timestamp'], reverse=True)
 
         chunk_mapping = {}
-        tasks = weakref.WeakSet()
         executor = ThreadPoolExecutor(
             max_workers=self._concurrent * 5, thread_name_prefix='file-writer'
         )
@@ -929,35 +932,42 @@ class Repository:
                 if not flocks_refcounts[ref.path]:
                     del flocks_refcounts[ref.path], flocks[ref.path]
 
-        async def _download_chunk(name, *, slot):
-            try:
-                logger.info('Downloading chunk %s', name)
-                contents = await self.as_coroutine(
-                    self.backend.download, self.chunk_name_to_location(name)
-                )
-                digest = chunk_mapping[name].digest
-                if self.props.encrypted:
-                    decrypted_contents = self.props.decrypt(
-                        contents,
-                        self.props.derive_shared_key(digest),
+        async def _worker():
+            while True:
+                try:
+                    name, data = chunk_mapping.popitem()
+                except KeyError:
+                    break
+
+                slot = await self._slots.get()
+                try:
+                    logger.info('Downloading chunk %s', name)
+                    contents = await self.as_coroutine(
+                        self.backend.download, self.chunk_name_to_location(name)
                     )
-                else:
-                    decrypted_contents = contents
-
-                if digest != self.props.hash_digest(decrypted_contents):
-                    raise exceptions.ReplicatError(f'Chunk {name} is corrupted')
-
-                decrypted_view = memoryview(decrypted_contents)
-                await asyncio.gather(
-                    *(
-                        loop.run_in_executor(
-                            executor, _write_chunk_ref, ref, decrypted_view
+                    digest = data.digest
+                    if self.props.encrypted:
+                        decrypted_contents = self.props.decrypt(
+                            contents,
+                            self.props.derive_shared_key(digest),
                         )
-                        for ref in chunk_mapping[name].refs
+                    else:
+                        decrypted_contents = contents
+
+                    if digest != self.props.hash_digest(decrypted_contents):
+                        raise exceptions.ReplicatError(f'Chunk {name} is corrupted')
+
+                    decrypted_view = memoryview(decrypted_contents)
+                    await asyncio.gather(
+                        *(
+                            loop.run_in_executor(
+                                executor, _write_chunk_ref, ref, decrypted_view
+                            )
+                            for ref in data.refs
+                        )
                     )
-                )
-            finally:
-                self._slots.put_nowait(slot)
+                finally:
+                    self._slots.put_nowait(slot)
 
         for snapshot_data in snapshots:
             for file_data in snapshot_data['files']:
@@ -1005,15 +1015,7 @@ class Repository:
             disable=not self._progress,
             leave=True,
         )
-        for chunk_name in chunk_mapping:
-            slot = await self._slots.get()
-            task = asyncio.create_task(_download_chunk(chunk_name, slot=slot))
-            task.add_done_callback(lambda fut: fut.result())
-            tasks.add(task)
-
-        if tasks:
-            await asyncio.wait(tasks, return_when=asyncio.FIRST_EXCEPTION)
-
+        await asyncio.gather(*(_worker() for _ in range(self._concurrent)))
         return utils.DefaultNamespace(files=list(seen_files))
 
     async def close(self):

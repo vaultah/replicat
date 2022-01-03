@@ -136,6 +136,7 @@ $ replicat snapshot -r some/directory \
     -P path/to/password/file \
     -K path/to/key/file \
     -c 10 \
+    -n 'A note (optional)'
     image.jpg some-directory another-directory and/more.text
 ```
 

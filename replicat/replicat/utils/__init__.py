@@ -90,6 +90,7 @@ common_options.add_argument(
     help='Disable progress bar for commands that support it.',
 )
 common_options.add_argument(
+    '-c',
     '--concurrent',
     default=5,
     type=int,
@@ -173,6 +174,7 @@ def make_main_parser(*parent_parsers):
 
     snapshot_parser = subparsers.add_parser('snapshot', parents=parent_parsers)
     snapshot_parser.add_argument('path', nargs='+', type=Path)
+    snapshot_parser.add_argument('-n', '--note')
     snapshot_parser.add_argument(
         '--limit-rate', '-L', dest='rate_limit', type=human_to_bytes
     )

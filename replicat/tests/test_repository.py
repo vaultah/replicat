@@ -282,7 +282,10 @@ class TestSnapshot:
                 },
             },
         )
-        result = await repo.snapshot(paths=source_files)
+        result = await repo.snapshot(
+            paths=source_files,
+            note='<associated note>',
+        )
 
         snapshots = list(local_backend.list_files('snapshots'))
         assert len(snapshots) == 1
@@ -297,6 +300,7 @@ class TestSnapshot:
             == repo.serialize(result.data)
         )
 
+        assert result.data['note'] == '<associated note>'
         # Small files come first
         source_files.reverse()
         snapshot_files = sorted(
@@ -332,7 +336,7 @@ class TestSnapshot:
                 },
             }
         )
-        result = await repo.snapshot(paths=source_files)
+        result = await repo.snapshot(paths=source_files, note='<associated note>')
 
         snapshots = list(local_backend.list_files('snapshots'))
         assert len(snapshots) == 1
@@ -341,6 +345,7 @@ class TestSnapshot:
         assert snapshots[0] == snapshot_location
         assert local_backend.download(snapshot_location) == repo.serialize(result.data)
 
+        assert result.data['note'] == '<associated note>'
         # Small files come first
         source_files.reverse()
         snapshot_files = sorted(
