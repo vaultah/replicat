@@ -16,8 +16,8 @@ using namespace std;
 */
 class gclmulchunker {
 public:
-    gclmulchunker(size_t _min_length, size_t _max_length, string_view key)
-            : min_length((_min_length + 3) & -4), max_length(_max_length) {
+    gclmulchunker(size_t min_length, size_t max_length, string_view key)
+            : min_length(min_length), max_length(max_length) {
         if (key.size() != 16)
             throw std::invalid_argument("key must contain exactly 16 characters");
         if (min_length > max_length)
@@ -40,7 +40,7 @@ public:
 };
 
 size_t gclmulchunker::next_cut(string_view buffer, bool final = false) {
-    size_t i = min_length, max_index = min_length, size = buffer.size();
+    size_t i, max_index = 0, size = buffer.size();
     uint64_t max_value = 0;
     const char* buffer_data = buffer.data();
 
@@ -55,12 +55,16 @@ size_t gclmulchunker::next_cut(string_view buffer, bool final = false) {
     } else if (!final && size < max_length)
         return 0;
 
-    for (; i < max_length; i += 4) {
+    for (i = 4; i < max_length; i += 4) {
         if (auto k = key(buffer_data, i); k > max_value) {
             max_index = i;
             max_value = k;
         }
     }
+
+    if (max_index < min_length)
+        max_index = (min_length + 3) & -4;
+
     return max_index;
 }
 

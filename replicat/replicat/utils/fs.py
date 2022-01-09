@@ -37,7 +37,7 @@ def stream_files(files, *, chunk_size=16_777_216):
                 while True:
                     chunk = file.read(chunk_size)
                     yield path, chunk
-                    if not chunk:
+                    if len(chunk) < chunk_size:
                         break
 
     return closing(_stream())

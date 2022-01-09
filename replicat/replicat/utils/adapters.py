@@ -1,5 +1,7 @@
 import hashlib
 import os
+from abc import ABC, abstractmethod
+from typing import Iterator, Optional
 
 import cryptography.exceptions
 from cryptography.hazmat.backends import default_backend
@@ -12,25 +14,100 @@ from .. import exceptions
 _backend = default_backend()
 
 
-class _aead_cipher_adapter:
+class CipherAdapter(ABC):
+    @abstractmethod
+    def encrypt(self, data: bytes, key: bytes):
+        """Encrypt data using the provided key"""
+        return b''
+
+    @abstractmethod
+    def decrypt(self, data: bytes, key: bytes):
+        """Decrypt data using the provided key"""
+        return b''
+
+    @property
+    @abstractmethod
+    def key_bytes(self):
+        """Return the number of bytes in a key"""
+        return 0
+
+
+class KDFAdapter(ABC):
+    @abstractmethod
+    def derivation_params(self) -> bytes:
+        """Generate derivation params for the KDF"""
+        return b''
+
+    @abstractmethod
+    def derive(self, pwd: bytes, *, params: bytes) -> bytes:
+        """Derive key from password using the provided params"""
+        return b''
+
+
+class MACAdapter(ABC):
+    @abstractmethod
+    def mac_params(self) -> bytes:
+        """Generate key for the MAC"""
+        return b''
+
+    @abstractmethod
+    def mac(self, message: bytes, *, params: bytes) -> bytes:
+        """Generate MAC using the provided params (key)"""
+        return b''
+
+
+class HashAdapter(ABC):
+    @abstractmethod
+    def digest(self, data: bytes) -> bytes:
+        """Compute the hash digest from data"""
+        return b''
+
+
+class ChunkerAdapter(ABC):
+    @abstractmethod
+    def chunking_params(self) -> bytes:
+        """Generate chunking params"""
+        return b''
+
+    @abstractmethod
+    def __call__(
+        self, chunk_iterator: Iterator[bytes], *, params: Optional[bytes] = None
+    ):
+        """Re-chunk the incoming stream of bytes using the provided params"""
+        yield b''
+
+    @property
+    @abstractmethod
+    def alignment(self):
+        """Return the alignment"""
+        return 0
+
+
+class AEADCipherAdapterMixin(CipherAdapter):
+    cipher = None
+
     def __init__(self):
-        self.key_bytes, self.nonce_bytes = self.key_bits // 8, self.nonce_bits // 8
+        self._key_bytes, self._nonce_bytes = self.key_bits // 8, self.nonce_bits // 8
 
     def encrypt(self, data, key):
         cipher = self.cipher(key)
-        nonce = os.urandom(self.nonce_bytes)
+        nonce = os.urandom(self._nonce_bytes)
         return nonce + cipher.encrypt(nonce, data, None)
 
     def decrypt(self, data, key):
         cipher = self.cipher(key)
-        nonce, ciphertext = data[: self.nonce_bytes], data[self.nonce_bytes :]
+        nonce, ciphertext = data[: self._nonce_bytes], data[self._nonce_bytes :]
         try:
             return cipher.decrypt(nonce, ciphertext, None)
         except cryptography.exceptions.InvalidTag as e:
             raise exceptions.DecryptionError from e
 
+    @property
+    def key_bytes(self):
+        return self._key_bytes
 
-class aes_gcm(_aead_cipher_adapter):
+
+class aes_gcm(AEADCipherAdapterMixin):
     cipher = aead.AESGCM
 
     def __init__(self, *, key_bits=256, nonce_bits=96):
@@ -38,13 +115,13 @@ class aes_gcm(_aead_cipher_adapter):
         super().__init__()
 
 
-class chacha20_poly1305(_aead_cipher_adapter):
+class chacha20_poly1305(AEADCipherAdapterMixin):
     cipher = aead.ChaCha20Poly1305
     key_bits = 256
     nonce_bits = 96
 
 
-class scrypt:
+class scrypt(KDFAdapter):
     def __init__(self, *, length, n=1 << 22, r=8, p=1):
         self.length, self.n, self.r, self.p = length, n, r, p
 
@@ -64,7 +141,7 @@ class scrypt:
         return instance.derive(pwd)
 
 
-class blake2b:
+class blake2b(KDFAdapter, MACAdapter, HashAdapter):
     def __init__(self, *, length=64):
         self.digest_size = length
 
@@ -88,15 +165,14 @@ class blake2b:
         return hashlib.blake2b(data, digest_size=self.digest_size).digest()
 
 
-class gclmulchunker:
+class gclmulchunker(ChunkerAdapter):
 
     # Chunk lengths in bytes
     MIN_LENGTH = 128_000
     MAX_LENGTH = 5_120_000
+    alignment = 4
 
     def __init__(self, *, min_length=MIN_LENGTH, max_length=MAX_LENGTH):
-        # Data will be aligned to 4-byte boundaries
-        min_length = (min_length + 3) & -4
         if min_length > max_length:
             raise ValueError(
                 f'Minimum length ({min_length}) is greater '

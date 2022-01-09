@@ -664,8 +664,9 @@ class Repository:
         files.sort(key=lambda file: (file.stat().st_size, str(file)))
 
         state = utils.DefaultNamespace(
-            bytes_read=0,
+            bytes_with_padding=0,
             bytes_chunked=0,
+            bytes_reused=0,
             chunk_counter=0,
             # Fixed-size dictionary for thread safety
             file_ranges=dict.fromkeys(files),
@@ -741,22 +742,31 @@ class Repository:
         def _stream_files():
             with utils.fs.stream_files(files) as stream:
                 for file, source_chunk in stream:
-                    if state.file_ranges[file] is None:
-                        logger.debug('Started streaming file %r', str(file))
+                    file_range = state.file_ranges[file]
+                    if file_range is not None:
+                        start = file_range[0]
+                    else:
                         # First chunk from this file
-                        start = state.bytes_read
                         if state.current_file is not None:
+                            # Produce padding for the previous file
+                            # TODO: let the chunker generate the padding?
+                            if alignment := self.props.chunker.alignment:
+                                cstart, cend = state.file_ranges[state.current_file]
+                                if padding_length := -(cend - cstart) % alignment:
+                                    state.bytes_with_padding += padding_length
+                                    yield bytes(padding_length)
+
                             logger.debug(
                                 'Finished streaming file %r', str(state.current_file)
                             )
                             state.files_finished.add(state.current_file)
 
+                        logger.debug('Started streaming file %r', str(file))
                         state.current_file = file
-                    else:
-                        start, _ = state.file_ranges[file]
+                        start = state.bytes_with_padding
 
-                    state.bytes_read += len(source_chunk)
-                    state.file_ranges[file] = (start, state.bytes_read)
+                    state.bytes_with_padding += len(source_chunk)
+                    state.file_ranges[file] = (start, state.bytes_with_padding)
                     yield source_chunk
 
             if state.current_file is not None:
@@ -818,6 +828,8 @@ class Repository:
                         self.backend.exists, self.chunk_name_to_location(chunk.name)
                     ):
                         logger.info('Will reuse existing chunk %s', chunk.name)
+                        _chunk_done(chunk)
+                        state.bytes_reused += chunk.stream_end - chunk.stream_start
                     else:
                         logger.info('Will upload new chunk %s', chunk.name)
                         io_wrapper = _TrackedBytesIO(
@@ -832,8 +844,7 @@ class Repository:
                             self.chunk_name_to_location(chunk.name),
                             io_wrapper,
                         )
-
-                    _chunk_done(chunk)
+                        _chunk_done(chunk)
                 finally:
                     self._slots.put_nowait(slot)
 
@@ -875,12 +886,23 @@ class Repository:
             encrypted_snapshot = self.serialize(snapshot_data)
 
         snapshot_name = self.props.hash_digest(encrypted_snapshot).hex()
-
         await self.as_coroutine(
             self.backend.upload,
             self.snapshot_name_to_location(snapshot_name),
             encrypted_snapshot,
         )
+
+        bytes_tracker.close()
+        finished_tracker.close()
+
+        if state.bytes_reused:
+            print(
+                ef.bold
+                + f'Used {utils.bytes_to_human(state.bytes_reused)} of existing data'
+                + ef.rs,
+                flush=True,
+            )
+
         return utils.DefaultNamespace(name=snapshot_name, data=snapshot_data)
 
     async def restore(self, *, snapshot_regex=None, files_regex=None, path=None):
@@ -1015,7 +1037,9 @@ class Repository:
             disable=not self._progress,
             leave=True,
         )
-        await asyncio.gather(*(_worker() for _ in range(self._concurrent)))
+        with bytes_tracker:
+            await asyncio.gather(*(_worker() for _ in range(self._concurrent)))
+
         return utils.DefaultNamespace(files=list(seen_files))
 
     async def close(self):

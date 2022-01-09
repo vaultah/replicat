@@ -1,4 +1,5 @@
 import asyncio
+import os
 import threading
 import time
 from base64 import standard_b64encode
@@ -274,3 +275,21 @@ def test_parse_unknown_args():
     assert parsed_args['second_long_name.single_value'] is True
     assert parsed_args['third_long_name.multiple_values'] == [1, 2, 3]
     assert parsed_args['fourth_long_name.final'] == ['abc', 'def']
+
+
+def test_stream_files(tmp_path):
+    mapping = {
+        tmp_path / 'a': os.urandom(0),
+        tmp_path / 'b': os.urandom(1447),
+        tmp_path / 'c': os.urandom(29),
+        tmp_path / 'd': os.urandom(13),
+    }
+    for path, contents in mapping.items():
+        path.write_bytes(contents)
+
+    with utils.fs.stream_files(list(mapping), chunk_size=2048) as streamer:
+        pairs = list(streamer)
+
+    assert len(pairs) == 4
+    stream_mapping = dict(pairs)
+    assert stream_mapping == mapping
