@@ -1,7 +1,8 @@
 import hashlib
 import os
 from abc import ABC, abstractmethod
-from typing import Iterator, Optional
+from collections.abc import Iterator
+from typing import Optional
 
 import cryptography.exceptions
 from cryptography.hazmat.backends import default_backend
@@ -16,37 +17,43 @@ _backend = default_backend()
 
 class CipherAdapter(ABC):
     @abstractmethod
-    def encrypt(self, data: bytes, key: bytes):
+    def encrypt(self, data: bytes, key: bytes) -> bytes:
         """Encrypt data using the provided key"""
         return b''
 
     @abstractmethod
-    def decrypt(self, data: bytes, key: bytes):
+    def decrypt(self, data: bytes, key: bytes) -> bytes:
         """Decrypt data using the provided key"""
         return b''
 
     @property
     @abstractmethod
-    def key_bytes(self):
+    def key_bytes(self) -> int:
         """Return the number of bytes in a key"""
         return 0
+
+    def generate_key(self) -> bytes:
+        return os.urandom(self.key_bytes)
 
 
 class KDFAdapter(ABC):
     @abstractmethod
-    def derivation_params(self) -> bytes:
+    def generate_derivation_params(self) -> bytes:
         """Generate derivation params for the KDF"""
         return b''
 
     @abstractmethod
-    def derive(self, pwd: bytes, *, params: bytes) -> bytes:
-        """Derive key from password using the provided params"""
+    def derive(
+        self, key_material: bytes, *, params: bytes, context: Optional[bytes] = None
+    ) -> bytes:
+        """Derive key from IKM using the provided params. The optional context
+        argument enables you to generate subkeys from the master key (IKM)"""
         return b''
 
 
 class MACAdapter(ABC):
     @abstractmethod
-    def mac_params(self) -> bytes:
+    def generate_mac_params(self) -> bytes:
         """Generate key for the MAC"""
         return b''
 
@@ -64,8 +71,14 @@ class HashAdapter(ABC):
 
 
 class ChunkerAdapter(ABC):
+    @property
     @abstractmethod
-    def chunking_params(self) -> bytes:
+    def alignment(self) -> Optional[int]:
+        """Return the alignment"""
+        return 0
+
+    @abstractmethod
+    def generate_chunking_params(self) -> bytes:
         """Generate chunking params"""
         return b''
 
@@ -75,12 +88,6 @@ class ChunkerAdapter(ABC):
     ):
         """Re-chunk the incoming stream of bytes using the provided params"""
         yield b''
-
-    @property
-    @abstractmethod
-    def alignment(self):
-        """Return the alignment"""
-        return 0
 
 
 class AEADCipherAdapterMixin(CipherAdapter):
@@ -125,17 +132,20 @@ class scrypt(KDFAdapter):
     def __init__(self, *, length, n=1 << 22, r=8, p=1):
         self.length, self.n, self.r, self.p = length, n, r, p
 
-    def derivation_params(self):
+    def generate_derivation_params(self):
         salt = os.urandom(self.length)
         return salt
 
-    def derive(self, pwd, *, params):
+    def derive(self, pwd, *, params, context=None):
+        if context is None:
+            context = b''
+
         instance = Scrypt(
             n=self.n,
             r=self.r,
             p=self.p,
             length=self.length,
-            salt=params,
+            salt=params + context,
             backend=_backend,
         )
         return instance.derive(pwd)
@@ -145,14 +155,19 @@ class blake2b(KDFAdapter, MACAdapter, HashAdapter):
     def __init__(self, *, length=64):
         self.digest_size = length
 
-    def derivation_params(self):
-        key = os.urandom(hashlib.blake2b.MAX_KEY_SIZE)
-        return key
+    def generate_derivation_params(self):
+        salt = os.urandom(hashlib.blake2b.SALT_SIZE)
+        return salt
 
-    def derive(self, pwd, *, params):
-        return hashlib.blake2b(pwd, digest_size=self.digest_size, key=params).digest()
+    def derive(self, key_material, *, params, context=None):
+        if context is None:
+            context = b''
 
-    def mac_params(self):
+        return hashlib.blake2b(
+            context, salt=params, digest_size=self.digest_size, key=key_material
+        ).digest()
+
+    def generate_mac_params(self):
         key = os.urandom(hashlib.blake2b.MAX_KEY_SIZE)
         return key
 
@@ -209,5 +224,5 @@ class gclmulchunker(ChunkerAdapter):
 
             chunk = next_chunk
 
-    def chunking_params(self):
+    def generate_chunking_params(self):
         return os.urandom(16)

@@ -1,8 +1,7 @@
-from types import SimpleNamespace
-
 import pytest
 
 from replicat.backends import local
+from replicat.repository import Repository
 
 
 @pytest.fixture
@@ -11,5 +10,5 @@ def local_backend(tmpdir):
 
 
 @pytest.fixture
-def args():
-    return SimpleNamespace(concurrent=5, progress=False)
+def local_repo(local_backend):
+    return Repository(local_backend, concurrent=5)

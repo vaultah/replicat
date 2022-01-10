@@ -1,10 +1,10 @@
 import os
-from contextlib import closing
 from pathlib import Path
 
 from appdirs import user_cache_dir
 
 CACHE_DIRECTORY = user_cache_dir('replicat', 'replicat')
+DEFAULT_STREAM_CHUNK_SIZE = 16_777_216
 
 
 def recursive_scandir(start_entry, *, follow_symlinks=False):
@@ -30,17 +30,14 @@ def flatten_paths(paths, *, follow_symlinks=False):
                     yield from map(Path, recurse)
 
 
-def stream_files(files, *, chunk_size=16_777_216):
-    def _stream():
-        for path in files:
-            with path.open('rb') as file:
-                while True:
-                    chunk = file.read(chunk_size)
-                    yield path, chunk
-                    if len(chunk) < chunk_size:
-                        break
-
-    return closing(_stream())
+def stream_files(files, *, chunk_size=DEFAULT_STREAM_CHUNK_SIZE):
+    for path in files:
+        with path.open('rb') as file:
+            while True:
+                chunk = file.read(chunk_size)
+                yield path, chunk
+                if len(chunk) < chunk_size:
+                    break
 
 
 def list_cached(path):

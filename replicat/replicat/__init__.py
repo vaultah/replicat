@@ -9,9 +9,9 @@ class Backend(abc.ABC):
         pass
 
     @abc.abstractmethod
-    async def exists(self, name):
+    async def exists(self, name) -> bool:
         """Either async or plain function"""
-        return None
+        return True
 
     @abc.abstractmethod
     async def upload(self, name, contents, **ka):
@@ -19,9 +19,9 @@ class Backend(abc.ABC):
         return None
 
     @abc.abstractmethod
-    async def download(self, name, **ka):
+    async def download(self, name, **ka) -> bytes:
         """Either async or plain function"""
-        return None
+        return b''
 
     @abc.abstractmethod
     async def list_files(self, prefix='', **ka):
@@ -29,7 +29,7 @@ class Backend(abc.ABC):
         return None
 
     @abc.abstractmethod
-    async def hide_file(self, name):
+    async def delete(self, name):
         """Either async or plain function"""
         return None
 

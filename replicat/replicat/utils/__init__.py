@@ -186,6 +186,10 @@ def make_main_parser(*parent_parsers):
     )
     restore_parser.add_argument('-F', '--files-regex', help='Regex to filter files')
 
+    delete_parser = subparsers.add_parser('delete', parents=parent_parsers)
+    delete_parser.add_argument('snapshot', nargs='+')
+
+    subparsers.add_parser('clean', parents=parent_parsers)
     return parser
 
 
@@ -321,15 +325,18 @@ def type_hint(object):
     We only expect to deal with byte strings right now"""
     # TODO: add memoryview?
     if isinstance(object, collections.abc.ByteString):
-        return {'!bytes': str(base64.standard_b64encode(object), 'ascii')}
+        return {'!b': str(base64.standard_b64encode(object), 'ascii')}
     raise TypeError
 
 
 def type_reverse(object):
     """Intended to be used as an object_hook. Converts the JSON object
     returned from type_hint to a Python object of appropriate type"""
+    if len(object) != 1:
+        return object
+
     try:
-        encoded = object.pop('!bytes')
+        encoded = object['!b']
     except KeyError:
         return object
     else:

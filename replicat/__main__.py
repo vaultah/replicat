@@ -42,6 +42,10 @@ async def _cmd_handler(args, unknown):
                 files_regex=args.files_regex,
                 path=args.path,
             )
+        elif args.action == 'delete':
+            await repository.delete_snapshots(args.snapshot)
+        elif args.action == 'clean':
+            await repository.clean()
         elif args.action in {'lf', 'list-files'}:
             await repository.list_files(
                 snapshot_regex=args.snapshot_regex,

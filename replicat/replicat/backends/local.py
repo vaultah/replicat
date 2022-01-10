@@ -25,22 +25,27 @@ class Local(Backend):
         # atomic replacements possible
         temp = Path(
             NamedTemporaryFile(
-                prefix=f'{destination.name}_', dir=destination.parent, delete=False
+                prefix=f'{destination.name}_',
+                suffix='.tmp',
+                dir=destination.parent,
+                delete=False,
             ).name
         )
+        try:
+            if isinstance(contents, io.IOBase):
+                with temp.open('wb') as file:
+                    shutil.copyfileobj(contents, file)
+                contents._tracker.close()
+            else:
+                temp.write_bytes(contents)
 
-        if isinstance(contents, io.IOBase):
-            with temp.open('wb') as file:
-                shutil.copyfileobj(contents, file)
-            contents._tracker.close()
-        else:
-            temp.write_bytes(contents)
-
-        temp.replace(destination)
+            temp.replace(destination)
+        except BaseException:
+            temp.unlink(missing_ok=True)
+            raise
 
     def download(self, name):
-        contents = (self.path / name).read_bytes()
-        return contents
+        return (self.path / name).read_bytes()
 
     def list_files(self, prefix=''):
         path_length = len(str(self.path))
@@ -58,15 +63,18 @@ class Local(Backend):
             for entry in it:
                 if not entry.name.startswith(prefix_basename):
                     continue
+
                 for file in recursive_scandir(entry):
+                    # Exclude temporary files
+                    if file.endswith('.tmp'):
+                        continue
+
                     # NOTE: Anything from the standard library seems
                     # like an overkill here
                     yield file[path_length + 1 :]
 
-    def hide_file(self, name):
-        origin = self.path / name
-        # NOTE: hidden files should still come up in prefix searches
-        origin.replace(origin.with_name(f'{origin.name}_'))
+    def delete(self, name):
+        (self.path / name).unlink(missing_ok=True)
 
 
 Client = Local

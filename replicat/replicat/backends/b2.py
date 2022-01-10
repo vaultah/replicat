@@ -199,18 +199,17 @@ class B2(Backend):
             for file in decoded['files']:
                 files.append(file['fileName'])
 
-            if decoded['nextFileName'] is None and decoded['nextFileId'] is None:
+            if decoded['nextFileName'] is None:
                 break
 
             params['startFileName'] = decoded['nextFileName']
-            params['startFileId'] = decoded['nextFileId']
 
         return files
 
     @utils.requires_auth
     @backoff_reauth
     @on_error
-    async def hide_file(self, name):
+    async def delete(self, name):
         url = f'{self.auth.apiUrl}/b2api/v{B2_API_VERSION}/b2_hide_file'
         bucket_info = await self._get_bucket_info()
         params = {'bucketId': bucket_info.bucketId, 'fileName': name}

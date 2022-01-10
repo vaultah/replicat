@@ -1,26 +1,37 @@
 import asyncio
 import collections.abc
+import dataclasses
 import inspect
 import io
 import json
 import logging
 import os
+import posixpath
 import queue
 import re
 import threading
 import time
+from collections import namedtuple
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass
 from datetime import datetime
-from functools import partial
+from functools import cached_property
 from pathlib import Path
+from typing import Any, Dict, Optional
 
 from sty import ef
 from tqdm import tqdm
 
 from . import exceptions, utils
+from .utils.adapters import (
+    ChunkerAdapter,
+    CipherAdapter,
+    HashAdapter,
+    KDFAdapter,
+    MACAdapter,
+)
 
 logger = logging.getLogger(__name__)
+LocationParts = namedtuple('LocationParts', ['name', 'tag'])
 
 
 class _RateLimiter:
@@ -49,11 +60,11 @@ class _RateLimiter:
                 self.bytes_since_checkpoint += bytes_amount
 
 
-@dataclass(frozen=True)
-class _Chunk:
+@dataclasses.dataclass(frozen=True)
+class _SnapshotChunk:
     contents: bytes
-    digest: bytes
-    name: str
+    index: int
+    location: str
     stream_start: int
     stream_end: int
     counter: int
@@ -111,16 +122,50 @@ class _TrackedBytesIO(io.BytesIO):
             yield x
 
 
-class RepositoryProps(utils.DefaultNamespace):
-    def merge(self, other):
-        if not isinstance(other, RepositoryProps):
-            raise TypeError
-        self.__dict__.update(other.__dict__)
+@dataclasses.dataclass(repr=False, frozen=True)
+class RepositoryProps:
+    chunker: ChunkerAdapter
+    hasher: HashAdapter
+    cipher: Optional[CipherAdapter] = None
+    userkey: Optional[bytes] = None
+    authenticator: Optional[MACAdapter] = None
+    shared_kdf: Optional[KDFAdapter] = None
+    private: Optional[Dict[str, Any]] = None
 
-    __repr__ = object.__repr__
+    @cached_property
+    def encrypted(self):
+        return self.cipher is not None
+
+    def hash_digest(self, data):
+        return self.hasher.digest(data)
+
+    def encrypt(self, data, key):
+        assert self.encrypted
+        return self.cipher.encrypt(data, key)
+
+    def decrypt(self, data, key):
+        assert self.encrypted
+        return self.cipher.decrypt(data, key)
+
+    def mac(self, data):
+        assert self.encrypted
+        return self.authenticator.mac(data, params=self.private['mac_params'])
+
+    def derive_shared_subkey(self, ctx):
+        assert self.encrypted
+        return self.shared_kdf.derive(
+            self.private['shared_key'],
+            context=ctx,
+            params=self.private['shared_kdf_params'],
+        )
+
+    def chunkify(self, it):
+        params = self.private['chunker_params'] if self.encrypted else None
+        return self.chunker(it, params=params)
 
 
 class Repository:
+    # NOTE: trailing slashes
     CHUNK_PREFIX = 'data/'
     SNAPSHOT_PREFIX = 'snapshots/'
     # These correspond to the names of adapters
@@ -159,44 +204,74 @@ class Repository:
             self._executor = ThreadPoolExecutor(max_workers=self._concurrent)
             return self._executor
 
-    def default_serialization_hook(self, data):
+    def default_serialization_hook(self, data, /):
         return utils.type_hint(data)
 
-    def serialize(self, object):
+    def serialize(self, object, /):
         string = json.dumps(
             object, separators=(',', ':'), default=self.default_serialization_hook
         )
         return bytes(string, 'ascii')
 
-    def object_deserialization_hook(self, data):
+    def object_deserialization_hook(self, data, /):
         return utils.type_reverse(data)
 
-    def deserialize(self, data):
+    def deserialize(self, data, /):
         return json.loads(data, object_hook=self.object_deserialization_hook)
 
-    def chunk_name_to_location(self, name):
-        return os.path.join(self.CHUNK_PREFIX, name[:2], name)
+    def get_chunk_location(self, *, name, tag):
+        """Build POSIX-style storage path for the chunk using its name and tag"""
+        parts = [self.CHUNK_PREFIX]
+        # Encode the tag into the chunk path for easier ownership verification
+        for i in range(0, len(tag), 2):
+            parts.append(tag[i : i + 2])
+        parts.append(name)
+        return posixpath.join(*parts)
 
-    def chunk_location_to_name(self, location):
+    def parse_chunk_location(self, location, /):
+        """Parse the storage path for the chunk, extract its name and tag"""
         if not location.startswith(self.CHUNK_PREFIX):
             raise ValueError('Not a chunk location')
+        head, tail = posixpath.split(location)
+        tag = head[len(self.CHUNK_PREFIX) :].replace(posixpath.sep, '')
+        return LocationParts(name=tail, tag=tag)
 
-        _, tail = os.path.split(location)
-        assert tail
-        return tail
+    def _chunk_digest_to_location_parts(self, digest, /):
+        if self.props.encrypted:
+            digest_mac = self.props.mac(digest)
+            digest_mac_mac = self.props.mac(digest_mac)
+        else:
+            digest_mac = digest
+            digest_mac_mac = digest
 
-    def snapshot_name_to_location(self, name):
-        return os.path.join(self.SNAPSHOT_PREFIX, name)
+        return LocationParts(name=digest_mac.hex(), tag=digest_mac_mac.hex())
 
-    def snapshot_location_to_name(self, location):
+    def _chunk_digest_to_location(self, digest):
+        name, tag = self._chunk_digest_to_location_parts(digest)
+        return self.get_chunk_location(name=name, tag=tag)
+
+    def get_snapshot_location(self, *, name, tag):
+        """Build POSIX-style storage path for the snapshot using its name and tag"""
+        parts = [self.SNAPSHOT_PREFIX]
+        # Encode the tag into the snapshot path for easier ownership verification
+        for i in range(0, len(tag), 2):
+            parts.append(tag[i : i + 2])
+        parts.append(name)
+        return posixpath.join(*parts)
+
+    def parse_snapshot_location(self, location, /):
+        """Parse the storage path for the snapshot, extract its name and tag"""
         if not location.startswith(self.SNAPSHOT_PREFIX):
             raise ValueError('Not a snapshot location')
+        head, tail = posixpath.split(location)
+        tag = head[len(self.SNAPSHOT_PREFIX) :].replace(posixpath.sep, '')
+        return LocationParts(name=tail, tag=tag)
 
-        _, tail = os.path.split(location)
-        assert tail
-        return tail
+    def _snapshot_digest_to_location_parts(self, digest, /):
+        digest_mac = self.props.mac(digest) if self.props.encrypted else digest
+        return LocationParts(name=digest.hex(), tag=digest_mac.hex())
 
-    def read_metadata(self, path):
+    def read_metadata(self, path, /):
         # TODO: Cache stat result?
         stat_result = os.stat(path)
         return {
@@ -238,27 +313,22 @@ class Repository:
         return config
 
     def _instantiate_config(self, config):
-        props = RepositoryProps()
-
         chunker_type, chunker_args = utils.adapter_from_config(**config['chunking'])
-        props.chunker = chunker_type(**chunker_args)
-
         hasher_type, hasher_args = utils.adapter_from_config(**config['hashing'])
-        props.hash_digest = hasher_type(**hasher_args).digest
 
         if (encryption_config := config.get('encryption')) is not None:
             cipher_type, cipher_args = utils.adapter_from_config(
                 **encryption_config['cipher']
             )
-            props.cipher = cipher_type(**cipher_args)
-            props.encrypt = props.cipher.encrypt
-            props.decrypt = props.cipher.decrypt
-            # NOTE: only symmetric encryption is supported at this point anyway
-            props.encrypted = True
+            cipher = cipher_type(**cipher_args)
         else:
-            props.encrypted = False
+            cipher = None
 
-        return props
+        return {
+            'chunker': chunker_type(**chunker_args),
+            'hasher': hasher_type(**hasher_args),
+            'cipher': cipher,
+        }
 
     def _make_key(self, *, cipher, chunker, settings=None, private=None):
         if settings is None:
@@ -289,56 +359,52 @@ class Repository:
             mac = mac_type(**mac_args)
 
             private = {
+                'shared_key': cipher.generate_key(),
                 'shared_kdf': dict(shared_args, name=shared_kdf_type.__name__),
-                'shared_encryption_secret': shared_kdf.derivation_params(),
+                'shared_kdf_params': shared_kdf.generate_derivation_params(),
                 'mac': dict(mac_args, name=mac_type.__name__),
-                'mac_key': mac.mac_params(),
-                'chunker_secret': chunker.chunking_params(),
+                'mac_params': mac.generate_mac_params(),
+                'chunker_params': chunker.generate_chunking_params(),
             }
 
         return {
             'kdf': dict(user_kdf_args, name=user_kdf_type.__name__),
-            'key_derivation_params': user_kdf.derivation_params(),
+            'kdf_params': user_kdf.generate_derivation_params(),
             'private': private,
         }
 
     def _instantiate_key(self, key, *, password, cipher):
-        props = RepositoryProps()
-
         # User key derivation
         kdf_type, kdf_args = utils.adapter_from_config(**key['kdf'])
-        props.derive_user_key = partial(
-            kdf_type(**kdf_args).derive, params=key['key_derivation_params']
-        )
-        props.userkey = props.derive_user_key(password)
+        userkey = kdf_type(**kdf_args).derive(password, params=key['kdf_params'])
 
-        try:
+        if isinstance(key['private'], bytes):
+            # The 'private' portion of the key is still encrypted
+            private = self.deserialize(cipher.decrypt(key['private'], userkey))
+        else:
             private = key['private']
-        except KeyError:
-            # Private portion of the key is still encrypted
-            private = self.deserialize(cipher.decrypt(key['encrypted'], props.userkey))
 
         # Message authentication
-        mac_type, mac_args = utils.adapter_from_config(**private['mac'])
-        props.mac = partial(mac_type(**mac_args).mac, params=private['mac_key'])
-
+        authenticator_type, authenticator_args = utils.adapter_from_config(
+            **private['mac']
+        )
         # KDF for shared data
         shared_kdf_type, shared_kdf_args = utils.adapter_from_config(
             **private['shared_kdf']
         )
-        props.derive_shared_key = partial(
-            shared_kdf_type(**shared_kdf_args).derive,
-            params=private['shared_encryption_secret'],
-        )
-        props.chunker_params = private['chunker_secret']
-        props.private = private
-        return props
+
+        return {
+            'userkey': userkey,
+            'authenticator': authenticator_type(**authenticator_args),
+            'shared_kdf': shared_kdf_type(**shared_kdf_args),
+            'private': private,
+        }
 
     async def init(self, *, password=None, settings=None, key_output_path=None):
         logger.info('Using provided settings: %r', settings)
         print(ef.bold + 'Generating config and key' + ef.rs)
         config = self._make_config(settings=settings)
-        props = self._instantiate_config(config)
+        props = RepositoryProps(**self._instantiate_config(config))
 
         if props.encrypted:
             if password is None:
@@ -349,12 +415,16 @@ class Repository:
             key = self._make_key(
                 cipher=props.cipher, chunker=props.chunker, settings=settings
             )
-            props.merge(
-                self._instantiate_key(key, password=password, cipher=props.cipher)
+            props = dataclasses.replace(
+                props,
+                **self._instantiate_key(key, password=password, cipher=props.cipher),
             )
-            private = key.pop('private')
-            logger.debug('Private key portion (unencrypted): %r', private)
-            key['encrypted'] = props.encrypt(self.serialize(private), props.userkey)
+
+            # Encrypt the private portion
+            logger.debug('Private key portion (unencrypted): %r', key['private'])
+            key['private'] = props.encrypt(
+                self.serialize(key['private']), props.userkey
+            )
 
             # TODO: store keys in the repository?
             if key_output_path is not None:
@@ -385,7 +455,7 @@ class Repository:
         print(ef.bold + 'Loading config' + ef.rs)
         data = await self.as_coroutine(self.backend.download, 'config')
         config = self.deserialize(data)
-        props = self._instantiate_config(config)
+        props = RepositoryProps(**self._instantiate_config(config))
 
         if props.encrypted:
             print(ef.bold + 'Unlocking repository' + ef.rs)
@@ -398,8 +468,9 @@ class Repository:
             if isinstance(key, collections.abc.ByteString):
                 key = self.deserialize(key)
 
-            props.merge(
-                self._instantiate_key(key, password=password, cipher=props.cipher)
+            props = dataclasses.replace(
+                props,
+                **self._instantiate_key(key, password=password, cipher=props.cipher),
             )
 
         self.props = props
@@ -427,11 +498,11 @@ class Repository:
             key, password=password, cipher=self.props.cipher
         )
 
-        private = key.pop('private')
-        logger.debug('Private portion of the new key (unencrypted): %r', private)
-        key['encrypted'] = self.props.encrypt(
-            self.serialize(private),
-            key_props.userkey,
+        # Encrypt the private portion
+        logger.debug('Private portion of the new key (unencrypted): %r', key['private'])
+        key['private'] = self.props.encrypt(
+            self.serialize(key['private']),
+            key_props['userkey'],
         )
 
         # TODO: store it in the repository?
@@ -450,23 +521,19 @@ class Repository:
     async def _load_snapshots(self, *, snapshot_regex=None, cache_loaded=True):
         snapshots = {}
         tasks = []
-        semaphore = asyncio.Semaphore(self._concurrent)
-        stored_snapshots = await self.as_coroutine(
-            self.backend.list_files, self.SNAPSHOT_PREFIX
-        )
         cached_snapshots = {str(x) for x in utils.fs.list_cached(self.SNAPSHOT_PREFIX)}
         encrypted_snapshots = {}
 
-        async def _download_snapshot(path):
-            async with semaphore:
+        async def _download_snapshot(path, digest):
+            slot = await self._slots.get()
+            try:
                 logger.info('Downloading %s', path)
                 contents = await self.as_coroutine(self.backend.download, path)
+            finally:
+                self._slots.put_nowait(slot)
 
-            snapshot_name = self.snapshot_location_to_name(path)
-            if snapshot_name != self.props.hash_digest(contents).hex():
-                raise exceptions.ReplicatError(
-                    f'Snapshot {snapshot_name!r} is corrupted'
-                )
+            if self.props.hash_digest(contents) != digest:
+                raise exceptions.ReplicatError(f'Snapshot {path!r} is corrupted')
 
             if cache_loaded:
                 logger.info('Caching encrypted snapshot %s', path)
@@ -474,72 +541,79 @@ class Repository:
 
             encrypted_snapshots[path] = contents
 
-        for snapshot_path in stored_snapshots:
-            if snapshot_regex is not None:
-                snapshot_name = self.snapshot_location_to_name(snapshot_path)
-                if re.search(snapshot_regex, snapshot_name) is None:
-                    continue
+        for path in await self.as_coroutine(
+            self.backend.list_files, self.SNAPSHOT_PREFIX
+        ):
+            name, tag = self.parse_snapshot_location(path)
+            digest = bytes.fromhex(name)
 
-            if snapshot_path in cached_snapshots:
-                contents = utils.fs.get_cached(snapshot_path)
-                encrypted_snapshots[snapshot_path] = contents
+            if self.props.encrypted and self.props.mac(digest) != bytes.fromhex(tag):
                 continue
 
-            tasks.append(asyncio.create_task(_download_snapshot(snapshot_path)))
+            if snapshot_regex is not None and re.search(snapshot_regex, name) is None:
+                continue
+
+            if path in cached_snapshots:
+                encrypted_snapshots[path] = utils.fs.get_cached(path)
+            else:
+                tasks.append(asyncio.create_task(_download_snapshot(path, digest)))
 
         if tasks:
             await asyncio.gather(*tasks)
 
         for path, contents in encrypted_snapshots.items():
+            snapshot_body = self.deserialize(contents)
+
             if self.props.encrypted:
                 logger.info('Decrypting %s', path)
+                snapshot_body['chunks'] = self.deserialize(
+                    self.props.decrypt(
+                        snapshot_body['chunks'],
+                        self.props.derive_shared_subkey(
+                            self.props.hash_digest(snapshot_body['data'])
+                        ),
+                    )
+                )
                 try:
-                    decrypted = self.props.decrypt(contents, self.props.userkey)
+                    data = self.props.decrypt(snapshot_body['data'], self.props.userkey)
                 except exceptions.DecryptionError:
                     logger.info(
                         "Decryption of %s failed, but it's not corrupted (different key?)",
                         path,
                     )
-                    snapshots[path] = None
+                    snapshot_body['data'] = None
                 else:
-                    snapshots[path] = self.deserialize(decrypted)
-            else:
-                snapshots[path] = self.deserialize(contents)
+                    snapshot_body['data'] = self.deserialize(data)
+
+            snapshots[path] = snapshot_body
 
         return snapshots
 
-    def _format_snapshot_name(self, path, data):
-        return self.snapshot_location_to_name(path)
+    def _format_snapshot_name(self, *, path, chunks, data):
+        return self.parse_snapshot_location(path).name
 
-    def _format_snapshot_note(self, path, data):
-        if data is None:
-            return None
+    def _format_snapshot_note(self, *, path, chunks, data):
         return data.get('note')
 
-    def _format_snapshot_utc_timestamp(self, path, data):
-        if data is None:
+    def _format_snapshot_utc_timestamp(self, *, path, chunks, data):
+        if (value := data.get('utc_timestamp')) is None:
             return None
 
-        dt = datetime.fromisoformat(data['utc_timestamp'])
+        dt = datetime.fromisoformat(value)
         return dt.isoformat(sep=' ', timespec='seconds')
 
-    def _format_snapshot_files_count(self, path, data):
-        if data is None:
+    def _format_snapshot_files_count(self, *, path, chunks, data):
+        if (files := data.get('files')) is None:
             return None
 
-        return len(data['files'])
+        return len(files)
 
-    def _format_snaphot_size(self, path, data):
-        if data is None:
+    def _format_snaphot_size(self, *, path, chunks, data):
+        if (files := data.get('files')) is None:
             return None
 
-        return utils.bytes_to_human(
-            sum(
-                chunk['end'] - chunk['start']
-                for file in data['files']
-                for chunk in file['chunks']
-            )
-        )
+        ranges_it = (chunk['range'] for file in files for chunk in file['chunks'])
+        return utils.bytes_to_human(sum(r[1] - r[0] for r in ranges_it))
 
     async def list_snapshots(self, *, snapshot_regex=None):
         snapshots_mapping = await self._load_snapshots(snapshot_regex=snapshot_regex)
@@ -556,18 +630,20 @@ class Repository:
         columns_widths = {}
         sorted_snapshots = sorted(
             snapshots_mapping.items(),
-            key=lambda x: x[1]['utc_timestamp'] if x[1] is not None else '',
+            key=lambda x: (x[1]['data'] or {}).get('utc_timestamp', ''),
             reverse=True,
         )
         rows = []
 
-        for path, snapshot in sorted_snapshots:
+        for snapshot_path, snapshot_body in sorted_snapshots:
             row = {}
             for column, getter in columns_getters.items():
-                value = getter(path, snapshot)
-                if value is None:
-                    value = self.EMPTY_TABLE_VALUE
-                value = str(value)
+                value = getter(
+                    path=snapshot_path,
+                    chunks=snapshot_body['chunks'],
+                    data=snapshot_body['data'],
+                )
+                value = str(value if value is not None else self.EMPTY_TABLE_VALUE)
                 row[column] = value
                 columns_widths[column] = max(len(value), columns_widths.get(column, 0))
 
@@ -582,20 +658,25 @@ class Repository:
         for row in rows:
             print(*(value.ljust(columns_widths[col]) for col, value in row.items()))
 
-    def _format_file_snapshot_date(self, snapshot_path, snapshot_data, file_data):
+    def _format_file_snapshot_date(
+        self, *, snapshot_path, snapshot_chunks, snapshot_data, file_data
+    ):
         dt = datetime.fromisoformat(snapshot_data['utc_timestamp'])
         return dt.isoformat(sep=' ', timespec='seconds')
 
-    def _format_file_path(self, snapshot_path, snapshot_data, file_data):
+    def _format_file_path(
+        self, *, snapshot_path, snapshot_chunks, snapshot_data, file_data
+    ):
         return file_data['path']
 
-    def _format_file_chunks_count(self, snapshot_path, snapshot_data, file_data):
+    def _format_file_chunks_count(
+        self, *, snapshot_path, snapshot_chunks, snapshot_data, file_data
+    ):
         return len(file_data['chunks'])
 
-    def _format_file_size(self, snapshot_path, snapshot_data, file_data):
-        return utils.bytes_to_human(
-            sum(cd['end'] - cd['start'] for cd in file_data['chunks'])
-        )
+    def _format_file_size(self, *, snapshot_path, snapshot_data, file_data):
+        ranges_it = (cd['range'] for cd in file_data['chunks'])
+        return utils.bytes_to_human(sum(r[1] - r[0] for r in ranges_it))
 
     async def list_files(self, *, snapshot_regex=None, files_regex=None):
         snapshots_mapping = await self._load_snapshots(snapshot_regex=snapshot_regex)
@@ -611,7 +692,9 @@ class Repository:
         columns_widths = {}
         files = []
 
-        for snapshot_path, snapshot_data in snapshots_mapping.items():
+        for snapshot_path, snapshot_body in snapshots_mapping.items():
+            snapshot_chunks = snapshot_body['chunks']
+            snapshot_data = snapshot_body['data']
             if snapshot_data is None:
                 continue
 
@@ -622,10 +705,13 @@ class Repository:
 
                 row = {}
                 for column, getter in columns_getters.items():
-                    value = getter(snapshot_path, snapshot_data, file_data)
-                    if value is None:
-                        value = self.EMPTY_TABLE_VALUE
-                    value = str(value)
+                    value = getter(
+                        snapshot_path=snapshot_path,
+                        snapshot_chunks=snapshot_chunks,
+                        snapshot_data=snapshot_data,
+                        file_data=file_data,
+                    )
+                    value = str(value if value is not None else self.EMPTY_TABLE_VALUE)
                     row[column] = value
                     columns_widths[column] = max(
                         len(value), columns_widths.get(column, 0)
@@ -668,11 +754,12 @@ class Repository:
             bytes_chunked=0,
             bytes_reused=0,
             chunk_counter=0,
-            # Fixed-size dictionary for thread safety
+            # Preallocate this dictionary to avoid concurrent insertions
             file_ranges=dict.fromkeys(files),
             files_finished=set(),
             current_file=None,
         )
+        chunks_table = {}
         snapshot_files = {}
         bytes_tracker = tqdm(
             desc='Data processed',
@@ -700,9 +787,7 @@ class Repository:
         else:
             rate_limiter = None
 
-        def _chunk_done(chunk: _Chunk):
-            logger.info('Chunk %s processed successfully', chunk.name)
-
+        def _chunk_done(chunk: _SnapshotChunk):
             for file, ranges in state.file_ranges.items():
                 if ranges is None:
                     continue
@@ -711,8 +796,8 @@ class Repository:
                 if file_start > chunk.stream_end or file_end < chunk.stream_start:
                     continue
 
-                chunk_lo = max(file_start - chunk.stream_start, 0)
-                chunk_hi = min(file_end, chunk.stream_end) - chunk.stream_start
+                part_start = max(file_start - chunk.stream_start, 0)
+                part_end = min(file_end, chunk.stream_end) - chunk.stream_start
 
                 if file not in snapshot_files:
                     snapshot_files[file] = {
@@ -724,10 +809,8 @@ class Repository:
 
                 snapshot_files[file]['chunks'].append(
                     {
-                        'name': chunk.name,
-                        'start': chunk_lo,
-                        'end': chunk_hi,
-                        'digest': chunk.digest.hex(),
+                        'range': [part_start, part_end],
+                        'index': chunk.index,
                         'counter': chunk.counter,
                     }
                 )
@@ -740,71 +823,73 @@ class Repository:
             bytes_tracker.update(chunk.stream_end - chunk.stream_start)
 
         def _stream_files():
-            with utils.fs.stream_files(files) as stream:
-                for file, source_chunk in stream:
-                    file_range = state.file_ranges[file]
-                    if file_range is not None:
-                        start = file_range[0]
-                    else:
-                        # First chunk from this file
-                        if state.current_file is not None:
-                            # Produce padding for the previous file
-                            # TODO: let the chunker generate the padding?
-                            if alignment := self.props.chunker.alignment:
-                                cstart, cend = state.file_ranges[state.current_file]
-                                if padding_length := -(cend - cstart) % alignment:
-                                    state.bytes_with_padding += padding_length
-                                    yield bytes(padding_length)
+            for file, source_chunk in utils.fs.stream_files(files):
+                file_range = state.file_ranges[file]
+                if file_range is not None:
+                    start = file_range[0]
+                else:
+                    # First chunk from this file
+                    if state.current_file is not None:
+                        # Produce padding for the previous file
+                        # TODO: let the chunker generate the padding?
+                        if alignment := self.props.chunker.alignment:
+                            cstart, cend = state.file_ranges[state.current_file]
+                            if padding_length := -(cend - cstart) % alignment:
+                                state.bytes_with_padding += padding_length
+                                yield bytes(padding_length)
 
-                            logger.debug(
-                                'Finished streaming file %r', str(state.current_file)
-                            )
-                            state.files_finished.add(state.current_file)
+                        logger.info(
+                            'Finished streaming file %r', str(state.current_file)
+                        )
+                        state.files_finished.add(state.current_file)
 
-                        logger.debug('Started streaming file %r', str(file))
-                        state.current_file = file
-                        start = state.bytes_with_padding
+                    logger.info('Started streaming file %r', str(file))
+                    state.current_file = file
+                    start = state.bytes_with_padding
 
-                    state.bytes_with_padding += len(source_chunk)
-                    state.file_ranges[file] = (start, state.bytes_with_padding)
-                    yield source_chunk
+                state.bytes_with_padding += len(source_chunk)
+                state.file_ranges[file] = (start, state.bytes_with_padding)
+                yield source_chunk
 
             if state.current_file is not None:
-                logger.debug(
+                logger.info(
                     'Finished streaming file %r (last)', str(state.current_file)
                 )
                 state.files_finished.add(state.current_file)
 
         def _chunk_producer(queue_timeout=0.025):
-            # Will run in a different thread, since most of these actions release GIL
-            for output_chunk in self.props.chunker(
-                _stream_files(), params=self.props.chunker_params
-            ):
+            # Will run in a different thread, because most of these actions release GIL
+            for output_chunk in self.props.chunkify(_stream_files()):
                 state.chunk_counter += 1
                 stream_start = state.bytes_chunked
                 state.bytes_chunked += len(output_chunk)
                 digest = self.props.hash_digest(output_chunk)
 
+                try:
+                    index = chunks_table[digest]
+                except KeyError:
+                    index = chunks_table[digest] = len(chunks_table)
+                    logger.info('Added digest %s to the table (I=%d)', digest, index)
+
                 if self.props.encrypted:
                     encrypted_contents = self.props.encrypt(
-                        output_chunk, self.props.derive_shared_key(digest)
+                        output_chunk, self.props.derive_shared_subkey(digest)
                     )
-                    name = self.props.mac(digest).hex()
                 else:
                     encrypted_contents = output_chunk
-                    name = digest.hex()
 
-                chunk = _Chunk(
+                chunk = _SnapshotChunk(
                     contents=encrypted_contents,
-                    digest=digest,
-                    name=name,
+                    index=index,
+                    location=self._chunk_digest_to_location(digest),
                     counter=state.chunk_counter,
                     stream_start=stream_start,
                     stream_end=stream_start + len(output_chunk),
                 )
+
                 while True:
                     if abort.is_set():
-                        logging.debug('Stopping chunk producer')
+                        logging.info('Stopping chunk producer')
                         return
 
                     try:
@@ -824,14 +909,20 @@ class Repository:
 
                 slot = await self._slots.get()
                 try:
-                    if await self.as_coroutine(
-                        self.backend.exists, self.chunk_name_to_location(chunk.name)
-                    ):
-                        logger.info('Will reuse existing chunk %s', chunk.name)
+                    exists = await self.as_coroutine(
+                        self.backend.exists, chunk.location
+                    )
+                    logger.info(
+                        'Processing chunk #%d, exists=%s, I=%d, L=%s',
+                        chunk.counter,
+                        exists,
+                        chunk.index,
+                        chunk.location,
+                    )
+                    if exists:
                         _chunk_done(chunk)
                         state.bytes_reused += chunk.stream_end - chunk.stream_start
                     else:
-                        logger.info('Will upload new chunk %s', chunk.name)
                         io_wrapper = _TrackedBytesIO(
                             chunk.contents,
                             desc=f'Chunk #{chunk.counter:06}',
@@ -841,7 +932,7 @@ class Repository:
                         )
                         await self.as_coroutine(
                             self.backend.upload,
-                            self.chunk_name_to_location(chunk.name),
+                            chunk.location,
                             io_wrapper,
                         )
                         _chunk_done(chunk)
@@ -852,13 +943,14 @@ class Repository:
             ThreadPoolExecutor(max_workers=1, thread_name_prefix='chunk-producer'),
             _chunk_producer,
         )
-        try:
-            await asyncio.gather(*(_worker() for _ in range(self._concurrent)))
-        except BaseException:
-            abort.set()
-            raise
-        finally:
-            await chunk_producer
+        with bytes_tracker, finished_tracker:
+            try:
+                await asyncio.gather(*(_worker() for _ in range(self._concurrent)))
+            except BaseException:
+                abort.set()
+                raise
+            finally:
+                await chunk_producer
 
         now = datetime.utcnow()
         snapshot_data = {
@@ -869,31 +961,44 @@ class Repository:
         if note is not None:
             snapshot_data['note'] = note
 
+        snapshot_body = {'chunks': list(chunks_table), 'data': snapshot_data}
         logger.debug(
-            'Generated snashot: %s',
+            'Generated snapshot: %s',
             json.dumps(
-                snapshot_data,
+                snapshot_body,
                 indent=4,
                 sort_keys=True,
                 default=self.default_serialization_hook,
             ),
         )
-        if self.props.encrypted:
-            encrypted_snapshot = self.props.encrypt(
-                self.serialize(snapshot_data), self.props.userkey
-            )
-        else:
-            encrypted_snapshot = self.serialize(snapshot_data)
 
-        snapshot_name = self.props.hash_digest(encrypted_snapshot).hex()
+        if self.props.encrypted:
+            encrypted_private_data = self.props.encrypt(
+                self.serialize(snapshot_body['data']), self.props.userkey
+            )
+            encrypted_snapshot_body = {
+                'chunks': self.props.encrypt(
+                    self.serialize(snapshot_body['chunks']),
+                    self.props.derive_shared_subkey(
+                        self.props.hash_digest(encrypted_private_data)
+                    ),
+                ),
+                'data': encrypted_private_data,
+            }
+        else:
+            encrypted_snapshot_body = snapshot_body
+
+        serialized_snapshot = self.serialize(encrypted_snapshot_body)
+        digest = self.props.hash_digest(serialized_snapshot)
+        name, tag = self._snapshot_digest_to_location_parts(digest)
+        location = self.get_snapshot_location(name=name, tag=tag)
+
+        print(ef.bold + f'Uploading snapshot {name}' + ef.rs)
         await self.as_coroutine(
             self.backend.upload,
-            self.snapshot_name_to_location(snapshot_name),
-            encrypted_snapshot,
+            location,
+            serialized_snapshot,
         )
-
-        bytes_tracker.close()
-        finished_tracker.close()
 
         if state.bytes_reused:
             print(
@@ -903,7 +1008,13 @@ class Repository:
                 flush=True,
             )
 
-        return utils.DefaultNamespace(name=snapshot_name, data=snapshot_data)
+        return utils.DefaultNamespace(
+            name=name,
+            tag=tag,
+            location=location,
+            chunks=snapshot_body['chunks'],
+            data=snapshot_body['data'],
+        )
 
     async def restore(self, *, snapshot_regex=None, files_regex=None, path=None):
         if path is None:
@@ -914,10 +1025,10 @@ class Repository:
         logger.info("Will restore files to %s", path)
 
         snapshots_mapping = await self._load_snapshots(snapshot_regex=snapshot_regex)
-        snapshots = [x for x in snapshots_mapping.values() if x is not None]
-        snapshots.sort(key=lambda x: x['utc_timestamp'], reverse=True)
+        snapshots = [x for x in snapshots_mapping.values() if x['data'] is not None]
+        snapshots.sort(key=lambda x: x['data']['utc_timestamp'], reverse=True)
 
-        chunk_mapping = {}
+        chunks_references = {}
         executor = ThreadPoolExecutor(
             max_workers=self._concurrent * 5, thread_name_prefix='file-writer'
         )
@@ -957,27 +1068,26 @@ class Repository:
         async def _worker():
             while True:
                 try:
-                    name, data = chunk_mapping.popitem()
+                    digest, refs = chunks_references.popitem()
                 except KeyError:
                     break
 
                 slot = await self._slots.get()
                 try:
-                    logger.info('Downloading chunk %s', name)
-                    contents = await self.as_coroutine(
-                        self.backend.download, self.chunk_name_to_location(name)
-                    )
-                    digest = data.digest
+                    location = self._chunk_digest_to_location(digest)
+                    logger.info('Downloading chunk L=%s', location)
+                    contents = await self.as_coroutine(self.backend.download, location)
+
                     if self.props.encrypted:
                         decrypted_contents = self.props.decrypt(
                             contents,
-                            self.props.derive_shared_key(digest),
+                            self.props.derive_shared_subkey(digest),
                         )
                     else:
                         decrypted_contents = contents
 
                     if digest != self.props.hash_digest(decrypted_contents):
-                        raise exceptions.ReplicatError(f'Chunk {name} is corrupted')
+                        raise exceptions.ReplicatError(f'Chunk {location} is corrupted')
 
                     decrypted_view = memoryview(decrypted_contents)
                     await asyncio.gather(
@@ -985,48 +1095,46 @@ class Repository:
                             loop.run_in_executor(
                                 executor, _write_chunk_ref, ref, decrypted_view
                             )
-                            for ref in data.refs
+                            for ref in refs
                         )
                     )
                 finally:
                     self._slots.put_nowait(slot)
 
-        for snapshot_data in snapshots:
+        for snapshot_body in snapshots:
+            snapshot_chunks = snapshot_body['chunks']
+            snapshot_data = snapshot_body['data']
+
             for file_data in snapshot_data['files']:
-                if file_data['path'] in seen_files:
+                if (file_path := file_data['path']) in seen_files:
                     continue
 
                 if files_regex is not None:
-                    if re.search(files_regex, file_data['path']) is None:
+                    if re.search(files_regex, file_path) is None:
                         continue
 
-                restore_to = Path(path, *Path(file_data['path']).parts[1:]).resolve()
+                restore_to = Path(path, *Path(file_path).parts[1:]).resolve()
                 ordered_chunks = sorted(file_data['chunks'], key=lambda x: x['counter'])
                 chunk_position = 0
 
                 for chunk_data in ordered_chunks:
-                    try:
-                        data = chunk_mapping[chunk_data['name']]
-                    except KeyError:
-                        new = utils.DefaultNamespace(
-                            digest=bytes.fromhex(chunk_data['digest']), refs=[]
-                        )
-                        data = chunk_mapping[chunk_data['name']] = new
-
-                    chunk_size = chunk_data['end'] - chunk_data['start']
-                    data.refs.append(
+                    chunk_range = chunk_data['range']
+                    chunk_size = chunk_range[1] - chunk_range[0]
+                    digest = snapshot_chunks[chunk_data['index']]
+                    refs = chunks_references.setdefault(digest, [])
+                    refs.append(
                         utils.DefaultNamespace(
                             path=restore_to,
                             stream_start=chunk_position,
                             stream_end=chunk_position + chunk_size,
-                            start=chunk_data['start'],
-                            end=chunk_data['end'],
+                            start=chunk_range[0],
+                            end=chunk_range[1],
                         )
                     )
                     chunk_position += chunk_size
 
                 total_bytes += chunk_position
-                seen_files.add(file_data['path'])
+                seen_files.add(file_path)
 
         bytes_tracker = tqdm(
             desc='Data processed',
@@ -1041,6 +1149,120 @@ class Repository:
             await asyncio.gather(*(_worker() for _ in range(self._concurrent)))
 
         return utils.DefaultNamespace(files=list(seen_files))
+
+    async def delete_snapshots(self, snapshots):
+        snapshots_mapping = await self._load_snapshots()
+        chunks_digests = set()
+        snapshots_locations = set()
+        remaining_names = set(snapshots)
+
+        for location in list(snapshots_mapping):
+            name = self.parse_snapshot_location(location).name
+            if name in remaining_names:
+                body = snapshots_mapping[location]
+                if body['data'] is None:
+                    raise exceptions.ReplicatError(
+                        f'Cannot delete snapshot {name} (different key)'
+                    )
+
+                chunks_digests.update(body['chunks'])
+                snapshots_locations.add(location)
+                remaining_names.discard(name)
+
+        if remaining_names:
+            raise exceptions.ReplicatError(
+                f'Snapshots {", ".join(remaining_names)} are not available'
+            )
+
+        for location, body in snapshots_mapping.items():
+            if location not in snapshots_locations:
+                chunks_digests.difference_update(body['chunks'])
+
+        finished_snapshots_tracker = tqdm(
+            desc='Snapshots deleted',
+            unit='',
+            total=len(snapshots_locations),
+            position=0,
+            disable=not self._progress,
+            leave=True,
+        )
+        finished_chunks_tracker = tqdm(
+            desc='Unreferenced chunks deleted',
+            unit='',
+            total=len(chunks_digests),
+            position=1,
+            disable=not self._progress,
+            leave=True,
+        )
+
+        async def _delete_snapshot(location):
+            slot = await self._slots.get()
+            try:
+                await self.as_coroutine(self.backend.delete, location)
+                finished_snapshots_tracker.update()
+            finally:
+                self._slots.put_nowait(slot)
+
+        async def _delete_chunk(digest):
+            slot = await self._slots.get()
+            try:
+                await self.as_coroutine(
+                    self.backend.delete, self._chunk_digest_to_location(digest)
+                )
+                finished_chunks_tracker.update()
+            finally:
+                self._slots.put_nowait(slot)
+
+        with finished_snapshots_tracker:
+            await asyncio.gather(*map(_delete_snapshot, snapshots_locations))
+
+        with finished_chunks_tracker:
+            await asyncio.gather(*map(_delete_chunk, chunks_digests))
+
+    async def clean(self):
+        to_delete = set()
+
+        for location in await self.as_coroutine(
+            self.backend.list_files, self.CHUNK_PREFIX
+        ):
+            if self.props.encrypted:
+                name, tag = self.parse_chunk_location(location)
+                if self.props.mac(bytes.fromhex(name)) != bytes.fromhex(tag):
+                    continue
+
+            to_delete.add(location)
+
+        snapshots_mapping = await self._load_snapshots()
+        referenced_digests = {
+            y for x in snapshots_mapping.values() for y in x['chunks']
+        }
+        to_delete.difference_update(
+            map(self._chunk_digest_to_location, referenced_digests)
+        )
+
+        if not to_delete:
+            print('Nothing to do')
+            return
+
+        finished_tracker = tqdm(
+            desc='Unreferenced chunks deleted',
+            unit='',
+            total=len(to_delete),
+            position=0,
+            disable=not self._progress,
+            leave=True,
+        )
+
+        async def _delete_chunk(location):
+            slot = await self._slots.get()
+            try:
+                await self.as_coroutine(self.backend.delete, location)
+                finished_tracker.update()
+            finally:
+                self._slots.put_nowait(slot)
+
+        with finished_tracker:
+            await asyncio.gather(*map(_delete_chunk, to_delete))
 
     async def close(self):
         # Closes associated resources

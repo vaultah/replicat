@@ -1,5 +1,5 @@
 import asyncio
-import os
+import random
 import threading
 import time
 from base64 import standard_b64encode
@@ -144,13 +144,19 @@ def test_flat_to_nested():
 def test_type_hint_bytestring():
     raw = b'<bytes>'
     serialized = utils.type_hint(raw)
-    assert serialized == {'!bytes': str(standard_b64encode(raw), 'ascii')}
+    assert serialized == {'!b': str(standard_b64encode(raw), 'ascii')}
 
 
-def test_type_hint_reverse_bytestring():
-    serialized = {'!bytes': str(standard_b64encode(b'<bytes>'), 'ascii')}
+def test_type_hint_reverse_valid_bytestring():
+    serialized = {'!b': str(standard_b64encode(b'<bytes>'), 'ascii')}
     deserialized = utils.type_reverse(serialized)
     assert deserialized == b'<bytes>'
+
+
+def test_type_hint_reverse_invalid():
+    serialized = {'!b': str(standard_b64encode(b'<bytes>'), 'ascii'), 'more': 'data'}
+    deserialized = utils.type_reverse(serialized)
+    assert deserialized == serialized
 
 
 def test_safe_kwargs():
@@ -279,17 +285,16 @@ def test_parse_unknown_args():
 
 def test_stream_files(tmp_path):
     mapping = {
-        tmp_path / 'a': os.urandom(0),
-        tmp_path / 'b': os.urandom(1447),
-        tmp_path / 'c': os.urandom(29),
-        tmp_path / 'd': os.urandom(13),
+        tmp_path / 'a': b'',
+        tmp_path / 'b': random.randbytes(1_447),
+        tmp_path / 'c': random.randbytes(29),
+        tmp_path / 'd': random.randbytes(13),
     }
     for path, contents in mapping.items():
         path.write_bytes(contents)
 
-    with utils.fs.stream_files(list(mapping), chunk_size=2048) as streamer:
-        pairs = list(streamer)
-
+    pairs = list(utils.fs.stream_files(list(mapping), chunk_size=2_048))
     assert len(pairs) == 4
+
     stream_mapping = dict(pairs)
     assert stream_mapping == mapping

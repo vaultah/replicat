@@ -16,9 +16,9 @@ def test_list_hide(local_backend):
     # ... except this one ("not a directory")
     assert list(local_backend.list_files('abc/def/ghi/')) == []
 
-    local_backend.hide_file(file)
-    # We should see it anyway
-    assert list(local_backend.list_files()) == [file + '_']
+    local_backend.delete(file)
+    # No longer visible
+    assert list(local_backend.list_files()) == []
 
     dotfile = 'jkl/.mno'
     local_backend.upload(dotfile, b'')
