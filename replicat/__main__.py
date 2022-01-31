@@ -22,6 +22,9 @@ async def _cmd_handler(args, unknown):
             settings=settings,
             key_output_path=args.key_output_file,
         )
+    elif args.action == 'benchmark':
+        settings = utils.flat_to_nested(utils.parse_unknown_args(unknown))
+        await repository.benchmark(args.name, settings=settings)
     else:
         await repository.unlock(password=args.password, key=args.key)
         if args.action == 'add-key':

@@ -190,6 +190,9 @@ def make_main_parser(*parent_parsers):
     delete_parser.add_argument('snapshot', nargs='+')
 
     subparsers.add_parser('clean', parents=parent_parsers)
+
+    benchmark_parser = subparsers.add_parser('benchmark', parents=parent_parsers)
+    benchmark_parser.add_argument('name')
     return parser
 
 
@@ -279,7 +282,7 @@ def human_to_bytes(value):
     return int(bytes_amount)
 
 
-def bytes_to_human(value):
+def bytes_to_human(value, prec=2):
     if value < 1_000:
         divisor, unit = 1, 'B'
     elif 1_000 <= value < 1_000 ** 2:
@@ -289,7 +292,7 @@ def bytes_to_human(value):
     else:
         divisor, unit = 1_000 ** 3, 'G'
 
-    return f'{round(value / divisor, 2):g}{unit}'
+    return f'{round(value / divisor, prec):g}{unit}'
 
 
 def guess_type(value):

@@ -14,8 +14,10 @@ import time
 from collections import namedtuple
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
+from decimal import Decimal
 from functools import cached_property
 from pathlib import Path
+from random import Random
 from typing import Any, Dict, Optional
 
 from sty import ef
@@ -656,7 +658,7 @@ class Repository:
 
         print(*formatted_headers)
         for row in rows:
-            print(*(value.ljust(columns_widths[col]) for col, value in row.items()))
+            print(*(value.rjust(columns_widths[col]) for col, value in row.items()))
 
     def _format_file_snapshot_date(
         self, *, snapshot_path, snapshot_chunks, snapshot_data, file_data
@@ -733,7 +735,7 @@ class Repository:
 
         print(*formatted_headers)
         for _, row in files:
-            print(*(value.ljust(columns_widths[col]) for col, value in row.items()))
+            print(*(value.rjust(columns_widths[col]) for col, value in row.items()))
 
     async def snapshot(self, *, paths, note=None, rate_limit=None):
         files = []
@@ -1273,6 +1275,45 @@ class Repository:
         print(ef.bold + 'Running post-deletion cleanup' + ef.rs)
         await self.as_coroutine(self.backend.clean)
 
+    def _benchmark_chunker(self, adapter, number=10_000, size=1_000_000):
+        prep_time = 0
+
+        def _stream(seed=0):
+            nonlocal prep_time
+            method = Random(seed).randbytes
+            for _ in range(number):
+                start = time.perf_counter_ns()
+                value = method(size)
+                prep_time += time.perf_counter_ns() - start
+                yield value
+
+        stream = _stream()
+        start = time.perf_counter_ns()
+        processed_bytes = sum(map(len, adapter(stream)))
+        elapsed = Decimal(time.perf_counter_ns() - start - prep_time).scaleb(-9)
+        rate = processed_bytes / elapsed
+        print(
+            ef.bold + f'Processed {utils.bytes_to_human(processed_bytes, 3)} '
+            f'in {elapsed:.3f} seconds ({utils.bytes_to_human(rate, 3)}/s)' + ef.rs
+        )
+
+    async def benchmark(self, name, settings=None):
+        logger.info('Using provided settings: %r', settings)
+        if settings is None:
+            settings = {}
+
+        adapter_type, adapter_args = utils.adapter_from_config(name=name, **settings)
+        adapter = adapter_type(**adapter_args)
+        argument_string = ', '.join(
+            f'{name}={value!r}' for name, value in adapter_args.items()
+        )
+        print(ef.bold + f'Benchmarking {name}({argument_string})' + ef.rs)
+
+        if isinstance(adapter, ChunkerAdapter):
+            self._benchmark_chunker(adapter)
+        else:
+            raise RuntimeError('Sorry, not yet')
+
     async def close(self):
         # Closes associated resources
         if inspect.iscoroutinefunction(self.backend.close):
@@ -1280,4 +1321,7 @@ class Repository:
         else:
             self.backend.close()
 
-        del self.props
+        try:
+            del self.props
+        except AttributeError:
+            pass
