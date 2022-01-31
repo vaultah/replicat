@@ -1153,6 +1153,7 @@ class Repository:
         return utils.DefaultNamespace(files=list(seen_files))
 
     async def delete_snapshots(self, snapshots):
+        # TODO: locking
         snapshots_mapping = await self._load_snapshots()
         chunks_digests = set()
         snapshots_locations = set()
@@ -1222,6 +1223,7 @@ class Repository:
             await asyncio.gather(*map(_delete_chunk, chunks_digests))
 
     async def clean(self):
+        # TODO: locking
         to_delete = set()
 
         for location in await self.as_coroutine(
