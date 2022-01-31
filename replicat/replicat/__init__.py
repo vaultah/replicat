@@ -41,3 +41,7 @@ class Backend(abc.ABC):
     async def close(self):
         """Either async or plain function"""
         pass
+
+    async def clean(self):
+        """Either async or plain function"""
+        pass

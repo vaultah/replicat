@@ -76,5 +76,24 @@ class Local(Backend):
     def delete(self, name):
         (self.path / name).unlink(missing_ok=True)
 
+    def _find_deletable(self, start):
+        with os.scandir(start) as it:
+            for entry in it:
+                if entry.is_dir():
+                    empty = True
+                    for subentry, subempty in self._find_deletable(entry.path):
+                        yield subentry, subempty
+                        if not subempty:
+                            empty = False
+                else:
+                    empty = False
+
+                yield entry, empty
+
+    def clean(self):
+        for entry, empty in self._find_deletable(self.path):
+            if empty:
+                os.rmdir(entry)
+
 
 Client = Local

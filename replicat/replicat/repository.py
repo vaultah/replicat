@@ -674,7 +674,9 @@ class Repository:
     ):
         return len(file_data['chunks'])
 
-    def _format_file_size(self, *, snapshot_path, snapshot_data, file_data):
+    def _format_file_size(
+        self, *, snapshot_path, snapshot_chunks, snapshot_data, file_data
+    ):
         ranges_it = (cd['range'] for cd in file_data['chunks'])
         return utils.bytes_to_human(sum(r[1] - r[0] for r in ranges_it))
 
@@ -1263,6 +1265,9 @@ class Repository:
 
         with finished_tracker:
             await asyncio.gather(*map(_delete_chunk, to_delete))
+
+        print(ef.bold + 'Running post-deletion cleanup' + ef.rs)
+        await self.as_coroutine(self.backend.clean)
 
     async def close(self):
         # Closes associated resources

@@ -42,3 +42,29 @@ def test_exists(local_backend):
     assert not local_backend.exists(file)
     local_backend.upload(file, b'')
     assert local_backend.exists(file)
+
+
+def test_clean(local_backend):
+    (local_backend.path / 'A/B/C/D').mkdir(parents=True)
+    (local_backend.path / 'A/B/C/D/somefile').touch()
+    (local_backend.path / 'A/B/C/E').mkdir()
+
+    (local_backend.path / 'A/B/K').mkdir()
+    (local_backend.path / 'A/B/K/differentfile').touch()
+    (local_backend.path / 'A/B/L').mkdir()
+    (local_backend.path / 'A/B/M').mkdir()
+
+    (local_backend.path / 'X').mkdir()
+    (local_backend.path / 'Y').mkdir()
+    (local_backend.path / 'Y/yetanotherfile').touch()
+
+    before_deletion = set(local_backend.path.rglob('*'))
+
+    local_backend.clean()
+
+    assert before_deletion - set(local_backend.path.rglob('*')) == {
+        local_backend.path / 'X',
+        local_backend.path / 'A/B/M',
+        local_backend.path / 'A/B/L',
+        local_backend.path / 'A/B/C/E',
+    }
