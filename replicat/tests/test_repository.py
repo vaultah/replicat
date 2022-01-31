@@ -14,34 +14,36 @@ from replicat.utils import adapters
 
 class TestHelperMethods:
     def test_get_chunk_location(self, local_repo):
-        location = local_repo.get_chunk_location(name='ABCDEFGHIJKL', tag='0123456789')
+        location = local_repo.get_chunk_location(
+            name='CDEFGHIJKLMN', tag='0123456789AB'
+        )
         assert location == posixpath.join(
-            local_repo.CHUNK_PREFIX, '01/23/45/67/89/ABCDEFGHIJKL'
+            local_repo.CHUNK_PREFIX, '0123/4567/89AB/CDEFGHIJKLMN'
         )
 
     def test_parse_chunk_location(self, local_repo):
         location = posixpath.join(
-            local_repo.CHUNK_PREFIX, '01/23/45/67/89/ABCDEFGHIJKL'
+            local_repo.CHUNK_PREFIX, '0123/4567/89AB/CDEFGHIJKLMN'
         )
         name, tag = local_repo.parse_chunk_location(location)
-        assert name == 'ABCDEFGHIJKL'
-        assert tag == '0123456789'
+        assert name == 'CDEFGHIJKLMN'
+        assert tag == '0123456789AB'
 
     def test_get_snapshot_location(self, local_repo):
         location = local_repo.get_snapshot_location(
-            name='ABCDEFGHIJKL', tag='0123456789'
+            name='CDEFGHIJKLMN', tag='0123456789AB'
         )
         assert location == posixpath.join(
-            local_repo.SNAPSHOT_PREFIX, '01/23/45/67/89/ABCDEFGHIJKL'
+            local_repo.SNAPSHOT_PREFIX, '0123/4567/89AB/CDEFGHIJKLMN'
         )
 
     def test_parse_snapshot_location(self, local_repo):
         location = posixpath.join(
-            local_repo.SNAPSHOT_PREFIX, '01/23/45/67/89/ABCDEFGHIJKL'
+            local_repo.SNAPSHOT_PREFIX, '0123/4567/89AB/CDEFGHIJKLMN'
         )
         name, tag = local_repo.parse_snapshot_location(location)
-        assert name == 'ABCDEFGHIJKL'
-        assert tag == '0123456789'
+        assert name == 'CDEFGHIJKLMN'
+        assert tag == '0123456789AB'
 
 
 class TestInit:

@@ -223,8 +223,8 @@ class Repository:
         """Build POSIX-style storage path for the chunk using its name and tag"""
         parts = [self.CHUNK_PREFIX]
         # Encode the tag into the chunk path for easier ownership verification
-        for i in range(0, len(tag), 2):
-            parts.append(tag[i : i + 2])
+        for i in range(0, len(tag), 4):
+            parts.append(tag[i : i + 4])
         parts.append(name)
         return posixpath.join(*parts)
 
@@ -254,8 +254,8 @@ class Repository:
         """Build POSIX-style storage path for the snapshot using its name and tag"""
         parts = [self.SNAPSHOT_PREFIX]
         # Encode the tag into the snapshot path for easier ownership verification
-        for i in range(0, len(tag), 2):
-            parts.append(tag[i : i + 2])
+        for i in range(0, len(tag), 4):
+            parts.append(tag[i : i + 4])
         parts.append(name)
         return posixpath.join(*parts)
 
@@ -1228,8 +1228,10 @@ class Repository:
             self.backend.list_files, self.CHUNK_PREFIX
         ):
             if self.props.encrypted:
+                logger.info('Validating tag for %s', location)
                 name, tag = self.parse_chunk_location(location)
                 if self.props.mac(bytes.fromhex(name)) != bytes.fromhex(tag):
+                    logger.info('Tag for %s did not match, skipping', location)
                     continue
 
             to_delete.add(location)
