@@ -36,32 +36,6 @@ logger = logging.getLogger(__name__)
 LocationParts = namedtuple('LocationParts', ['name', 'tag'])
 
 
-class _RateLimiter:
-    def __init__(self, limit):
-        self.lock = threading.Lock()
-        self.limit = limit
-        self.checkpoint = None
-        self.bytes_since_checkpoint = None
-
-    def available(self):
-        with self.lock:
-            checkpoint = int(time.monotonic())
-            if self.checkpoint is None or self.checkpoint < checkpoint:
-                self.bytes_since_checkpoint = 0
-                self.checkpoint = checkpoint
-
-            return self.limit - self.bytes_since_checkpoint
-
-    def consumed(self, bytes_amount):
-        with self.lock:
-            checkpoint = int(time.monotonic())
-            if self.checkpoint is None or self.checkpoint < checkpoint:
-                self.bytes_since_checkpoint = bytes_amount
-                self.checkpoint = checkpoint
-            else:
-                self.bytes_since_checkpoint += bytes_amount
-
-
 @dataclasses.dataclass(frozen=True)
 class _SnapshotChunk:
     contents: bytes
@@ -70,57 +44,6 @@ class _SnapshotChunk:
     stream_start: int
     stream_end: int
     counter: int
-
-
-class _tqdmbytesio(io.BytesIO):
-    def __init__(self, initial_bytes=b'', *, desc, position, disable, rate_limiter):
-        super().__init__(initial_bytes)
-        self._rate_limiter = rate_limiter
-        self._tracker = tqdm(
-            desc=desc,
-            unit='B',
-            total=len(self),
-            unit_scale=True,
-            position=position,
-            disable=disable,
-            leave=False,
-        )
-
-    def read(self, size):
-        if self._rate_limiter is not None:
-            size = min(max(self._rate_limiter.available(), 1), size, 16_384)
-            data = super().read(size)
-            self._rate_limiter.consumed(len(data))
-        else:
-            data = super().read(size)
-
-        if self._tracker is not None:
-            self._tracker.update(len(data))
-
-        return data
-
-    def seek(self, *args, **kwargs):
-        pos = super().seek(*args, **kwargs)
-        if self._tracker is not None:
-            self._tracker.reset()
-            self._tracker.update(pos)
-
-    def write(self, *args, **kwargs):
-        raise NotImplementedError
-
-    def iter_chunks(self, chunk_size=128_000):
-        yield from iter(lambda: self.read(chunk_size), b'')
-
-    def __len__(self):
-        return len(self.getbuffer())
-
-    def __iter__(self):
-        return self.iter_chunks()
-
-    async def __aiter__(self):
-        # For compatibility with httpx
-        for x in self.iter_chunks():
-            yield x
 
 
 @dataclasses.dataclass(repr=False, frozen=True)
@@ -786,7 +709,7 @@ class Repository:
         abort = threading.Event()
 
         if rate_limit is not None:
-            rate_limiter = _RateLimiter(rate_limit)
+            rate_limiter = utils.RateLimiter(rate_limit)
         else:
             rate_limiter = None
 
@@ -926,7 +849,7 @@ class Repository:
                         _chunk_done(chunk)
                         state.bytes_reused += chunk.stream_end - chunk.stream_start
                     else:
-                        iowrapper = _tqdmbytesio(
+                        iowrapper = utils.tqdmbytesio(
                             chunk.contents,
                             desc=f'Chunk #{chunk.counter:06}',
                             position=slot,

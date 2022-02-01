@@ -162,8 +162,11 @@ class B2(Backend):
             )
             response.raise_for_status()
         except BaseException:
-            if isinstance(contents, io.BytesIO):
-                contents.seek(0)
+            if isinstance(contents, io.IOBase):
+                if contents.seekable():
+                    contents.seek(0)
+                else:
+                    raise RuntimeError('Unseekable stream')
             raise
         else:
             return response.json()
