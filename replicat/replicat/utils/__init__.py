@@ -504,7 +504,7 @@ class tqdmbytesio(BytesIO):
         self._tracker = tqdm(
             desc=desc,
             unit='B',
-            total=len(self),
+            total=len(self.getbuffer()),
             unit_scale=True,
             position=position,
             disable=disable,
@@ -519,30 +519,24 @@ class tqdmbytesio(BytesIO):
         else:
             data = super().read(size)
 
-        if self._tracker is not None:
-            self._tracker.update(len(data))
-
+        self._tracker.update(len(data))
         return data
 
     def seek(self, *args, **kwargs):
         pos = super().seek(*args, **kwargs)
-        if self._tracker is not None:
-            self._tracker.reset()
-            self._tracker.update(pos)
+        self._tracker.reset()
+        self._tracker.update(pos)
 
-    def write(self, *args, **kwargs):
-        raise NotImplementedError
+    def __exit__(self, *exc_info):
+        self._tracker.close()
+        return super().__exit__(*exc_info)
 
-    def iter_chunks(self, chunk_size=128_000):
-        yield from iter(lambda: self.read(chunk_size), b'')
 
-    def __len__(self):
-        return len(self.getbuffer())
+def iter_chunks(file, chunk_size=128_000):
+    for chunk in iter(lambda: file.read(chunk_size), b''):
+        yield chunk
 
-    def __iter__(self):
-        return self.iter_chunks()
 
-    async def __aiter__(self):
-        # For compatibility with httpx
-        for x in self.iter_chunks():
-            yield x
+async def aiter_chunks(file, chunk_size=128_000):
+    for chunk in iter_chunks(file, chunk_size=chunk_size):
+        yield chunk

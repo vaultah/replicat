@@ -856,11 +856,13 @@ class Repository:
                             disable=self._quiet,
                             rate_limiter=rate_limiter,
                         )
-                        await self.as_coroutine(
-                            self.backend.upload,
-                            chunk.location,
-                            iowrapper,
-                        )
+                        with iowrapper:
+                            await self.as_coroutine(
+                                self.backend.upload,
+                                chunk.location,
+                                iowrapper,
+                            )
+
                         _chunk_done(chunk)
                 finally:
                     self._slots.put_nowait(slot)

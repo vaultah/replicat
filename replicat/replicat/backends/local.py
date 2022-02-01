@@ -18,7 +18,7 @@ class Local(Backend):
     def exists(self, name):
         return os.path.exists(self.path / name)
 
-    def upload(self, name, contents):
+    def upload(self, name, data):
         destination = self.path / name
         destination.parent.mkdir(parents=True, exist_ok=True)
         # Make sure the temporary is on the same filesystem to make
@@ -31,13 +31,13 @@ class Local(Backend):
                 delete=False,
             ).name
         )
+
         try:
-            if isinstance(contents, io.IOBase):
+            if isinstance(data, io.BytesIO):
                 with temp.open('wb') as file:
-                    shutil.copyfileobj(contents, file)
-                contents._tracker.close()
+                    shutil.copyfileobj(data, file)
             else:
-                temp.write_bytes(contents)
+                temp.write_bytes(data)
 
             temp.replace(destination)
         except BaseException:

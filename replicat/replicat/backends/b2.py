@@ -137,7 +137,7 @@ class B2(Backend):
     @utils.requires_auth
     @backoff_reauth
     @on_error
-    async def upload(self, name, contents):
+    async def upload(self, name, data):
         url = f'{self.auth.apiUrl}/b2api/v{B2_API_VERSION}/b2_get_upload_url'
         bucket_info = await self._get_bucket_info()
         params = {'bucketId': bucket_info.bucketId}
@@ -149,24 +149,30 @@ class B2(Backend):
         upload_url = decoded['uploadUrl']
         upload_token = decoded['authorizationToken']
 
+        if isinstance(data, io.BytesIO):
+            rewind_on_error = True
+            contents = utils.aiter_chunks(data)
+            content_length = len(data.getbuffer())
+        else:
+            rewind_on_error = False
+            contents = data
+            content_length = len(data)
+
         upload_headers = {
             'Authorization': upload_token,
             'X-Bz-File-Name': name,
             'Content-Type': 'application/octet-stream',
-            'Content-Length': str(len(contents)),
+            'Content-Length': str(content_length),
             'X-Bz-Content-Sha1': 'do_not_verify',  # TODO
         }
         try:
             response = await self.client.post(
-                upload_url, headers=upload_headers, data=contents
+                upload_url, headers=upload_headers, content=contents
             )
             response.raise_for_status()
         except BaseException:
-            if isinstance(contents, io.IOBase):
-                if contents.seekable():
-                    contents.seek(0)
-                else:
-                    raise RuntimeError('Unseekable stream')
+            if rewind_on_error:
+                data.seek(0)
             raise
         else:
             return response.json()

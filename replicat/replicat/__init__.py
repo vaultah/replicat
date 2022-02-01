@@ -14,7 +14,7 @@ class Backend(abc.ABC):
         return True
 
     @abc.abstractmethod
-    async def upload(self, name, contents, **ka):
+    async def upload(self, name, data, **ka):
         """Either async or plain function"""
         return None
 
