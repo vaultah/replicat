@@ -72,26 +72,25 @@ class _SnapshotChunk:
     counter: int
 
 
-class _TrackedBytesIO(io.BytesIO):
-    def __init__(self, initial_bytes, *, desc, slot, progress, rate_limiter):
+class _tqdmbytesio(io.BytesIO):
+    def __init__(self, initial_bytes=b'', *, desc, position, disable, rate_limiter):
         super().__init__(initial_bytes)
-        self.initial_bytes = initial_bytes
-        self.rate_limiter = rate_limiter
+        self._rate_limiter = rate_limiter
         self._tracker = tqdm(
             desc=desc,
             unit='B',
-            total=len(initial_bytes),
+            total=len(self),
             unit_scale=True,
-            position=slot,
-            disable=not progress,
+            position=position,
+            disable=disable,
             leave=False,
         )
 
     def read(self, size):
-        if self.rate_limiter is not None:
-            size = min(max(self.rate_limiter.available(), 1), size, 16_384)
+        if self._rate_limiter is not None:
+            size = min(max(self._rate_limiter.available(), 1), size, 16_384)
             data = super().read(size)
-            self.rate_limiter.consumed(len(data))
+            self._rate_limiter.consumed(len(data))
         else:
             data = super().read(size)
 
@@ -113,7 +112,7 @@ class _TrackedBytesIO(io.BytesIO):
         yield from iter(lambda: self.read(chunk_size), b'')
 
     def __len__(self):
-        return len(self.initial_bytes)
+        return len(self.getbuffer())
 
     def __iter__(self):
         return self.iter_chunks()
@@ -180,14 +179,14 @@ class Repository:
     DEFAULT_SHARED_KDF_NAME = 'blake2b'
     EMPTY_TABLE_VALUE = '--'
 
-    def __init__(self, backend, *, concurrent, progress=False):
+    def __init__(self, backend, *, concurrent, quiet=True):
         self._concurrent = concurrent
+        self._quiet = quiet
         self._slots = asyncio.Queue(maxsize=concurrent)
         # We need actual integers for TQDM slot management
         for slot in range(2, concurrent + 2):
             self._slots.put_nowait(slot)
 
-        self._progress = progress
         self.backend = backend
 
     def as_coroutine(self, func, *args, **kwargs):
@@ -771,7 +770,7 @@ class Repository:
             unit_scale=True,
             total=None,
             position=0,
-            disable=not self._progress,
+            disable=self._quiet,
             leave=True,
         )
         finished_tracker = tqdm(
@@ -779,7 +778,7 @@ class Repository:
             unit='',
             total=len(files),
             position=1,
-            disable=not self._progress,
+            disable=self._quiet,
             leave=True,
         )
         loop = asyncio.get_event_loop()
@@ -927,17 +926,17 @@ class Repository:
                         _chunk_done(chunk)
                         state.bytes_reused += chunk.stream_end - chunk.stream_start
                     else:
-                        io_wrapper = _TrackedBytesIO(
+                        iowrapper = _tqdmbytesio(
                             chunk.contents,
                             desc=f'Chunk #{chunk.counter:06}',
-                            slot=slot,
-                            progress=self._progress,
+                            position=slot,
+                            disable=self._quiet,
                             rate_limiter=rate_limiter,
                         )
                         await self.as_coroutine(
                             self.backend.upload,
                             chunk.location,
-                            io_wrapper,
+                            iowrapper,
                         )
                         _chunk_done(chunk)
                 finally:
@@ -1146,7 +1145,7 @@ class Repository:
             unit_scale=True,
             total=total_bytes,
             position=0,
-            disable=not self._progress,
+            disable=self._quiet,
             leave=True,
         )
         with bytes_tracker:
@@ -1188,7 +1187,7 @@ class Repository:
             unit='',
             total=len(snapshots_locations),
             position=0,
-            disable=not self._progress,
+            disable=self._quiet,
             leave=True,
         )
         finished_chunks_tracker = tqdm(
@@ -1196,7 +1195,7 @@ class Repository:
             unit='',
             total=len(chunks_digests),
             position=1,
-            disable=not self._progress,
+            disable=self._quiet,
             leave=True,
         )
 
@@ -1257,7 +1256,7 @@ class Repository:
             unit='',
             total=len(to_delete),
             position=0,
-            disable=not self._progress,
+            disable=self._quiet,
             leave=True,
         )
 
