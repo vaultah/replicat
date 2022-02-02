@@ -1173,11 +1173,22 @@ class Repository:
 
     async def clean(self):
         # TODO: locking
+        snapshots_mapping = await self._load_snapshots()
+        referenced_digests = {
+            y for x in snapshots_mapping.values() for y in x['chunks']
+        }
+        referenced_locations = set(
+            map(self._chunk_digest_to_location, referenced_digests)
+        )
         to_delete = set()
 
         for location in await self._as_coroutine(
             self.backend.list_files, self.CHUNK_PREFIX
         ):
+            if location in referenced_locations:
+                logger.info('Chunk %s is referenced, skipping', location)
+                continue
+
             if self.props.encrypted:
                 logger.info('Validating tag for %s', location)
                 name, tag = self.parse_chunk_location(location)
@@ -1186,14 +1197,6 @@ class Repository:
                     continue
 
             to_delete.add(location)
-
-        snapshots_mapping = await self._load_snapshots()
-        referenced_digests = {
-            y for x in snapshots_mapping.values() for y in x['chunks']
-        }
-        to_delete.difference_update(
-            map(self._chunk_digest_to_location, referenced_digests)
-        )
 
         if not to_delete:
             print('Nothing to do')
