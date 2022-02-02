@@ -1,3 +1,4 @@
+import io
 import posixpath
 import re
 import threading
@@ -559,7 +560,11 @@ class TestSnapshot:
         def upld(name, contents):
             nonlocal bytes_remaining
             with upload_lock:
-                bytes_remaining -= len(contents)
+                if isinstance(contents, io.BytesIO):
+                    length = len(contents.getbuffer())
+                else:
+                    length = len(contents)
+                bytes_remaining -= length
 
             rv = Local.upload(local_backend, name, contents)
             if not bytes_remaining and not name.startswith('snapshots/'):

@@ -540,3 +540,4 @@ def iter_chunks(file, chunk_size=128_000):
 async def aiter_chunks(file, chunk_size=128_000):
     for chunk in iter_chunks(file, chunk_size=chunk_size):
         yield chunk
+        await asyncio.sleep(0)

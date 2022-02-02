@@ -112,13 +112,6 @@ class Repository:
 
         self.backend = backend
 
-    def as_coroutine(self, func, *args, **kwargs):
-        if inspect.iscoroutinefunction(func):
-            return func(*args, **kwargs)
-        else:
-            loop = asyncio.get_event_loop()
-            return loop.run_in_executor(self.executor, func, *args, **kwargs)
-
     @property
     def executor(self):
         """Executor for non-async methods of the backend instance"""
@@ -127,6 +120,13 @@ class Repository:
         except AttributeError:
             self._executor = ThreadPoolExecutor(max_workers=self._concurrent)
             return self._executor
+
+    def _as_coroutine(self, func, *args, **kwargs):
+        if inspect.iscoroutinefunction(func):
+            return func(*args, **kwargs)
+        else:
+            loop = asyncio.get_running_loop()
+            return loop.run_in_executor(self.executor, func, *args, **kwargs)
 
     def default_serialization_hook(self, data, /):
         return utils.type_hint(data)
@@ -363,7 +363,7 @@ class Repository:
         else:
             key = None
 
-        await self.as_coroutine(self.backend.upload, 'config', self.serialize(config))
+        await self._as_coroutine(self.backend.upload, 'config', self.serialize(config))
         self.props = props
         pretty_config = json.dumps(
             config, indent=4, default=self.default_serialization_hook
@@ -377,7 +377,7 @@ class Repository:
 
     async def unlock(self, *, password=None, key=None):
         print(ef.bold + 'Loading config' + ef.rs)
-        data = await self.as_coroutine(self.backend.download, 'config')
+        data = await self._as_coroutine(self.backend.download, 'config')
         config = self.deserialize(data)
         props = RepositoryProps(**self._instantiate_config(config))
 
@@ -452,7 +452,7 @@ class Repository:
             slot = await self._slots.get()
             try:
                 logger.info('Downloading %s', path)
-                contents = await self.as_coroutine(self.backend.download, path)
+                contents = await self._as_coroutine(self.backend.download, path)
             finally:
                 self._slots.put_nowait(slot)
 
@@ -465,7 +465,7 @@ class Repository:
 
             encrypted_snapshots[path] = contents
 
-        for path in await self.as_coroutine(
+        for path in await self._as_coroutine(
             self.backend.list_files, self.SNAPSHOT_PREFIX
         ):
             name, tag = self.parse_snapshot_location(path)
@@ -704,7 +704,7 @@ class Repository:
             disable=self._quiet,
             leave=True,
         )
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         chunk_queue = queue.Queue(maxsize=self._concurrent * 10)
         abort = threading.Event()
 
@@ -835,7 +835,7 @@ class Repository:
 
                 slot = await self._slots.get()
                 try:
-                    exists = await self.as_coroutine(
+                    exists = await self._as_coroutine(
                         self.backend.exists, chunk.location
                     )
                     logger.info(
@@ -857,7 +857,7 @@ class Repository:
                             rate_limiter=rate_limiter,
                         )
                         with iowrapper:
-                            await self.as_coroutine(
+                            await self._as_coroutine(
                                 self.backend.upload,
                                 chunk.location,
                                 iowrapper,
@@ -922,7 +922,7 @@ class Repository:
         location = self.get_snapshot_location(name=name, tag=tag)
 
         print(ef.bold + f'Uploading snapshot {name}' + ef.rs)
-        await self.as_coroutine(
+        await self._as_coroutine(
             self.backend.upload,
             location,
             serialized_snapshot,
@@ -963,7 +963,7 @@ class Repository:
         glock = threading.Lock()
         flocks = {}
         flocks_refcounts = {}
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         seen_files = set()
         total_bytes = 0
 
@@ -1004,7 +1004,7 @@ class Repository:
                 try:
                     location = self._chunk_digest_to_location(digest)
                     logger.info('Downloading chunk L=%s', location)
-                    contents = await self.as_coroutine(self.backend.download, location)
+                    contents = await self._as_coroutine(self.backend.download, location)
 
                     if self.props.encrypted:
                         decrypted_contents = self.props.decrypt(
@@ -1127,7 +1127,7 @@ class Repository:
         async def _delete_snapshot(location):
             slot = await self._slots.get()
             try:
-                await self.as_coroutine(self.backend.delete, location)
+                await self._as_coroutine(self.backend.delete, location)
                 finished_snapshots_tracker.update()
             finally:
                 self._slots.put_nowait(slot)
@@ -1135,7 +1135,7 @@ class Repository:
         async def _delete_chunk(digest):
             slot = await self._slots.get()
             try:
-                await self.as_coroutine(
+                await self._as_coroutine(
                     self.backend.delete, self._chunk_digest_to_location(digest)
                 )
                 finished_chunks_tracker.update()
@@ -1152,7 +1152,7 @@ class Repository:
         # TODO: locking
         to_delete = set()
 
-        for location in await self.as_coroutine(
+        for location in await self._as_coroutine(
             self.backend.list_files, self.CHUNK_PREFIX
         ):
             if self.props.encrypted:
@@ -1188,7 +1188,7 @@ class Repository:
         async def _delete_chunk(location):
             slot = await self._slots.get()
             try:
-                await self.as_coroutine(self.backend.delete, location)
+                await self._as_coroutine(self.backend.delete, location)
                 finished_tracker.update()
             finally:
                 self._slots.put_nowait(slot)
@@ -1197,7 +1197,7 @@ class Repository:
             await asyncio.gather(*map(_delete_chunk, to_delete))
 
         print(ef.bold + 'Running post-deletion cleanup' + ef.rs)
-        await self.as_coroutine(self.backend.clean)
+        await self._as_coroutine(self.backend.clean)
 
     def _benchmark_chunker(self, adapter, number=10_000, size=1_000_000):
         prep_time = 0
