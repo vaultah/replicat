@@ -13,27 +13,29 @@ async def _cmd_handler(args, unknown):
     backend = backend_type(connection_string, **backend_params)
     repository = Repository(backend, concurrent=args.concurrent, quiet=args.quiet)
 
+    settings = utils.flat_to_nested(utils.parse_unknown_args(unknown))
+
     if args.action == 'init':
-        settings = utils.flat_to_nested(utils.parse_unknown_args(unknown))
         await repository.init(
             password=args.password,
             settings=settings,
             key_output_path=args.key_output_file,
         )
     elif args.action == 'benchmark':
-        settings = utils.flat_to_nested(utils.parse_unknown_args(unknown))
         await repository.benchmark(args.name, settings=settings)
+    elif args.action == 'add-key':
+        if args.shared:
+            await repository.unlock(password=args.password, key=args.key)
+
+        await repository.add_key(
+            password=args.new_password,
+            settings=settings,
+            key_output_path=args.key_output_file,
+            shared=args.shared,
+        )
     else:
         await repository.unlock(password=args.password, key=args.key)
-        if args.action == 'add-key':
-            settings = utils.flat_to_nested(utils.parse_unknown_args(unknown))
-            await repository.add_key(
-                password=args.new_password,
-                settings=settings,
-                key_output_path=args.key_output_file,
-                shared=args.shared,
-            )
-        elif args.action == 'snapshot':
+        if args.action == 'snapshot':
             await repository.snapshot(
                 paths=args.path, note=args.note, rate_limit=args.rate_limit
             )

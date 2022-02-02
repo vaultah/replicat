@@ -128,6 +128,10 @@ class Repository:
             loop = asyncio.get_running_loop()
             return loop.run_in_executor(self.executor, func, *args, **kwargs)
 
+    @property
+    def _unlocked(self):
+        return hasattr(self, 'props')
+
     def default_serialization_hook(self, data, /):
         return utils.type_hint(data)
 
@@ -375,11 +379,14 @@ class Repository:
         )
         return utils.DefaultNamespace(config=config, key=key)
 
-    async def unlock(self, *, password=None, key=None):
+    async def _load_config(self):
         print(ef.bold + 'Loading config' + ef.rs)
         data = await self._as_coroutine(self.backend.download, 'config')
         config = self.deserialize(data)
-        props = RepositoryProps(**self._instantiate_config(config))
+        return RepositoryProps(**self._instantiate_config(config))
+
+    async def unlock(self, *, password=None, key=None):
+        props = await self._load_config()
 
         if props.encrypted:
             print(ef.bold + 'Unlocking repository' + ef.rs)
@@ -399,32 +406,19 @@ class Repository:
 
         self.props = props
 
-    async def add_key(
-        self, *, password, settings=None, shared=False, key_output_path=None
-    ):
-        if not self.props.encrypted:
-            raise exceptions.ReplicatError('Repository is not encrypted')
-
-        if password is None:
-            raise exceptions.ReplicatError(
-                'The password is required to generate a new key'
-            )
-
+    async def _add_key(self, *, password, settings, props, private, key_output_path):
         logger.info('Using provided settings: %r', settings)
-        private = self.props.private if shared else None
         key = self._make_key(
-            cipher=self.props.cipher,
-            chunker=self.props.chunker,
+            cipher=props.cipher,
+            chunker=props.chunker,
             settings=settings,
             private=private,
         )
-        key_props = self._instantiate_key(
-            key, password=password, cipher=self.props.cipher
-        )
+        key_props = self._instantiate_key(key, password=password, cipher=props.cipher)
 
         # Encrypt the private portion
         logger.debug('Private portion of the new key (unencrypted): %r', key['private'])
-        key['private'] = self.props.encrypt(
+        key['private'] = props.encrypt(
             self.serialize(key['private']),
             key_props['userkey'],
         )
@@ -440,6 +434,35 @@ class Repository:
             )
             print(ef.bold + 'New key:' + ef.rs, pretty_key, sep='\n')
 
+        return key
+
+    async def add_key(
+        self, *, password, settings=None, shared=False, key_output_path=None
+    ):
+        if password is None:
+            raise exceptions.ReplicatError(
+                'The password is required to generate a new key'
+            )
+
+        if shared:
+            if not self._unlocked:
+                raise exceptions.ReplicatError('The repository must be unlocked')
+            props = self.props
+            private = self.props.private
+        else:
+            props = await self._load_config()
+            private = None
+
+        if not props.encrypted:
+            raise exceptions.ReplicatError('Repository is not encrypted')
+
+        key = await self._add_key(
+            password=password,
+            settings=settings,
+            props=props,
+            private=private,
+            key_output_path=key_output_path,
+        )
         return utils.DefaultNamespace(new_key=key)
 
     async def _load_snapshots(self, *, snapshot_regex=None, cache_loaded=True):
