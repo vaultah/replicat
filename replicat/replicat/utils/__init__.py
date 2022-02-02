@@ -12,7 +12,6 @@ import threading
 import time
 import weakref
 from decimal import Decimal
-from io import BytesIO
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Optional
@@ -197,6 +196,12 @@ def make_main_parser(*parent_parsers):
 
     benchmark_parser = subparsers.add_parser('benchmark', parents=parent_parsers)
     benchmark_parser.add_argument('name')
+
+    upload_parser = subparsers.add_parser('upload', parents=parent_parsers)
+    upload_parser.add_argument('path', nargs='+', type=Path)
+    upload_parser.add_argument(
+        '--limit-rate', '-L', dest='rate_limit', type=human_to_bytes
+    )
     return parser
 
 
@@ -489,22 +494,23 @@ class RateLimiter:
                 self.bytes_since_checkpoint += bytes_amount
 
 
-class tqdmbytesio(BytesIO):
+class tqdmio:
     def __init__(
         self,
-        initial_bytes=b'',
+        stream,
         *,
         desc,
+        total,
         position,
         disable,
         rate_limiter: Optional[RateLimiter] = None,
     ):
-        super().__init__(initial_bytes)
+        self._stream = stream
         self._rate_limiter = rate_limiter
         self._tracker = tqdm(
             desc=desc,
             unit='B',
-            total=len(self.getbuffer()),
+            total=total,
             unit_scale=True,
             position=position,
             disable=disable,
@@ -514,22 +520,24 @@ class tqdmbytesio(BytesIO):
     def read(self, size):
         if self._rate_limiter is not None:
             size = min(max(self._rate_limiter.available(), 1), size, 16_384)
-            data = super().read(size)
+            data = self._stream.read(size)
             self._rate_limiter.consumed(len(data))
         else:
-            data = super().read(size)
+            data = self._stream.read(size)
 
         self._tracker.update(len(data))
         return data
 
     def seek(self, *args, **kwargs):
-        pos = super().seek(*args, **kwargs)
+        pos = self._stream.seek(*args, **kwargs)
         self._tracker.reset()
         self._tracker.update(pos)
 
+    def __enter__(self):
+        return self
+
     def __exit__(self, *exc_info):
         self._tracker.close()
-        return super().__exit__(*exc_info)
 
 
 def iter_chunks(file, chunk_size=128_000):

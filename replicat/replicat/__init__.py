@@ -14,17 +14,22 @@ class Backend(abc.ABC):
         return True
 
     @abc.abstractmethod
-    async def upload(self, name, data, **ka):
+    async def upload(self, name, data):
         """Either async or plain function"""
         return None
 
     @abc.abstractmethod
-    async def download(self, name, **ka) -> bytes:
+    async def upload_stream(self, name, stream, length):
+        """Either async or plain function"""
+        return None
+
+    @abc.abstractmethod
+    async def download(self, name) -> bytes:
         """Either async or plain function"""
         return b''
 
     @abc.abstractmethod
-    async def list_files(self, prefix='', **ka):
+    async def list_files(self, prefix=''):
         """Either async or plain function"""
         return None
 

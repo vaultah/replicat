@@ -1,4 +1,3 @@
-import io
 import logging
 import os
 import shutil
@@ -6,7 +5,7 @@ from pathlib import Path
 from tempfile import NamedTemporaryFile
 
 from .. import Backend
-from ..utils.fs import recursive_scandir
+from ..utils.fs import iterative_scandir
 
 logger = logging.getLogger(__name__)
 
@@ -18,7 +17,7 @@ class Local(Backend):
     def exists(self, name):
         return os.path.exists(self.path / name)
 
-    def upload(self, name, data):
+    def _destination_temp(self, name):
         destination = self.path / name
         destination.parent.mkdir(parents=True, exist_ok=True)
         # Make sure the temporary is on the same filesystem to make
@@ -31,14 +30,22 @@ class Local(Backend):
                 delete=False,
             ).name
         )
+        return destination, temp
 
+    def upload(self, name, data):
+        destination, temp = self._destination_temp(name)
         try:
-            if isinstance(data, io.BytesIO):
-                with temp.open('wb') as file:
-                    shutil.copyfileobj(data, file)
-            else:
-                temp.write_bytes(data)
+            temp.write_bytes(data)
+            temp.replace(destination)
+        except BaseException:
+            temp.unlink(missing_ok=True)
+            raise
 
+    def upload_stream(self, name, stream, length):
+        destination, temp = self._destination_temp(name)
+        try:
+            with temp.open('wb') as file:
+                shutil.copyfileobj(stream, file)
             temp.replace(destination)
         except BaseException:
             temp.unlink(missing_ok=True)
@@ -64,14 +71,22 @@ class Local(Backend):
                 if not entry.name.startswith(prefix_basename):
                     continue
 
-                for file in recursive_scandir(entry):
+                if entry.is_dir():
+                    subentries = iterative_scandir(entry)
+                elif entry.is_file():
+                    subentries = [entry]
+                else:
+                    continue
+
+                for path in map(os.fspath, subentries):
                     # Exclude temporary files
-                    if file.endswith('.tmp'):
+                    if path.endswith('.tmp'):
                         continue
 
                     # NOTE: Anything from the standard library seems
                     # like an overkill here
-                    yield file[path_length + 1 :]
+                    path = path.replace(os.sep, '/')
+                    yield path[path_length + 1 :]
 
     def delete(self, name):
         (self.path / name).unlink(missing_ok=True)

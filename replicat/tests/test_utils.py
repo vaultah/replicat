@@ -1,4 +1,5 @@
 import asyncio
+import os
 import random
 import threading
 import time
@@ -298,3 +299,25 @@ def test_stream_files(tmp_path):
 
     stream_mapping = dict(pairs)
     assert stream_mapping == mapping
+
+
+def test_iterative_scandir(tmp_path):
+    (tmp_path / 'A/B/C/D').mkdir(parents=True)
+    (tmp_path / 'A/B/C/D/somefile').touch()
+    (tmp_path / 'A/B/C/E').mkdir()
+
+    (tmp_path / 'A/B/K').mkdir()
+    (tmp_path / 'A/B/K/differentfile').touch()
+    (tmp_path / 'A/B/L').mkdir()
+    (tmp_path / 'A/B/M').mkdir()
+
+    (tmp_path / 'X').mkdir()
+    (tmp_path / 'Y').mkdir()
+    (tmp_path / 'Y/yetanotherfile').touch()
+
+    entries = utils.fs.iterative_scandir(tmp_path)
+    assert sorted(map(os.fspath, entries)) == [
+        str(tmp_path / 'A/B/C/D/somefile'),
+        str(tmp_path / 'A/B/K/differentfile'),
+        str(tmp_path / 'Y/yetanotherfile'),
+    ]

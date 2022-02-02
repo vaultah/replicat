@@ -1,4 +1,5 @@
 import os
+import os.path
 from pathlib import Path
 
 from appdirs import user_cache_dir
@@ -7,27 +8,27 @@ CACHE_DIRECTORY = user_cache_dir('replicat', 'replicat')
 DEFAULT_STREAM_CHUNK_SIZE = 16_777_216
 
 
-def recursive_scandir(start_entry, *, follow_symlinks=False):
-    # Just recursively yield all *files* below `start_entry`
-    if start_entry.is_file(follow_symlinks=follow_symlinks):
-        yield start_entry.path
-    elif start_entry.is_dir(follow_symlinks=follow_symlinks):
-        with os.scandir(start_entry.path) as it:
+def iterative_scandir(path, *, follow_symlinks=False):
+    """Yield *files* under path recursively"""
+    stack = [path]
+
+    while stack:
+        start = stack.pop()
+        with os.scandir(start) as it:
             for entry in it:
-                yield from recursive_scandir(entry, follow_symlinks=follow_symlinks)
+                if entry.is_dir(follow_symlinks=follow_symlinks):
+                    stack.append(entry)
+                elif entry.is_file(follow_symlinks=follow_symlinks):
+                    yield entry
 
 
-def flatten_paths(paths, *, follow_symlinks=False):
+def flatten_paths(paths):
     for path in paths:
-        try:
-            scandir = os.scandir(path)
-        except NotADirectoryError:
+        path = Path(path)
+        if path.is_dir():
+            yield from map(Path, iterative_scandir(path, follow_symlinks=True))
+        elif path.is_file():
             yield path
-        else:
-            with scandir as it:
-                for entry in it:
-                    recurse = recursive_scandir(entry, follow_symlinks=follow_symlinks)
-                    yield from map(Path, recurse)
 
 
 def stream_files(files, *, chunk_size=DEFAULT_STREAM_CHUNK_SIZE):

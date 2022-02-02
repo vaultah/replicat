@@ -6,6 +6,7 @@ import io
 import json
 import logging
 import os
+import os.path
 import posixpath
 import queue
 import re
@@ -161,7 +162,7 @@ class Repository:
         if not location.startswith(self.CHUNK_PREFIX):
             raise ValueError('Not a chunk location')
         head, tail = posixpath.split(location)
-        tag = head[len(self.CHUNK_PREFIX) :].replace(posixpath.sep, '')
+        tag = head[len(self.CHUNK_PREFIX) :].replace('/', '')
         return LocationParts(name=tail, tag=tag)
 
     def _chunk_digest_to_location_parts(self, digest, /):
@@ -192,7 +193,7 @@ class Repository:
         if not location.startswith(self.SNAPSHOT_PREFIX):
             raise ValueError('Not a snapshot location')
         head, tail = posixpath.split(location)
-        tag = head[len(self.SNAPSHOT_PREFIX) :].replace(posixpath.sep, '')
+        tag = head[len(self.SNAPSHOT_PREFIX) :].replace('/', '')
         return LocationParts(name=tail, tag=tag)
 
     def _snapshot_digest_to_location_parts(self, digest, /):
@@ -682,18 +683,15 @@ class Repository:
         for _, row in files:
             print(*(value.rjust(columns_widths[col]) for col, value in row.items()))
 
-    async def snapshot(self, *, paths, note=None, rate_limit=None):
-        files = []
-
-        for path in utils.fs.flatten_paths(paths, follow_symlinks=True):
-            try:
-                path.resolve(strict=True)
-            except (FileNotFoundError, RuntimeError):
-                logger.warning('Skipping file %s, path not resolved', path)
-            else:
-                files.append(path)
-
+    def _flatten_paths(self, paths):
+        files = list(
+            utils.fs.flatten_paths(path.resolve(strict=True) for path in paths)
+        )
         logger.info('Found %d files', len(files))
+        return files
+
+    async def snapshot(self, *, paths, note=None, rate_limit=None):
+        files = self._flatten_paths(paths)
         # Small files are more likely to change than big files, read them quickly
         # and put them in chunks together
         files.sort(key=lambda file: (file.stat().st_size, str(file)))
@@ -750,7 +748,6 @@ class Repository:
 
                 if file not in snapshot_files:
                     snapshot_files[file] = {
-                        'name': file.name,
                         'path': str(file.resolve()),
                         'chunks': [],
                         'metadata': self.read_metadata(file),
@@ -872,18 +869,22 @@ class Repository:
                         _chunk_done(chunk)
                         state.bytes_reused += chunk.stream_end - chunk.stream_start
                     else:
-                        iowrapper = utils.tqdmbytesio(
-                            chunk.contents,
+                        length = len(chunk.contents)
+                        stream = io.BytesIO(chunk.contents)
+                        iowrapper = utils.tqdmio(
+                            stream,
                             desc=f'Chunk #{chunk.counter:06}',
+                            total=length,
                             position=slot,
                             disable=self._quiet,
                             rate_limiter=rate_limiter,
                         )
-                        with iowrapper:
+                        with stream, iowrapper:
                             await self._as_coroutine(
-                                self.backend.upload,
+                                self.backend.upload_stream,
                                 chunk.location,
                                 iowrapper,
+                                length,
                             )
 
                         _chunk_done(chunk)
@@ -945,11 +946,7 @@ class Repository:
         location = self.get_snapshot_location(name=name, tag=tag)
 
         print(ef.bold + f'Uploading snapshot {name}' + ef.rs)
-        await self._as_coroutine(
-            self.backend.upload,
-            location,
-            serialized_snapshot,
-        )
+        await self._as_coroutine(self.backend.upload, location, serialized_snapshot)
 
         if state.bytes_reused:
             print(
@@ -1263,6 +1260,62 @@ class Repository:
             self._benchmark_chunker(adapter)
         else:
             raise RuntimeError('Sorry, not yet')
+
+    async def upload(self, paths, *, rate_limit=None):
+        files = self._flatten_paths(paths)
+        bytes_tracker = tqdm(
+            desc='Data processed',
+            unit='B',
+            unit_scale=True,
+            total=None,
+            position=0,
+            disable=self._quiet,
+            leave=True,
+        )
+        finished_tracker = tqdm(
+            desc='Files processed',
+            unit='',
+            total=len(files),
+            position=1,
+            disable=self._quiet,
+            leave=True,
+        )
+        base_directory = Path.cwd()
+
+        if rate_limit is not None:
+            rate_limiter = utils.RateLimiter(rate_limit)
+        else:
+            rate_limiter = None
+
+        async def _upload_path(path):
+            name = path.relative_to(
+                os.path.commonpath([path, base_directory])
+            ).as_posix()
+            length = path.stat().st_size
+            slot = await self._slots.get()
+            try:
+                stream = path.open('rb')
+                iowrapper = utils.tqdmio(
+                    stream,
+                    desc=name,
+                    total=length,
+                    position=slot,
+                    disable=self._quiet,
+                    rate_limiter=rate_limiter,
+                )
+
+                with stream, iowrapper:
+                    await self._as_coroutine(
+                        self.backend.upload_stream, name, iowrapper, length
+                    )
+
+                finished_tracker.update()
+                bytes_tracker.update(length)
+            finally:
+                self._slots.put_nowait(slot)
+
+        await asyncio.gather(*map(_upload_path, files))
+        return utils.DefaultNamespace(files=files)
 
     async def close(self):
         # Closes associated resources

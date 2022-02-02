@@ -1,6 +1,5 @@
 import asyncio
 import functools
-import io
 import logging
 import sys
 
@@ -134,10 +133,7 @@ class B2(Backend):
         else:
             return True
 
-    @utils.requires_auth
-    @backoff_reauth
-    @on_error
-    async def upload(self, name, data):
+    async def _get_upload_url_token(self):
         url = f'{self.auth.apiUrl}/b2api/v{B2_API_VERSION}/b2_get_upload_url'
         bucket_info = await self._get_bucket_info()
         params = {'bucketId': bucket_info.bucketId}
@@ -146,36 +142,45 @@ class B2(Backend):
         response = await self.client.post(url, json=params, headers=headers)
         response.raise_for_status()
         decoded = response.json()
-        upload_url = decoded['uploadUrl']
-        upload_token = decoded['authorizationToken']
+        return decoded['uploadUrl'], decoded['authorizationToken']
 
-        if isinstance(data, io.BytesIO):
-            rewind_on_error = True
-            contents = utils.aiter_chunks(data)
-            content_length = len(data.getbuffer())
-        else:
-            rewind_on_error = False
-            contents = data
-            content_length = len(data)
-
+    @utils.requires_auth
+    @backoff_reauth
+    @on_error
+    async def upload(self, name, data):
+        upload_url, upload_token = await self._get_upload_url_token()
         upload_headers = {
             'Authorization': upload_token,
             'X-Bz-File-Name': name,
             'Content-Type': 'application/octet-stream',
-            'Content-Length': str(content_length),
+            'Content-Length': str(len(data)),
+            'X-Bz-Content-Sha1': 'do_not_verify',  # TODO
+        }
+        response = await self.client.post(
+            upload_url, headers=upload_headers, content=data
+        )
+        response.raise_for_status()
+
+    @utils.requires_auth
+    @backoff_reauth
+    @on_error
+    async def upload_stream(self, name, stream, length):
+        upload_url, upload_token = await self._get_upload_url_token()
+        upload_headers = {
+            'Authorization': upload_token,
+            'X-Bz-File-Name': name,
+            'Content-Type': 'application/octet-stream',
+            'Content-Length': str(length),
             'X-Bz-Content-Sha1': 'do_not_verify',  # TODO
         }
         try:
             response = await self.client.post(
-                upload_url, headers=upload_headers, content=contents
+                upload_url, headers=upload_headers, content=utils.aiter_chunks(stream)
             )
             response.raise_for_status()
         except BaseException:
-            if rewind_on_error:
-                data.seek(0)
+            stream.seek(0)
             raise
-        else:
-            return response.json()
 
     @utils.requires_auth
     @backoff_reauth

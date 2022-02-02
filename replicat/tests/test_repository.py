@@ -1,10 +1,8 @@
-import io
-import posixpath
 import re
 import threading
 import time
 from random import Random
-from unittest.mock import patch
+from unittest.mock import ANY, patch
 
 import pytest
 
@@ -18,14 +16,10 @@ class TestHelperMethods:
         location = local_repo.get_chunk_location(
             name='CDEFGHIJKLMN', tag='0123456789AB'
         )
-        assert location == posixpath.join(
-            local_repo.CHUNK_PREFIX, '0123/4567/89AB/CDEFGHIJKLMN'
-        )
+        assert location == local_repo.CHUNK_PREFIX + '0123/4567/89AB/CDEFGHIJKLMN'
 
     def test_parse_chunk_location(self, local_repo):
-        location = posixpath.join(
-            local_repo.CHUNK_PREFIX, '0123/4567/89AB/CDEFGHIJKLMN'
-        )
+        location = local_repo.CHUNK_PREFIX + '0123/4567/89AB/CDEFGHIJKLMN'
         name, tag = local_repo.parse_chunk_location(location)
         assert name == 'CDEFGHIJKLMN'
         assert tag == '0123456789AB'
@@ -34,14 +28,10 @@ class TestHelperMethods:
         location = local_repo.get_snapshot_location(
             name='CDEFGHIJKLMN', tag='0123456789AB'
         )
-        assert location == posixpath.join(
-            local_repo.SNAPSHOT_PREFIX, '0123/4567/89AB/CDEFGHIJKLMN'
-        )
+        assert location == local_repo.SNAPSHOT_PREFIX + '0123/4567/89AB/CDEFGHIJKLMN'
 
     def test_parse_snapshot_location(self, local_repo):
-        location = posixpath.join(
-            local_repo.SNAPSHOT_PREFIX, '0123/4567/89AB/CDEFGHIJKLMN'
-        )
+        location = local_repo.SNAPSHOT_PREFIX + '0123/4567/89AB/CDEFGHIJKLMN'
         name, tag = local_repo.parse_snapshot_location(location)
         assert name == 'CDEFGHIJKLMN'
         assert tag == '0123456789AB'
@@ -357,7 +347,7 @@ class TestSnapshot:
         snapshot_files = result.data['files']
         assert len(file_contents) == len(snapshot_files)
 
-        snapshot_files.sort(key=lambda x: x['name'])
+        snapshot_files.sort(key=lambda x: x['path'])
         restored_files = []
 
         for file_data in snapshot_files:
@@ -449,7 +439,7 @@ class TestSnapshot:
         snapshot_files = result.data['files']
         assert len(file_contents) == len(snapshot_files)
 
-        snapshot_files.sort(key=lambda x: x['name'])
+        snapshot_files.sort(key=lambda x: x['path'])
         restored_files = []
 
         for snapshot_data in snapshot_files:
@@ -536,7 +526,7 @@ class TestSnapshot:
             with pytest.raises(_TestException):
                 await local_repo.snapshot(paths=[file])
 
-        assert list(local_backend.list_files('snapshots')) == []
+        assert list(local_backend.list_files('snapshots/')) == []
 
     @pytest.mark.asyncio
     async def test_wait_for_chunk_upload(self, local_backend, local_repo, tmp_path):
@@ -545,7 +535,7 @@ class TestSnapshot:
                 'encryption': None,
                 'chunking': {
                     'min_length': 256,
-                    'max_length': 512,
+                    'max_length': 256,
                 },
             }
         )
@@ -555,33 +545,28 @@ class TestSnapshot:
         file.write_bytes(data)
 
         upload_lock = threading.Lock()
-        bytes_remaining = len(data)
+        bytes_consumed = 0
 
-        def upld(name, contents):
-            nonlocal bytes_remaining
+        def upldstream(name, contents, length):
+            nonlocal bytes_consumed
             with upload_lock:
-                if isinstance(contents, io.BytesIO):
-                    length = len(contents.getbuffer())
-                else:
-                    length = len(contents)
-                bytes_remaining -= length
+                bytes_consumed += length
+                bytes_remaining = len(data) - bytes_consumed
 
-            rv = Local.upload(local_backend, name, contents)
-            if not bytes_remaining and not name.startswith('snapshots/'):
-                # Simulate work
-                time.sleep(0.5)
+            try:
+                return Local.upload_stream(local_backend, name, contents, length)
+            finally:
+                if not bytes_remaining:
+                    # Simulate work
+                    time.sleep(0.5)
 
-            return rv
-
-        with patch.object(local_backend, 'upload', side_effect=upld) as upload_mock:
+        with patch.object(local_backend, 'upload') as upload_mock, patch.object(
+            local_backend, 'upload_stream', side_effect=upldstream
+        ) as upload_stream_mock:
             result = await local_repo.snapshot(paths=[file])
 
-        snapshots = list(local_backend.list_files('snapshots/'))
-        chunks = list(local_backend.list_files('data/'))
-        assert len(snapshots) == 1
-        assert len(chunks) > 0
-        assert len(snapshots) + len(chunks) == upload_mock.call_count
-        assert len(result.data['files'][0]['chunks']) == len(chunks)
+        upload_mock.assert_called_once_with(result.location, ANY)
+        assert upload_stream_mock.call_count == len(result.data['files'][0]['chunks'])
 
 
 class TestRestore:
