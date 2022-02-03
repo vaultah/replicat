@@ -20,11 +20,13 @@ class Local(Backend):
     def _destination_temp(self, name):
         destination = self.path / name
         destination.parent.mkdir(parents=True, exist_ok=True)
+
+        shortened_name = destination.name[:240]
         # Make sure the temporary is on the same filesystem to make
         # atomic replacements possible
         temp = Path(
             NamedTemporaryFile(
-                prefix=f'{destination.name}_',
+                prefix=f'{shortened_name}_',
                 suffix='.tmp',
                 dir=destination.parent,
                 delete=False,

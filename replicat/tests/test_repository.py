@@ -14,27 +14,27 @@ from replicat.utils import adapters
 class TestHelperMethods:
     def test_get_chunk_location(self, local_repo):
         location = local_repo.get_chunk_location(
-            name='CDEFGHIJKLMN', tag='0123456789AB'
+            name='GHIJKLMNOPQR', tag='0123456789ABCDEF'
         )
-        assert location == local_repo.CHUNK_PREFIX + '0123/4567/89AB/CDEFGHIJKLMN'
+        assert location == local_repo.CHUNK_PREFIX + '01/23/456789ABCDEF-GHIJKLMNOPQR'
 
     def test_parse_chunk_location(self, local_repo):
-        location = local_repo.CHUNK_PREFIX + '0123/4567/89AB/CDEFGHIJKLMN'
+        location = local_repo.CHUNK_PREFIX + '01/23/456789ABCDEF-GHIJKLMNOPQR'
         name, tag = local_repo.parse_chunk_location(location)
-        assert name == 'CDEFGHIJKLMN'
-        assert tag == '0123456789AB'
+        assert name == 'GHIJKLMNOPQR'
+        assert tag == '0123456789ABCDEF'
 
     def test_get_snapshot_location(self, local_repo):
         location = local_repo.get_snapshot_location(
-            name='CDEFGHIJKLMN', tag='0123456789AB'
+            name='GHIJKLMNOPQR', tag='0123456789ABCDEF'
         )
-        assert location == local_repo.SNAPSHOT_PREFIX + '0123/4567/89AB/CDEFGHIJKLMN'
+        assert location == local_repo.SNAPSHOT_PREFIX + '01/23456789ABCDEF-GHIJKLMNOPQR'
 
     def test_parse_snapshot_location(self, local_repo):
-        location = local_repo.SNAPSHOT_PREFIX + '0123/4567/89AB/CDEFGHIJKLMN'
+        location = local_repo.SNAPSHOT_PREFIX + '01/23456789ABCDEF-GHIJKLMNOPQR'
         name, tag = local_repo.parse_snapshot_location(location)
-        assert name == 'CDEFGHIJKLMN'
-        assert tag == '0123456789AB'
+        assert name == 'GHIJKLMNOPQR'
+        assert tag == '0123456789ABCDEF'
 
 
 class TestInit:

@@ -149,21 +149,28 @@ class Repository:
         return json.loads(data, object_hook=self.object_deserialization_hook)
 
     def get_chunk_location(self, *, name, tag):
-        """Build POSIX-style storage path for the chunk using its name and tag"""
-        parts = [self.CHUNK_PREFIX]
-        # Encode the tag into the chunk path for easier ownership verification
-        for i in range(0, len(tag), 4):
-            parts.append(tag[i : i + 4])
-        parts.append(name)
-        return posixpath.join(*parts)
+        """Build POSIX-style storage path for the chunk using its name and tag.
+        The tag is included for ownership verification. The part after the last slash
+        (actual filename on the filesystem) must be under 255 bytes for compatibility
+        with most filesystems. You can assume that both name and tag are hex-strings
+        each no longer than 128 characters. The returned path must start with
+        CHUNK_PREFIX and is allowed to contain forward slashes, characters from name
+        and tag, and hyphens."""
+        return posixpath.join(
+            self.CHUNK_PREFIX,
+            tag[:2],
+            tag[2:4],
+            f'{tag[4:]}-{name}',
+        )
 
     def parse_chunk_location(self, location, /):
         """Parse the storage path for the chunk, extract its name and tag"""
         if not location.startswith(self.CHUNK_PREFIX):
             raise ValueError('Not a chunk location')
-        head, tail = posixpath.split(location)
-        tag = head[len(self.CHUNK_PREFIX) :].replace('/', '')
-        return LocationParts(name=tail, tag=tag)
+
+        head, _, name = location.rpartition('-')
+        parts = head.rsplit('/', 3)
+        return LocationParts(name=name, tag=parts[1] + parts[2] + parts[3])
 
     def _chunk_digest_to_location_parts(self, digest, /):
         if self.props.encrypted:
@@ -180,21 +187,22 @@ class Repository:
         return self.get_chunk_location(name=name, tag=tag)
 
     def get_snapshot_location(self, *, name, tag):
-        """Build POSIX-style storage path for the snapshot using its name and tag"""
-        parts = [self.SNAPSHOT_PREFIX]
-        # Encode the tag into the snapshot path for easier ownership verification
-        for i in range(0, len(tag), 4):
-            parts.append(tag[i : i + 4])
-        parts.append(name)
-        return posixpath.join(*parts)
+        """Build POSIX-style storage path for the snapshot using its name and tag.
+        The tag is included for ownership verification. The part after the last slash
+        (actual filename on the filesystem) must be under 255 bytes for compatibility
+        with most filesystems. You can assume that both name and tag are hex-strings
+        each no longer than 128 characters. The returned path must start with
+        SNAPSHOT_PREFIX and is allowed to contain forward slashes, characters from name
+        and tag, and hyphens."""
+        return posixpath.join(self.SNAPSHOT_PREFIX, tag[:2], f'{tag[2:]}-{name}')
 
     def parse_snapshot_location(self, location, /):
         """Parse the storage path for the snapshot, extract its name and tag"""
         if not location.startswith(self.SNAPSHOT_PREFIX):
             raise ValueError('Not a snapshot location')
-        head, tail = posixpath.split(location)
-        tag = head[len(self.SNAPSHOT_PREFIX) :].replace('/', '')
-        return LocationParts(name=tail, tag=tag)
+        head, _, name = location.rpartition('-')
+        parts = head.rsplit('/', 2)
+        return LocationParts(name=name, tag=parts[1] + parts[2])
 
     def _snapshot_digest_to_location_parts(self, digest, /):
         digest_mac = self.props.mac(digest) if self.props.encrypted else digest
