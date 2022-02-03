@@ -77,7 +77,7 @@ backoff_reauth = backoff_decorator(on_backoff=[on_backoff_reauth])
 
 class B2(Backend):
 
-    client = utils.async_client()
+    client = utils.async_client(timeout=None)
 
     def __init__(self, connection_string, *, key_id, application_key):
         # Name or id

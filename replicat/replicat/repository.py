@@ -331,11 +331,13 @@ class Repository:
 
     async def init(self, *, password=None, settings=None, key_output_path=None):
         logger.info('Using provided settings: %r', settings)
-        print(ef.bold + 'Generating config and key' + ef.rs)
+        print(ef.bold + 'Generating new config' + ef.rs)
         config = self._make_config(settings=settings)
+        print(json.dumps(config, indent=4, default=self.default_serialization_hook))
         props = RepositoryProps(**self._instantiate_config(config))
 
         if props.encrypted:
+            print(ef.bold + 'Generating new key' + ef.rs)
             if password is None:
                 raise exceptions.ReplicatError(
                     'A password is needed to initialize encrypted repository'
@@ -348,7 +350,6 @@ class Repository:
                 props,
                 **self._instantiate_key(key, password=password, cipher=props.cipher),
             )
-
             # Encrypt the private portion
             logger.debug('Private key portion (unencrypted): %r', key['private'])
             key['private'] = props.encrypt(
@@ -358,35 +359,26 @@ class Repository:
             # TODO: store keys in the repository?
             if key_output_path is not None:
                 key_output_path = Path(key_output_path).resolve()
+                print(ef.bold + f'Writing key to {key_output_path}' + ef.rs)
                 key_output_path.write_bytes(self.serialize(key))
-                print(ef.bold + f'Generated key saved to {key_output_path}' + ef.rs)
             else:
-                pretty_key = json.dumps(
-                    key, indent=4, default=self.default_serialization_hook
+                print(
+                    json.dumps(key, indent=4, default=self.default_serialization_hook)
                 )
-                print(ef.bold + 'New key:' + ef.rs, pretty_key, sep='\n')
         else:
             key = None
 
+        print(ef.bold + 'Uploading config' + ef.rs)
         await self._as_coroutine(self.backend.upload, 'config', self.serialize(config))
         self.props = props
-        pretty_config = json.dumps(
-            config, indent=4, default=self.default_serialization_hook
-        )
-        print(
-            ef.bold + 'Generated config (stored in repository):' + ef.rs,
-            pretty_config,
-            sep='\n',
-        )
         return utils.DefaultNamespace(config=config, key=key)
 
     async def _load_config(self):
-        print(ef.bold + 'Loading config' + ef.rs)
         data = await self._as_coroutine(self.backend.download, 'config')
-        config = self.deserialize(data)
-        return RepositoryProps(**self._instantiate_config(config))
+        return RepositoryProps(**self._instantiate_config(self.deserialize(data)))
 
     async def unlock(self, *, password=None, key=None):
+        print(ef.bold + 'Loading config' + ef.rs)
         props = await self._load_config()
 
         if props.encrypted:
@@ -408,7 +400,7 @@ class Repository:
         self.props = props
 
     async def _add_key(self, *, password, settings, props, private, key_output_path):
-        logger.info('Using provided settings: %r', settings)
+        print(ef.bold + 'Generating new key' + ef.rs)
         key = self._make_key(
             cipher=props.cipher,
             chunker=props.chunker,
@@ -423,23 +415,20 @@ class Repository:
             self.serialize(key['private']),
             key_props['userkey'],
         )
-
         # TODO: store it in the repository?
         if key_output_path is not None:
             key_output_path = Path(key_output_path).resolve()
+            print(ef.bold + f'Writing key to {key_output_path}' + ef.rs)
             key_output_path.write_bytes(self.serialize(key))
-            print(ef.bold + f'Generated key saved to {key_output_path}' + ef.rs)
         else:
-            pretty_key = json.dumps(
-                key, indent=4, default=self.default_serialization_hook
-            )
-            print(ef.bold + 'New key:' + ef.rs, pretty_key, sep='\n')
+            print(json.dumps(key, indent=4, default=self.default_serialization_hook))
 
         return key
 
     async def add_key(
         self, *, password, settings=None, shared=False, key_output_path=None
     ):
+        logger.info('Using provided settings: %r', settings)
         if password is None:
             raise exceptions.ReplicatError(
                 'The password is required to generate a new key'
@@ -448,11 +437,15 @@ class Repository:
         if shared:
             if not self._unlocked:
                 raise exceptions.ReplicatError('The repository must be unlocked')
-            props = self.props
             private = self.props.private
+            props = self.props
         else:
-            props = await self._load_config()
             private = None
+            if self._unlocked:
+                props = self.props
+            else:
+                print(ef.bold + 'Loading config' + ef.rs)
+                props = await self._load_config()
 
         if not props.encrypted:
             raise exceptions.ReplicatError('Repository is not encrypted')
@@ -480,11 +473,12 @@ class Repository:
             finally:
                 self._slots.put_nowait(slot)
 
+            logger.info('Verifying %s', path)
             if self.props.hash_digest(contents) != digest:
-                raise exceptions.ReplicatError(f'Snapshot {path!r} is corrupted')
+                raise exceptions.ReplicatError(f'Snapshot at {path!r} is corrupted')
 
             if cache_loaded:
-                logger.info('Caching encrypted snapshot %s', path)
+                logger.info('Caching %s', path)
                 utils.fs.store_cached(path, contents)
 
             encrypted_snapshots[path] = contents
@@ -496,9 +490,11 @@ class Repository:
             digest = bytes.fromhex(name)
 
             if self.props.encrypted and self.props.mac(digest) != bytes.fromhex(tag):
+                logger.info('Skipping %s (invalid tag)', path)
                 continue
 
             if snapshot_regex is not None and re.search(snapshot_regex, name) is None:
+                logger.info('Skipping %s (does not match the filter)', path)
                 continue
 
             if path in cached_snapshots:
@@ -684,16 +680,13 @@ class Repository:
             print(*(value.rjust(columns_widths[col]) for col, value in row.items()))
 
     def _flatten_paths(self, paths):
-        files = list(
-            utils.fs.flatten_paths(path.resolve(strict=True) for path in paths)
-        )
-        logger.info('Found %d files', len(files))
-        return files
+        return list(utils.fs.flatten_paths(path.resolve(strict=True) for path in paths))
 
     async def snapshot(self, *, paths, note=None, rate_limit=None):
         files = self._flatten_paths(paths)
+        logger.info('Found %d files', len(files))
         # Small files are more likely to change than big files, read them quickly
-        # and put them in chunks together
+        # and bundle them together
         files.sort(key=lambda file: (file.stat().st_size, str(file)))
 
         state = utils.DefaultNamespace(
@@ -799,7 +792,7 @@ class Repository:
 
             if state.current_file is not None:
                 logger.info(
-                    'Finished streaming file %r (last)', str(state.current_file)
+                    'Finished streaming file %r, stopping', str(state.current_file)
                 )
                 state.files_finished.add(state.current_file)
 
@@ -919,7 +912,6 @@ class Repository:
             json.dumps(
                 snapshot_body,
                 indent=4,
-                sort_keys=True,
                 default=self.default_serialization_hook,
             ),
         )
@@ -953,7 +945,6 @@ class Repository:
                 ef.bold
                 + f'Used {utils.bytes_to_human(state.bytes_reused)} of existing data'
                 + ef.rs,
-                flush=True,
             )
 
         return utils.DefaultNamespace(
@@ -998,6 +989,12 @@ class Repository:
                     flocks_refcounts[ref.path] += 1
 
             with flock:
+                logger.info(
+                    'Writing to %s R=%d...%d',
+                    ref.path,
+                    ref.stream_start,
+                    ref.stream_end,
+                )
                 ref.path.parent.mkdir(parents=True, exist_ok=True)
                 ref.path.touch()
 
@@ -1023,9 +1020,10 @@ class Repository:
                 slot = await self._slots.get()
                 try:
                     location = self._chunk_digest_to_location(digest)
-                    logger.info('Downloading chunk L=%s', location)
+                    logger.info('Downloading %s', location)
                     contents = await self._as_coroutine(self.backend.download, location)
 
+                    logger.info('Decrypting %s', location)
                     if self.props.encrypted:
                         decrypted_contents = self.props.decrypt(
                             contents,
@@ -1034,9 +1032,13 @@ class Repository:
                     else:
                         decrypted_contents = contents
 
-                    if digest != self.props.hash_digest(decrypted_contents):
-                        raise exceptions.ReplicatError(f'Chunk {location} is corrupted')
+                    logger.info('Verifying %s', location)
+                    if self.props.hash_digest(decrypted_contents) != digest:
+                        raise exceptions.ReplicatError(
+                            f'Chunk at {location!r} is corrupted'
+                        )
 
+                    logger.info('Chunk %s referenced %d time(s)', location, len(refs))
                     decrypted_view = memoryview(decrypted_contents)
                     await asyncio.gather(
                         *(
@@ -1059,6 +1061,9 @@ class Repository:
 
                 if files_regex is not None:
                     if re.search(files_regex, file_path) is None:
+                        logger.info(
+                            'Skipping %s (does not match the filter)', file_path
+                        )
                         continue
 
                 restore_to = Path(path, *Path(file_path).parts[1:]).resolve()
@@ -1263,6 +1268,7 @@ class Repository:
 
     async def upload(self, paths, *, rate_limit=None):
         files = self._flatten_paths(paths)
+        logger.info('Found %d files', len(files))
         bytes_tracker = tqdm(
             desc='Data processed',
             unit='B',
@@ -1318,13 +1324,9 @@ class Repository:
         return utils.DefaultNamespace(files=files)
 
     async def close(self):
-        # Closes associated resources
-        if inspect.iscoroutinefunction(self.backend.close):
-            await self.backend.close()
-        else:
-            self.backend.close()
-
         try:
             del self.props
         except AttributeError:
             pass
+
+        await self._as_coroutine(self.backend.close)
