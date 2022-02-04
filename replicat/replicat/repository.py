@@ -608,7 +608,7 @@ class Repository:
 
         print(*formatted_headers)
         for row in rows:
-            print(*(value.rjust(columns_widths[col]) for col, value in row.items()))
+            print(*(value.ljust(columns_widths[col]) for col, value in row.items()))
 
     def _format_file_snapshot_date(
         self, *, snapshot_path, snapshot_chunks, snapshot_data, file_data
@@ -685,7 +685,7 @@ class Repository:
 
         print(*formatted_headers)
         for _, row in files:
-            print(*(value.rjust(columns_widths[col]) for col, value in row.items()))
+            print(*(value.ljust(columns_widths[col]) for col, value in row.items()))
 
     def _flatten_paths(self, paths):
         return list(utils.fs.flatten_paths(path.resolve(strict=True) for path in paths))
@@ -1003,10 +1003,13 @@ class Repository:
                     ref.stream_start,
                     ref.stream_end,
                 )
-                ref.path.parent.mkdir(parents=True, exist_ok=True)
-                ref.path.touch()
+                try:
+                    file = ref.path.open('r+b')
+                except FileNotFoundError:
+                    ref.path.parent.mkdir(parents=True, exist_ok=True)
+                    file = ref.path.open('wb')
 
-                with ref.path.open('r+b') as file:
+                with file:
                     file_end = file.seek(0, io.SEEK_END)
                     file.truncate(max(file_end, ref.stream_end))
                     file.seek(ref.stream_start)
