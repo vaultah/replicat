@@ -568,6 +568,7 @@ class Repository:
         return utils.bytes_to_human(sum(r[1] - r[0] for r in ranges_it))
 
     async def list_snapshots(self, *, snapshot_regex=None):
+        print(ef.bold + 'Loading snapshots' + ef.rs)
         snapshots_mapping = await self._load_snapshots(snapshot_regex=snapshot_regex)
         if not snapshots_mapping:
             return
@@ -633,6 +634,7 @@ class Repository:
         return utils.bytes_to_human(sum(r[1] - r[0] for r in ranges_it))
 
     async def list_files(self, *, snapshot_regex=None, files_regex=None):
+        print(ef.bold + 'Loading snapshots' + ef.rs)
         snapshots_mapping = await self._load_snapshots(snapshot_regex=snapshot_regex)
         if not snapshots_mapping:
             return
@@ -971,6 +973,7 @@ class Repository:
 
         logger.info("Will restore files to %s", path)
 
+        print(ef.bold + 'Loading snapshots' + ef.rs)
         snapshots_mapping = await self._load_snapshots(snapshot_regex=snapshot_regex)
         snapshots = [x for x in snapshots_mapping.values() if x['data'] is not None]
         snapshots.sort(key=lambda x: x['data']['utc_timestamp'], reverse=True)
@@ -1116,6 +1119,7 @@ class Repository:
 
     async def delete_snapshots(self, snapshots):
         # TODO: locking
+        print(ef.bold + 'Loading snapshots' + ef.rs)
         snapshots_mapping = await self._load_snapshots()
         chunks_digests = set()
         snapshots_locations = set()
@@ -1186,6 +1190,7 @@ class Repository:
 
     async def clean(self):
         # TODO: locking
+        print(ef.bold + 'Loading snapshots' + ef.rs)
         snapshots_mapping = await self._load_snapshots()
         referenced_digests = {
             y for x in snapshots_mapping.values() for y in x['chunks']
@@ -1195,6 +1200,7 @@ class Repository:
         )
         to_delete = set()
 
+        print(ef.bold + 'Fetching chunks list' + ef.rs)
         for location in await self._as_coroutine(
             self.backend.list_files, self.CHUNK_PREFIX
         ):
