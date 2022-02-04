@@ -545,23 +545,23 @@ class Repository:
         return self.parse_snapshot_location(path).name
 
     def _format_snapshot_note(self, *, path, chunks, data):
-        return data.get('note')
+        return data and data.get('note')
 
     def _format_snapshot_utc_timestamp(self, *, path, chunks, data):
-        if (value := data.get('utc_timestamp')) is None:
+        if data is None or (value := data.get('utc_timestamp')) is None:
             return None
 
         dt = datetime.fromisoformat(value)
         return dt.isoformat(sep=' ', timespec='seconds')
 
     def _format_snapshot_files_count(self, *, path, chunks, data):
-        if (files := data.get('files')) is None:
+        if data is None or (files := data.get('files')) is None:
             return None
 
         return len(files)
 
     def _format_snaphot_size(self, *, path, chunks, data):
-        if (files := data.get('files')) is None:
+        if data is None or (files := data.get('files')) is None:
             return None
 
         ranges_it = (chunk['range'] for file in files for chunk in file['chunks'])
