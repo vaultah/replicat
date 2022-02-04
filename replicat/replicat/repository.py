@@ -1235,7 +1235,8 @@ class Repository:
         print(ef.bold + 'Running post-deletion cleanup' + ef.rs)
         await self._as_coroutine(self.backend.clean)
 
-    def _benchmark_chunker(self, adapter, number=10_000, size=1_000_000):
+    @utils.disable_gc
+    def _benchmark_chunker(self, adapter, number=10, size=512_000_000):
         prep_time = 0
 
         def _stream(seed=0):
@@ -1243,9 +1244,12 @@ class Repository:
             method = Random(seed).randbytes
             for _ in range(number):
                 start = time.perf_counter_ns()
-                value = method(size)
+                buffer = bytearray()
+                while len(buffer) < size:
+                    buffer += method(16_777_216)
+                del buffer[size:]
                 prep_time += time.perf_counter_ns() - start
-                yield value
+                yield buffer
 
         stream = _stream()
         start = time.perf_counter_ns()

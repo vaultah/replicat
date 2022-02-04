@@ -4,6 +4,7 @@ import asyncio
 import base64
 import collections.abc
 import functools
+import gc
 import importlib
 import inspect
 import os
@@ -443,6 +444,19 @@ def requires_auth(func):
 
     wrapper = functools.wraps(func)(wrapper)
     return wrapper
+
+
+def disable_gc(func):
+    def _decorator(*args, **kwargs):
+        gcond = gc.isenabled()
+        gc.disable()
+        try:
+            return func(*args, **kwargs)
+        finally:
+            if gcond:
+                gc.enable()
+
+    return _decorator
 
 
 class async_client:

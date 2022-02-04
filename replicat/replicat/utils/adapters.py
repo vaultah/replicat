@@ -1,7 +1,7 @@
 import hashlib
 import os
 from abc import ABC, abstractmethod
-from collections.abc import Iterator
+from collections.abc import ByteString, Iterator
 from typing import Optional
 
 import cryptography.exceptions
@@ -84,7 +84,10 @@ class ChunkerAdapter(ABC):
 
     @abstractmethod
     def __call__(
-        self, chunk_iterator: Iterator[bytes], *, params: Optional[bytes] = None
+        self,
+        chunk_iterator: Iterator[ByteString],
+        *,
+        params: Optional[ByteString] = None,
     ):
         """Re-chunk the incoming stream of bytes using the provided params"""
         yield b''
@@ -207,7 +210,7 @@ class gclmulchunker(ChunkerAdapter):
         chunker = _replicat_adapters._gclmulchunker(
             self.min_length, self.max_length, params
         )
-        buffer = b''
+        buffer = bytearray()
         it = iter(chunk_iterator)
         chunk = next(it, None)
 
@@ -219,8 +222,8 @@ class gclmulchunker(ChunkerAdapter):
                 pos = chunker.next_cut(buffer, bool(next_chunk is None))
                 if not pos:
                     break
-                yield buffer[:pos]
-                buffer = buffer[pos:]
+                yield bytes(buffer[:pos])
+                del buffer[:pos]
 
             chunk = next_chunk
 
