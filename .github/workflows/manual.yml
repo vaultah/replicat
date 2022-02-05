@@ -11,5 +11,5 @@ jobs:
         with:
           python-version: '3.9'
       - run: python -m venv env
-      - run: env/bin/pip install -U pip setuptools
-      - run: env/bin/pip install .
+      - run: env\Scripts\pip.exe install -U pip setuptools
+      - run: env\Scripts\pip.exe install .
