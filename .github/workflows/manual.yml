@@ -11,4 +11,5 @@ jobs:
         with:
           python-version: '3.9'
       - run: py -m pip install -U pip setuptools
+      - run: dir
       - run: py setup.py install
