@@ -11,5 +11,5 @@ jobs:
         with:
           python-version: '3.9'
       - run: python -m venv .venv
-      - run: .venv/bin/install -U pip setuptools
-      - run: .venv/bin/install .
+      - run: .venv/bin/pip install -U pip setuptools
+      - run: .venv/bin/pip install .
