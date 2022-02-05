@@ -10,6 +10,5 @@ jobs:
         uses: actions/setup-python@v2
         with:
           python-version: '3.9'
-      - run: python -m venv env
-      - run: env\Scripts\pip.exe install -U pip setuptools
-      - run: env\Scripts\pip.exe install .
+      - run: py -m pip install -U pip setuptools
+      - run: py -m pip install .
