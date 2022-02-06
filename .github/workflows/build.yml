@@ -25,6 +25,3 @@ jobs:
         with:
           name: replicat-python-${{ matrix.python-version }}-windows-latest
           path: dist/
-      - run: python -m pip install `ls dist/*.whl`[test]
-        shell: bash
-      - run: python -m pytest --pyargs replicat
