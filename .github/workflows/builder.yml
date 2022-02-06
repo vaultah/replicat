@@ -18,3 +18,5 @@ jobs:
         run: cmake --version
       - run: py -m pip install -U pip setuptools build
       - run: py -m build
+      - uses: actions/upload-artifact@v2
+        with: dist
