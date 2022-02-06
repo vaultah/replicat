@@ -6,6 +6,7 @@ jobs:
     uses: ./.github/workflows/build.yml
   
   test:
+    needs: build
     runs-on: windows-latest
     steps: 
       - run: python -m pip install `ls dist/*.whl`[test]
