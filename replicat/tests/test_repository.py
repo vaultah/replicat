@@ -137,6 +137,7 @@ class TestEncryptedUnlock:
 
     @pytest.mark.asyncio
     async def test_no_password(self, local_repo, init_params):
+        print(init_params)
         with pytest.raises(exceptions.ReplicatError):
             await local_repo.unlock(key=init_params.key)
 
