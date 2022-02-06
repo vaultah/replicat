@@ -1,6 +1,7 @@
 name: Build
-on: push
-
+on:
+  workflow_call:
+  
 jobs:
   windows:
     runs-on: windows-latest
