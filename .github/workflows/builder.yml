@@ -12,5 +12,9 @@ jobs:
         uses: actions/setup-python@v2
         with:
           python-version: '3.9'
+      - name: Setup cmake
+        uses: jwlawson/actions-setup-cmake@v1.12
+      - name: Use cmake
+        run: cmake --version
       - run: py -m pip install -U pip setuptools build
       - run: py -m build
