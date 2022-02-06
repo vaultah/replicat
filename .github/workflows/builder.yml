@@ -19,5 +19,7 @@ jobs:
       - run: py -m pip install -U pip setuptools build
       - run: py -m build
       - uses: actions/upload-artifact@v2
-        with: dist/
+        with:
+          name: dist
+          path: dist/
         
