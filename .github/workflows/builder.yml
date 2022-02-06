@@ -6,6 +6,8 @@ jobs:
     runs-on: windows-latest
 
     steps:
+      - name: Python?
+        run: py --version
       - name: Checkout
         uses: actions/checkout@v2
       - name: Setup Python
