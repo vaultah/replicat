@@ -20,7 +20,7 @@ jobs:
         run: cmake --version
       - run: python -m pip install -U pip setuptools build
       - run: python -m build
-      - run: python -m pip install dist/*.whl
+      - run: python -m pip install `ls dist/*.whl`[test]
         shell: bash
       - run: python -m pytest --pyargs replicat
       - uses: actions/upload-artifact@v2
