@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 
 import pybind11
-from setuptools import Extension, find_packages, setup
+from setuptools import Extension, find_namespace_packages, find_packages, setup
 from setuptools.command.build_ext import build_ext
 
 
@@ -61,14 +61,13 @@ class CMakeBuild(build_ext):
 extras_require = {'test': ['pytest', 'pytest-asyncio']}
 extras_require['all'] = [y for x in extras_require.values() for y in x]
 
-
 setup(
     name='replicat',
     version='0.0.1',
     python_requires=">=3.9",
     description='Configurable and lightweight backup utility with '
     'deduplication, encryption and stuff.',
-    packages=find_packages(),
+    packages=find_packages() + find_namespace_packages(include=['replicat.*']),
     install_requires=[
         'httpx',
         'cryptography',

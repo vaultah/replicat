@@ -1,8 +1,8 @@
 import asyncio
 import logging
 
-from .replicat import utils
-from .replicat.repository import Repository
+from . import utils
+from .repository import Repository
 
 logger = logging.getLogger(__name__)
 
