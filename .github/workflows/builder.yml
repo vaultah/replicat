@@ -13,5 +13,4 @@ jobs:
         with:
           python-version: '3.9'
       - run: py -m pip install -U pip setuptools
-      - run: py -c"import os; print(os.listdir())"
-      - run: py setup.py install
+      - run: pip install .
