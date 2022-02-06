@@ -21,6 +21,7 @@ jobs:
       - run: python -m pip install -U pip setuptools build
       - run: python -m build
       - run: python -m pip install dist/*.whl
+        shell: bash
       - run: python -m pytest --pyargs replicat
       - uses: actions/upload-artifact@v2
         with:
