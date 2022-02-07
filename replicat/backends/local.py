@@ -4,10 +4,13 @@ import shutil
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 
+import backoff
+
 from .. import Backend
 from ..utils.fs import iterative_scandir
 
 logger = logging.getLogger(__name__)
+backoff_on_oserror = backoff.on_exception(backoff.fibo, OSError, max_value=5)
 
 
 class Local(Backend):
@@ -34,15 +37,19 @@ class Local(Backend):
         )
         return destination, temp
 
+    @backoff_on_oserror
     def upload(self, name, data):
         destination, temp = self._destination_temp(name)
         try:
             temp.write_bytes(data)
+            # os.replace may throw a PermisionError on Windows if the target is
+            # replaced simultaneously from multiple threads (in CI, at least)
             temp.replace(destination)
         except BaseException:
             temp.unlink(missing_ok=True)
             raise
 
+    @backoff_on_oserror
     def upload_stream(self, name, stream, length):
         destination, temp = self._destination_temp(name)
         try:
@@ -51,11 +58,14 @@ class Local(Backend):
             temp.replace(destination)
         except BaseException:
             temp.unlink(missing_ok=True)
+            stream.seek(0)
             raise
 
+    @backoff_on_oserror
     def download(self, name):
         return (self.path / name).read_bytes()
 
+    @backoff_on_oserror
     def list_files(self, prefix=''):
         path_length = len(str(self.path))
         # pathlib strips the trailing slash from paths; we don't want that here
@@ -90,6 +100,7 @@ class Local(Backend):
                     path = path.replace(os.sep, '/')
                     yield path[path_length + 1 :]
 
+    @backoff_on_oserror
     def delete(self, name):
         (self.path / name).unlink(missing_ok=True)
 
@@ -107,6 +118,7 @@ class Local(Backend):
 
                 yield entry, empty
 
+    @backoff_on_oserror
     def clean(self):
         for entry, empty in self._find_deletable(self.path):
             if empty:
