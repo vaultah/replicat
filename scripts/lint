@@ -6,7 +6,7 @@ from argparse import ArgumentParser
 
 
 def install(*packages, upgrade=True):
-    args = [sys.executable, "-m", "pip", "install"]
+    args = [sys.executable, '-m', 'pip', 'install']
     if upgrade:
         args.append('-U')
     args.extend(packages)
@@ -39,8 +39,7 @@ def run_black(directory='.', *, check_only=False):
 
 
 def run_flake8(directory='.'):
-    args = ['flake8', directory]
-    subprocess.run(args, check=True)
+    subprocess.run(['flake8', directory], check=True)
 
 
 if __name__ == '__main__':

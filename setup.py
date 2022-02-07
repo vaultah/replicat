@@ -42,26 +42,26 @@ class CMakeBuild(build_ext):
             if archs:
                 cmake_args += ["-DCMAKE_OSX_ARCHITECTURES={}".format(";".join(archs))]
 
-        if self.compiler.compiler_type == "msvc":
+        if self.compiler.compiler_type == 'msvc':
             cmake_args += [
-                f"-DCMAKE_LIBRARY_OUTPUT_DIRECTORY_{config.upper()}={extdir}"
+                f'-DCMAKE_LIBRARY_OUTPUT_DIRECTORY_{config.upper()}={extdir}'
             ]
-            build_args += ["--config", config]
+            build_args += ['--config', config]
 
         # Set CMAKE_BUILD_PARALLEL_LEVEL to control the parallel build level
         # across all generators.
-        if "CMAKE_BUILD_PARALLEL_LEVEL" not in os.environ:
+        if 'CMAKE_BUILD_PARALLEL_LEVEL' not in os.environ:
             # self.parallel is a Python 3 only way to set parallel jobs by hand
             # using -j in the build_ext call, not supported by pip or PyPA-build.
-            if hasattr(self, "parallel") and self.parallel:
+            if hasattr(self, 'parallel') and self.parallel:
                 # CMake 3.12+ only.
-                build_args += [f"-j{self.parallel}"]
+                build_args += [f'-j{self.parallel}']
 
         subprocess.check_call(
-            ["cmake", ext.sourcedir] + cmake_args, cwd=self.build_temp
+            ['cmake', ext.sourcedir] + cmake_args, cwd=self.build_temp
         )
         subprocess.check_call(
-            ["cmake", "--build", "."] + build_args, cwd=self.build_temp
+            ['cmake', '--build', '.'] + build_args, cwd=self.build_temp
         )
 
 
