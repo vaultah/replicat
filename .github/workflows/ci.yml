@@ -5,6 +5,8 @@ jobs:
   lint:
     runs-on: ubuntu-latest
     steps:
+      - name: Checkout
+        uses: actions/checkout@v2
       - run: ./scripts/lint --check-only --install
 
   build-39-windows:
