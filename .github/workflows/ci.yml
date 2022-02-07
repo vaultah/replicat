@@ -9,7 +9,7 @@ jobs:
         uses: actions/checkout@v2
       - run: echo $PWD
       - run: ls
-      - run: isort --check-only .
+      - run: python3 -m pip install isort && isort --show-config . && isort --check-only .
       - run: ./scripts/lint --check-only --install
 
   build-39-windows:
