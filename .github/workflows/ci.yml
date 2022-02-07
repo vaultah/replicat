@@ -51,7 +51,7 @@ jobs:
         id: dwnl
         with:
           name: ${{ needs.build-39-windows.outputs.wheel_name }}
-      - run: python -m pip install ${{ steps.dwnl.outputs.download-path }}[test]
+      - run: python -m pip install ${{ needs.build-39-windows.outputs.wheel_name }}[test]
         shell: bash
       - run: python -m pytest --pyargs replicat
 
@@ -63,7 +63,7 @@ jobs:
         id: dwnl
         with:
           name: ${{ needs.build-39-linux.outputs.wheel_name }}
-      - run: python -m pip install ${{ steps.dwnl.outputs.download-path }}[test]
+      - run: python -m pip install ${{ needs.build-39-linux.outputs.wheel_name }}[test]
         shell: bash
       - run: python -m pytest --pyargs replicat
 
@@ -75,7 +75,7 @@ jobs:
         id: dwnl
         with:
           name: ${{ needs.build-39-macos.outputs.wheel_name }}
-      - run: python -m pip install ${{ steps.dwnl.outputs.download-path }}[test]
+      - run: python -m pip install ${{ needs.build-39-macos.outputs.wheel_name }}[test]
         shell: bash
       - run: python -m pytest --pyargs replicat
 
@@ -88,7 +88,7 @@ jobs:
         id: dwnl
         with:
           name: ${{ needs.build-310-windows.outputs.wheel_name }}
-      - run: python -m pip install ${{ steps.dwnl.outputs.download-path }}[test]
+      - run: python -m pip install ${{ needs.build-310-windows.outputs.wheel_name }}[test]
         shell: bash
       - run: python -m pytest --pyargs replicat
 
@@ -100,7 +100,7 @@ jobs:
         id: dwnl
         with:
           name: ${{ needs.build-310-linux.outputs.wheel_name }}
-      - run: python -m pip install ${{ steps.dwnl.outputs.download-path }}[test]
+      - run: python -m pip install ${{ needs.build-310-linux.outputs.wheel_name }}[test]
         shell: bash
       - run: python -m pytest --pyargs replicat
 
@@ -112,6 +112,6 @@ jobs:
         id: dwnl
         with:
           name: ${{ needs.build-310-macos.outputs.wheel_name }}
-      - run: python -m pip install ${{ steps.dwnl.outputs.download-path }}[test]
+      - run: python -m pip install ${{ needs.build-310-macos.outputs.wheel_name }}[test]
         shell: bash
       - run: python -m pytest --pyargs replicat
