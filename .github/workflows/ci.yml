@@ -7,6 +7,9 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v2
+      - run: echo $PWD
+      - run: ls
+      - run: isort --check-only .
       - run: ./scripts/lint --check-only --install
 
   build-39-windows:
