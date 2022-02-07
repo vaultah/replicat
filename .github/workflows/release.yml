@@ -3,37 +3,31 @@ on: push
   
 jobs:
   build-39-windows:
-    needs: lint
     uses: ./.github/workflows/build-windows.yml
     with:
       python-version: '3.9'
 
   build-39-linux:
-    needs: lint
     uses: ./.github/workflows/build-linux.yml
     with:
       python-version: '3.9'
 
   build-39-macos:
-    needs: lint
     uses: ./.github/workflows/build-macos.yml
     with:
       python-version: '3.9'
 
   build-310-windows:
-    needs: lint
     uses: ./.github/workflows/build-windows.yml
     with:
       python-version: '3.10'
 
   build-310-linux:
-    needs: lint
     uses: ./.github/workflows/build-linux.yml
     with:
       python-version: '3.10'
 
   build-310-macos:
-    needs: lint
     uses: ./.github/workflows/build-macos.yml
     with:
       python-version: '3.10'
