@@ -1,0 +1,52 @@
+#!/usr/bin/env python3
+
+import subprocess
+import sys
+from argparse import ArgumentParser
+
+
+def install(*packages, upgrade=True):
+    args = [sys.executable, '-m', 'pip', 'install']
+    if upgrade:
+        args.append('-U')
+    args.extend(packages)
+    subprocess.run(args)
+
+
+parser = ArgumentParser()
+parser.add_argument(
+    '--check-only', action='store_true', help='Perform checks without modifying files'
+)
+parser.add_argument('--install', action='store_true', help='Install tools')
+
+
+def run_isort(directory='.', *, check_only=False):
+    args = ['isort']
+    if check_only:
+        args.append('--check-only')
+
+    args.append(directory)
+    subprocess.run(args, check=True)
+
+
+def run_black(directory='.', *, check_only=False):
+    args = ['black']
+    if check_only:
+        args.append('--check')
+
+    args.append(directory)
+    subprocess.run(args, check=True)
+
+
+def run_flake8(directory='.'):
+    subprocess.run(['flake8', directory], check=True)
+
+
+if __name__ == '__main__':
+    args = parser.parse_args()
+    if args.install:
+        install('isort', 'black', 'flake8', upgrade=True)
+
+    run_isort(check_only=args.check_only)
+    run_black(check_only=args.check_only)
+    run_flake8()

@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 
 import pybind11
-from setuptools import Extension, find_packages, setup
+from setuptools import Extension, find_namespace_packages, find_packages, setup
 from setuptools.command.build_ext import build_ext
 
 
@@ -31,6 +31,7 @@ class CMakeBuild(build_ext):
         cmake_args = [
             '-DCMAKE_LIBRARY_OUTPUT_DIRECTORY=' + str(extdir.resolve()),
             '-DCMAKE_BUILD_TYPE=' + config,
+            '-DPYBIND11_FINDPYTHON=' + 'ON',
             '-Dpybind11_DIR=' + pybind11.get_cmake_dir(),
         ]
         build_args = []
@@ -41,26 +42,31 @@ class CMakeBuild(build_ext):
             if archs:
                 cmake_args += ["-DCMAKE_OSX_ARCHITECTURES={}".format(";".join(archs))]
 
+        if self.compiler.compiler_type == 'msvc':
+            cmake_args += [
+                f'-DCMAKE_LIBRARY_OUTPUT_DIRECTORY_{config.upper()}={extdir}'
+            ]
+            build_args += ['--config', config]
+
         # Set CMAKE_BUILD_PARALLEL_LEVEL to control the parallel build level
         # across all generators.
-        if "CMAKE_BUILD_PARALLEL_LEVEL" not in os.environ:
+        if 'CMAKE_BUILD_PARALLEL_LEVEL' not in os.environ:
             # self.parallel is a Python 3 only way to set parallel jobs by hand
             # using -j in the build_ext call, not supported by pip or PyPA-build.
-            if hasattr(self, "parallel") and self.parallel:
+            if hasattr(self, 'parallel') and self.parallel:
                 # CMake 3.12+ only.
-                build_args += [f"-j{self.parallel}"]
+                build_args += [f'-j{self.parallel}']
 
         subprocess.check_call(
-            ["cmake", ext.sourcedir] + cmake_args, cwd=self.build_temp
+            ['cmake', ext.sourcedir] + cmake_args, cwd=self.build_temp
         )
         subprocess.check_call(
-            ["cmake", "--build", "."] + build_args, cwd=self.build_temp
+            ['cmake', '--build', '.'] + build_args, cwd=self.build_temp
         )
 
 
-extras_require = {'test': ['pytest', 'pytest-asyncio']}
+extras_require = {'test': ['pytest', 'pytest-asyncio<0.17']}
 extras_require['all'] = [y for x in extras_require.values() for y in x]
-
 
 setup(
     name='replicat',
@@ -68,7 +74,7 @@ setup(
     python_requires=">=3.9",
     description='Configurable and lightweight backup utility with '
     'deduplication, encryption and stuff.',
-    packages=find_packages(),
+    packages=find_packages() + find_namespace_packages(include=['replicat.*']),
     install_requires=[
         'httpx',
         'cryptography',
