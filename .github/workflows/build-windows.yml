@@ -1,0 +1,39 @@
+name: Build for Windows
+on:
+  workflow_call:
+    inputs:
+      python-version:
+        required: true
+        type: string
+
+    outputs:
+      wheel_name:
+        description: "Wheel name"
+        value: ${{ jobs.build-wheel.outputs.name }}
+
+jobs:
+  build-wheel:
+    runs-on: windows-latest
+    outputs:
+      name: ${{ steps.whl_name.outputs.whl_name }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v2
+      - name: Setup Python
+        uses: actions/setup-python@v2
+        with:
+          python-version: ${{ inputs.python-version }}
+      - name: Setup cmake
+        uses: jwlawson/actions-setup-cmake@v1.12
+      - name: Use cmake
+        run: cmake --version
+      - run: python -m pip install -U pip setuptools build
+      - run: python -m build --wheel
+      - id: whl_name
+        run: echo "WHEEL_NAME=$(basename $(ls dist/*.whl))" >> $GITHUB_ENV
+        run: echo "::set-output name=whl_name::${{ env.WHEEL_NAME }}"
+        shell: bash
+      - uses: actions/upload-artifact@v2
+        with:
+          name: ${{ env.WHEEL_NAME }}
+          path: dist/${{ env.WHEEL_NAME }}
