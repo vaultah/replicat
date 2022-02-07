@@ -5,7 +5,6 @@ on:
       python-version:
         required: true
         type: string
-
     outputs:
       wheel_name:
         description: "Wheel name"

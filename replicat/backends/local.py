@@ -42,7 +42,7 @@ class Local(Backend):
         destination, temp = self._destination_temp(name)
         try:
             temp.write_bytes(data)
-            # os.replace may throw a PermisionError on Windows if the target is
+            # os.replace may throw a PermissionError on Windows if the target is
             # replaced simultaneously from multiple threads (in CI, at least)
             temp.replace(destination)
         except BaseException:
