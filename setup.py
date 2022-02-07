@@ -65,10 +65,7 @@ class CMakeBuild(build_ext):
         )
 
 
-extras_require = {
-    'test': ['pytest', 'pytest-asyncio<0.17'],
-    'linter': ['isort', 'flake8', 'black'],
-}
+extras_require = {'test': ['pytest', 'pytest-asyncio<0.17']}
 extras_require['all'] = [y for x in extras_require.values() for y in x]
 
 setup(

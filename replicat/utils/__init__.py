@@ -28,14 +28,14 @@ PREFIXES_TABLE = {
     'K': 1000,
     'Ki': 1024,
     'ki': 1024,
-    'M': 1000 ** 2,
-    'm': 1000 ** 2,
-    'Mi': 1024 ** 2,
-    'mi': 1024 ** 2,
-    'g': 1000 ** 3,
-    'G': 1000 ** 3,
-    'gi': 1024 ** 3,
-    'Gi': 1024 ** 3,
+    'M': 1000**2,
+    'm': 1000**2,
+    'Mi': 1024**2,
+    'mi': 1024**2,
+    'g': 1000**3,
+    'G': 1000**3,
+    'gi': 1024**3,
+    'Gi': 1024**3,
 }
 UNITS_TABLE = {'B': 1, 'b': Decimal('0.125')}
 HUMAN_SIZE_REGEX = (
@@ -295,12 +295,12 @@ def human_to_bytes(value):
 def bytes_to_human(value, prec=2):
     if value < 1_000:
         divisor, unit = 1, 'B'
-    elif 1_000 <= value < 1_000 ** 2:
+    elif 1_000 <= value < 1_000**2:
         divisor, unit = 1_000, 'K'
-    elif 1_000 ** 2 <= value < 1_000 ** 3:
-        divisor, unit = 1_000 ** 2, 'M'
+    elif 1_000**2 <= value < 1_000**3:
+        divisor, unit = 1_000**2, 'M'
     else:
-        divisor, unit = 1_000 ** 3, 'G'
+        divisor, unit = 1_000**3, 'G'
 
     return f'{round(value / divisor, prec):g}{unit}'
 
