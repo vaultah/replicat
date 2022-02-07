@@ -5,7 +5,7 @@ jobs:
   lint:
     runs-on: ubuntu-latest
     steps:
-      - run: echo lint
+      - run: ./scripts/lint --check-only --install
 
   build-39-windows:
     needs: lint
