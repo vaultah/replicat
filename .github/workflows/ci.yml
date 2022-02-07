@@ -10,7 +10,7 @@ jobs:
       - run: echo $PWD
       - run: ls
       - run: python3 -m pip install isort && isort --show-config . && isort --check-only .
-      - run: ./scripts/lint --check-only --install
+      - run: scripts/lint --check-only --install
 
   build-39-windows:
     needs: lint
