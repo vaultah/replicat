@@ -10,38 +10,38 @@ jobs:
   build-3.9-windows:
     needs: lint
     uses: ./.github/workflows/build-windows.yml
-      with:
-          python-version: '3.9'
+    with:
+      python-version: '3.9'
 
   build-3.9-linux:
     needs: lint
     uses: ./.github/workflows/build-linux.yml
-      with:
-          python-version: '3.9'
+    with:
+      python-version: '3.9'
 
   build-3.9-macos:
     needs: lint
     uses: ./.github/workflows/build-macos.yml
-      with:
-          python-version: '3.9'
+    with:
+      python-version: '3.9'
 
   build-3.10-windows:
     needs: lint
     uses: ./.github/workflows/build-windows.yml
-      with:
-          python-version: '3.10'
+    with:
+      python-version: '3.10'
 
   build-3.10-linux:
     needs: lint
     uses: ./.github/workflows/build-linux.yml
-      with:
-          python-version: '3.10'
+    with:
+      python-version: '3.10'
 
   build-3.10-macos:
     needs: lint
     uses: ./.github/workflows/build-macos.yml
-      with:
-          python-version: '3.10'
+    with:
+      python-version: '3.10'
 
   test-3.9-windows:
     needs: build-3.9-windows
