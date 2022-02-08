@@ -1,6 +1,8 @@
+import os
 import re
 import threading
 import time
+from pathlib import Path
 from random import Random
 from unittest.mock import ANY, patch
 
@@ -8,6 +10,7 @@ import pytest
 
 from replicat import exceptions
 from replicat.backends.local import Local
+from replicat.repository import Repository
 from replicat.utils import adapters
 
 
@@ -1094,3 +1097,90 @@ class TestClean:
         await local_repo.clean()
 
         assert all(map(local_backend.exists, chunks_paths))
+
+
+class TestUpload:
+    @pytest.fixture(autouse=True)
+    def change_cwd(self, tmp_path):
+        before = os.getcwd()
+        os.chdir(tmp_path)
+        yield
+        os.chdir(before)
+
+    @pytest.mark.asyncio
+    async def test_not_within_cwd(self, tmp_path):
+        backend = Local(tmp_path / 'backend')
+        repository = Repository(backend, concurrent=5)
+
+        path = Path(__file__)
+        relative_name = str(Path(*Path(path).parts[1:]))
+        await repository.upload([path])
+        assert set(backend.list_files()) == {relative_name}
+        assert backend.download(relative_name) == Path(__file__).read_bytes()
+
+    @pytest.mark.asyncio
+    async def test_within_cwd(self, tmp_path):
+        backend = Local(tmp_path / 'backend')
+        repository = Repository(backend, concurrent=5)
+
+        files_base_path = tmp_path / 'files'
+        contents = {
+            files_base_path / 'file': b'\x04\x05\x06',
+            files_base_path / 'directory/file': b'\x00\x01\x02\x03',
+            files_base_path / 'another/directory/another-file': b'',
+        }
+        for path, data in contents.items():
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(data)
+
+        await repository.upload(
+            [
+                files_base_path / 'file',
+                files_base_path / 'directory',
+                files_base_path / 'another',
+            ]
+        )
+        assert set(backend.list_files()) == {
+            'files/file',
+            'files/directory/file',
+            'files/another/directory/another-file',
+        }
+        assert backend.download('files/file') == contents[files_base_path / 'file']
+        assert (
+            backend.download('files/directory/file')
+            == contents[files_base_path / 'directory/file']
+        )
+        assert (
+            backend.download('files/another/directory/another-file')
+            == contents[files_base_path / 'another/directory/another-file']
+        )
+
+    @pytest.mark.asyncio
+    async def test_overwrites(self, local_backend, tmp_path):
+        backend = Local(tmp_path / 'backend')
+        backend.upload('files/file', b'<old data>')
+
+        files_base_path = tmp_path / 'files'
+        files_base_path.mkdir()
+        (files_base_path / 'file').write_bytes(b'<updated data>')
+
+        repository = Repository(backend, concurrent=5)
+
+        await repository.upload([files_base_path / 'file'])
+        assert set(backend.list_files()) == {'files/file'}
+        assert backend.download('files/file') == b'<updated data>'
+
+    @pytest.mark.asyncio
+    async def test_skip_existing(self, local_backend, tmp_path):
+        backend = Local(tmp_path / 'backend')
+        backend.upload('files/file', b'<old data>')
+
+        files_base_path = tmp_path / 'files'
+        files_base_path.mkdir()
+        (files_base_path / 'file').write_bytes(b'<updated data>')
+
+        repository = Repository(backend, concurrent=5)
+
+        await repository.upload([files_base_path / 'file'], skip_existing=True)
+        assert set(backend.list_files()) == {'files/file'}
+        assert backend.download('files/file') == b'<old data>'

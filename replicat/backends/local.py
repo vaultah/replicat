@@ -17,6 +17,7 @@ class Local(Backend):
     def __init__(self, connection_string):
         self.path = Path(connection_string)
 
+    @backoff_on_oserror
     def exists(self, name):
         return os.path.exists(self.path / name)
 

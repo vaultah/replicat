@@ -693,6 +693,7 @@ class Repository:
         return list(utils.fs.flatten_paths(path.resolve(strict=True) for path in paths))
 
     async def snapshot(self, *, paths, note=None, rate_limit=None):
+        print(ef.bold + 'Collecting files' + ef.rs)
         files = self._flatten_paths(paths)
         logger.info('Found %d files', len(files))
         # Small files are more likely to change than big files, read them quickly
@@ -1288,6 +1289,7 @@ class Repository:
             raise RuntimeError('Sorry, not yet')
 
     async def upload(self, paths, *, rate_limit=None, skip_existing=False):
+        print(ef.bold + 'Collecting files' + ef.rs)
         files = self._flatten_paths(paths)
         logger.info('Found %d files', len(files))
         bytes_tracker = tqdm(

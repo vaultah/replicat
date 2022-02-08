@@ -14,8 +14,8 @@ easier for me to fix problems or add new features.
 
 Highlights/goals
 
-  - concise and efficient implementation
-  - easily extendable and configurable
+  - efficient, concise, easily auditable implementation
+  - extendable and configurable
   - few external dependencies
   - well-documented behaviour
   - unified repository layout
@@ -77,6 +77,17 @@ There are several available subcommands:
  - `add-key` -- creates a new key for the encrypted repository
  - `delete` -- deletes snapshots by their names
  - `clean` -- performs garbage collection
+ - `upload` -- uploads files to the backend (no chunking, no encryption, keeping original names)
+
+> :warning: **WARNING**: actions that read from or upload to the repository can safely be run
+> concurrently; however, there are presently no guards in place that would make it safe
+> for you to run destructive actions (`delete`, `clean`) concurrently with those actions
+> *unless* you use independent keys (see the explanation above). I do plan to implement them
+> soon-ish, but in the meantime **DO NOT** use shared keys (or, naturally, the same key)
+> to `snapshot` and `clean` at the same time, for example.
+>
+> As far as the upcoming implementation of such guards, it'll be based on locks. I'm familiar
+> with the lock-free deduplication strategy (like in Duplicacy), but I don't like it much.
 
 There are several command line arguments that are common to all subcommands:
 
@@ -223,4 +234,21 @@ $ replicat delete -r some/directory \
 ```bash
 # Unlocks the repository and deletes all chunks that are not referenced by any snapshot
 $ replicat clean -r some/directory -P path/to/password/file -K path/to/key/file
+```
+
+## `upload` examples
+
+```bash
+# Uploads files directly to the backend without any additional processing.
+# File path -> resulting name:
+#   /working/directory/some/file -> some/file
+#   /working/directory/another/file -> another/file
+#   /working/directory/another/directory/another-file -> another/directory/another-file
+#   /absolute/directory/path/with-file -> absolute/directory/path/with-file
+#   /absolute/file -> absolute/file
+/working/directory$ replicat upload -r some:repository \
+                        some/file \
+                        /working/directory/another/directory \
+                        /absolute/directory/path \
+                        /absolute/file
 ```
