@@ -24,7 +24,9 @@ async def _cmd_handler(args, unknown):
     elif args.action == 'benchmark':
         await repository.benchmark(args.name, settings=settings)
     elif args.action == 'upload':
-        await repository.upload(args.path, rate_limit=args.rate_limit)
+        await repository.upload(
+            args.path, rate_limit=args.rate_limit, skip_existing=args.skip_existing
+        )
     elif args.action == 'add-key':
         if args.shared:
             await repository.unlock(password=args.password, key=args.key)

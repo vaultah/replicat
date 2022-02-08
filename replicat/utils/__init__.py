@@ -203,6 +203,7 @@ def make_main_parser(*parent_parsers):
     upload_parser.add_argument(
         '--limit-rate', '-L', dest='rate_limit', type=human_to_bytes
     )
+    upload_parser.add_argument('--skip-existing', '-S', action='store_true')
     return parser
 
 
