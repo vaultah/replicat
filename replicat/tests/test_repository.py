@@ -2,7 +2,6 @@ import os
 import re
 import threading
 import time
-from pathlib import Path
 from random import Random
 from unittest.mock import ANY, patch
 
@@ -1106,17 +1105,6 @@ class TestUpload:
         os.chdir(tmp_path)
         yield
         os.chdir(before)
-
-    @pytest.mark.asyncio
-    async def test_not_within_cwd(self, tmp_path):
-        backend = Local(tmp_path / 'backend')
-        repository = Repository(backend, concurrent=5)
-
-        path = Path(__file__)
-        relative_name = str(Path(*Path(path).parts[1:]))
-        await repository.upload([path])
-        assert set(backend.list_files()) == {relative_name}
-        assert backend.download(relative_name) == Path(__file__).read_bytes()
 
     @pytest.mark.asyncio
     async def test_within_cwd(self, tmp_path):
