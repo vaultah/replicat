@@ -74,7 +74,7 @@ extras_require['all'] = [y for x in extras_require.values() for y in x]
 
 setup(
     name='replicat',
-    version='0.0.1',
+    version='0.0.2',
     url="https://github.com/vaultah/replicat",
     maintainer='vaultah',
     maintainer_email='flwaultah+replicat@gmail.com',

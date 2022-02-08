@@ -79,7 +79,7 @@ There are several available subcommands:
  - `clean` -- performs garbage collection
  - `upload` -- uploads files to the backend (no chunking, no encryption, keeping original names)
 
-> :warning: **WARNING**: actions that read from or upload to the repository can safely be run
+> ⚠️ **WARNING**: actions that read from or upload to the repository can safely be run
 > concurrently; however, there are presently no guards in place that would make it safe
 > for you to run destructive actions (`delete`, `clean`) concurrently with those actions
 > *unless* you use independent keys (see the explanation above). I do plan to implement them
@@ -137,9 +137,15 @@ $ replicat init -r some/directory \
     --encryption.kdf.name scrypt \
     --encryption.kdf.n 1048576
 # Specifies the chunking parameters
-$ replicat init -r some/directory -p '...' --chunking.min-length 123 --chunking.max-length 345
+$ replicat init -r some/directory \
+    -p '...' \
+    --chunking.min-length 128_000 \
+    --chunking.max-length 2_048_000
 # Equivalent (dashes in argument names are converted to underscores)
-$ replicat init -r some/directory -p '...' --chunking.min_length 123 --chunking.max_length 345
+$ replicat init -r some/directory \
+    -p '...' \
+    --chunking.min_length 128_000 \
+    --chunking.max_length 2_048_000
 ```
 
 ## `snapshot` examples
@@ -173,13 +179,16 @@ $ replicat list-files -r some/directory -P path/to/password/file -K path/to/key/
 # Equivalent
 $ replicat lf -r some/directory -P path/to/password/file -K path/to/key/file
 # Only lists files with paths matching the -F regex
-$ replicat lf -r some/directory -P path/to/password/file -K path/to/key/file -F '\.(jpg|text)$'
+$ replicat lf -r some/directory \
+    -P path/to/password/file \
+    -K path/to/key/file \
+    -F '\.(jpg|text)$'
 ```
 
 ## `restore` examples
 
 ```bash
-# Unlocks the repository and restores the latest versions of all files to 'target-directory'
+# Unlocks the repository and restores the latest versions of all files to target-directory
 $ replicat restore -r some/directory \
     -P path/to/password/file \
     -K path/to/key/file \
