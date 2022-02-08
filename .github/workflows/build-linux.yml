@@ -18,20 +18,12 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v2
-      - name: Setup Python
-        uses: actions/setup-python@v2
-        with:
-          python-version: ${{ inputs.python-version }}
-      - name: Setup cmake
-        uses: jwlawson/actions-setup-cmake@v1.12
-      - name: Check cmake
-        run: cmake --version
-      - run: python -m pip install -U pip setuptools build
-      - run: python -m build --wheel
-      - run: echo "WHEEL_NAME=$(basename $(ls dist/*.whl))" >> $GITHUB_ENV
+      - run: docker run --rm -v `pwd`:/replicat -w /replicat quay.io/pypa/manylinux2014_x86_64 bash -c \
+             'python${{ inputs.python-version }} -m build --wheel && auditwheel repair dist/*.whl --plat manylinux2014_x86_64 --wheel-dir manylinux/'
+      - run: echo "WHEEL_NAME=$(basename $(ls manylinux/*.whl))" >> $GITHUB_ENV
       - id: whl_name
         run: echo "::set-output name=whl_name::${{ env.WHEEL_NAME }}"
       - uses: actions/upload-artifact@v2
         with:
           name: ${{ env.WHEEL_NAME }}
-          path: dist/${{ env.WHEEL_NAME }}
+          path: manylinux/${{ env.WHEEL_NAME }}

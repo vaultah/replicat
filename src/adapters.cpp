@@ -4,7 +4,6 @@
 #include <immintrin.h>
 #include <pybind11/pybind11.h>
 #include <stdexcept>
-#include <string_view>
 
 namespace py = pybind11;
 using namespace std;

@@ -35,7 +35,7 @@ class CMakeBuild(build_ext):
         cmake_args = [
             '-DCMAKE_LIBRARY_OUTPUT_DIRECTORY=' + str(extdir.resolve()),
             '-DCMAKE_BUILD_TYPE=' + config,
-            '-DPYBIND11_FINDPYTHON=' + 'ON',
+            '-DPYTHON_EXECUTABLE=' + sys.executable,
             '-Dpybind11_DIR=' + pybind11.get_cmake_dir(),
         ]
         build_args = []
