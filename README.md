@@ -14,6 +14,15 @@ Configurable and lightweight backup utility with deduplication and encryption.
 
 Python 3.9 (or newer) running on Linux, MacOS, or Windows.
 
+## Supported backup destinations
+
+ - local path
+ - Backblaze B2
+
+You can implement and use your own adapter for pretty much any backup destination without
+changing the source code of replicat (more on that later). You can also submit a PR to add
+your adapter to this repository.
+
 ## Installation
 
 [It's available on PyPI](https://pypi.org/project/replicat), so
