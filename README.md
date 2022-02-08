@@ -2,9 +2,25 @@
     <img src='https://i.imgur.com/1vtNQHs.png' />
 </p>
 
+<p align='center'>
+    <em><strong>[ ˈrɛplɪkət ]</strong></em>
+</p>
+
 # Replicat
 
 Configurable and lightweight backup utility with deduplication and encryption.
+
+## Compatibility
+
+Python 3.9 (or newer) running on Linux, MacOS, or Windows.
+
+## Installation
+
+[It's available on PyPI](https://pypi.org/project/replicat), so
+
+```bash
+pip install replicat
+```
 
 ## Reasoning
 
