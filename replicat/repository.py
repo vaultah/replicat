@@ -227,7 +227,7 @@ class Repository:
 
         config = {}
 
-        # Hashing algorithm for chunks
+        # Hashing
         hashing_settings = settings.get('hashing', {})
         hashing_settings.setdefault('name', self.DEFAULT_HASHER_NAME)
         hasher_type, hasher_args = utils.adapter_from_config(**hashing_settings)

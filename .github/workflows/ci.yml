@@ -5,6 +5,8 @@ on:
       - 'README.md'
       - 'LICENSE'
       - '.gitignore'
+  pull_request:
+    types: [opened, reopened]
 
 jobs:
   lint:
