@@ -11,6 +11,10 @@ from setuptools import Extension, find_namespace_packages, find_packages, setup
 from setuptools.command.build_ext import build_ext
 
 
+def get_long_description():
+    return Path('README.md').read_text('utf-8')
+
+
 # Taken from https://github.com/pybind/cmake_example/blob/master/setup.py
 # with modification
 class CMakeExtension(Extension):
@@ -71,9 +75,14 @@ extras_require['all'] = [y for x in extras_require.values() for y in x]
 setup(
     name='replicat',
     version='0.0.1',
+    url="https://github.com/vaultah/replicat",
+    maintainer='vaultah',
+    maintainer_email='flwaultah+replicat@gmail.com',
     python_requires=">=3.9",
     description='Configurable and lightweight backup utility with '
-    'deduplication, encryption and stuff.',
+    'deduplication and encryption.',
+    long_description=get_long_description(),
+    long_description_content_type="text/markdown",
     packages=find_packages() + find_namespace_packages(include=['replicat.*']),
     install_requires=[
         'httpx',

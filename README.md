@@ -4,7 +4,7 @@
 
 # Replicat
 
-Configurable and lightweight backup utility with deduplication, encryption and stuff.
+Configurable and lightweight backup utility with deduplication and encryption.
 
 ## Reasoning
 
