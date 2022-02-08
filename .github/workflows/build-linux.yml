@@ -19,8 +19,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v2
       - run: docker run --rm -v `pwd`:/replicat -w /replicat quay.io/pypa/manylinux2014_x86_64 bash -c \
-             'python${{ inputs.python-version }} -m build --wheel && \
-             auditwheel repair dist/*.whl --plat manylinux2014_x86_64 --wheel-dir manylinux/'
+             'python${{ inputs.python-version }} -m build --wheel && auditwheel repair dist/*.whl --plat manylinux2014_x86_64 --wheel-dir manylinux/'
       - run: echo "WHEEL_NAME=$(basename $(ls manylinux/*.whl))" >> $GITHUB_ENV
       - id: whl_name
         run: echo "::set-output name=whl_name::${{ env.WHEEL_NAME }}"
