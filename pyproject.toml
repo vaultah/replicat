@@ -25,5 +25,5 @@ known_first_party=["_replicat_adapters"]
 requires = [
     "setuptools>=42",
     "wheel",
-    "pybind11>=2.9.0",
+    "pybind11>=2.9.1",
 ]
