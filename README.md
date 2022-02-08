@@ -260,4 +260,11 @@ $ replicat clean -r some/directory -P path/to/password/file -K path/to/key/file
                         /working/directory/another/directory \
                         /absolute/directory/path \
                         /absolute/file
+# Uploads files that do not yet exist in the repository (only checks the file names)
+$ replicat upload -r some:repository --skip-existing some/file some/directory
 ```
+
+# Security
+
+If you believe you've found a security issue with replicat, please report it to
+[flwaultah@gmail.com](mailto:flwaultah@gmail.com) (or DM me on Twitter or Telegram).
