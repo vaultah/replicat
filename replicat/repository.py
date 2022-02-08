@@ -1287,7 +1287,7 @@ class Repository:
         else:
             raise RuntimeError('Sorry, not yet')
 
-    async def upload(self, paths, *, rate_limit=None):
+    async def upload(self, paths, *, rate_limit=None, skip_existing=False):
         files = self._flatten_paths(paths)
         logger.info('Found %d files', len(files))
         bytes_tracker = tqdm(
@@ -1321,20 +1321,26 @@ class Repository:
             length = path.stat().st_size
             slot = await self._slots.get()
             try:
-                stream = path.open('rb')
-                iowrapper = utils.tqdmio(
-                    stream,
-                    desc=name,
-                    total=length,
-                    position=slot,
-                    disable=self._quiet,
-                    rate_limiter=rate_limiter,
-                )
-
-                with stream, iowrapper:
-                    await self._as_coroutine(
-                        self.backend.upload_stream, name, iowrapper, length
+                if skip_existing and await self._as_coroutine(
+                    self.backend.exists, name
+                ):
+                    logger.info('Skipping file %r (exists)', name)
+                else:
+                    logger.info('Uploading file %r', name)
+                    stream = path.open('rb')
+                    iowrapper = utils.tqdmio(
+                        stream,
+                        desc=name,
+                        total=length,
+                        position=slot,
+                        disable=self._quiet,
+                        rate_limiter=rate_limiter,
                     )
+
+                    with stream, iowrapper:
+                        await self._as_coroutine(
+                            self.backend.upload_stream, name, iowrapper, length
+                        )
 
                 finished_tracker.update()
                 bytes_tracker.update(length)
