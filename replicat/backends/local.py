@@ -6,8 +6,8 @@ from tempfile import NamedTemporaryFile
 
 import backoff
 
-from .. import Backend
 from ..utils.fs import iterative_scandir
+from .base import Backend
 
 logger = logging.getLogger(__name__)
 backoff_on_oserror = backoff.on_exception(backoff.fibo, OSError, max_value=5)

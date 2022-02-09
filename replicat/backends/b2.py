@@ -6,7 +6,8 @@ import sys
 import backoff
 import httpx
 
-from .. import Backend, exceptions, utils
+from .. import exceptions, utils
+from .base import Backend
 
 B2_API_VERSION = 2
 B2_API_BASE_URL = f'https://api.backblazeb2.com/b2api/v{B2_API_VERSION}'
