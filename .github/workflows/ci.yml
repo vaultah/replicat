@@ -65,7 +65,7 @@ jobs:
         with:
           name: ${{ needs.build-39-windows.outputs.wheel_name }}
       - run: python -m pip install ${{ needs.build-39-windows.outputs.wheel_name }}[test]
-      - run: python -m pytest --pyargs replicat
+      - run: python -m pytest --pyargs replicat.tests
 
   test-39-linux:
     needs: build-39-linux
@@ -80,7 +80,7 @@ jobs:
         with:
           name: ${{ needs.build-39-linux.outputs.wheel_name }}
       - run: python -m pip install ${{ needs.build-39-linux.outputs.wheel_name }}[test]
-      - run: python -m pytest --pyargs replicat
+      - run: python -m pytest --pyargs replicat.tests
 
   test-39-macos:
     needs: build-39-macos
@@ -95,7 +95,7 @@ jobs:
         with:
           name: ${{ needs.build-39-macos.outputs.wheel_name }}
       - run: python -m pip install ${{ needs.build-39-macos.outputs.wheel_name }}[test]
-      - run: python -m pytest --pyargs replicat
+      - run: python -m pytest --pyargs replicat.tests
 
   test-310-windows:
     needs: build-310-windows
@@ -110,7 +110,7 @@ jobs:
         with:
           name: ${{ needs.build-310-windows.outputs.wheel_name }}
       - run: python -m pip install ${{ needs.build-310-windows.outputs.wheel_name }}[test]
-      - run: python -m pytest --pyargs replicat
+      - run: python -m pytest --pyargs replicat.tests
 
   test-310-linux:
     needs: build-310-linux
@@ -125,7 +125,7 @@ jobs:
         with:
           name: ${{ needs.build-310-linux.outputs.wheel_name }}
       - run: python -m pip install ${{ needs.build-310-linux.outputs.wheel_name }}[test]
-      - run: python -m pytest --pyargs replicat
+      - run: python -m pytest --pyargs replicat.tests
 
   test-310-macos:
     needs: build-310-macos
@@ -140,4 +140,4 @@ jobs:
         with:
           name: ${{ needs.build-310-macos.outputs.wheel_name }}
       - run: python -m pip install ${{ needs.build-310-macos.outputs.wheel_name }}[test]
-      - run: python -m pytest --pyargs replicat
+      - run: python -m pytest --pyargs replicat.tests
