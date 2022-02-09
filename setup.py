@@ -71,6 +71,7 @@ class CMakeBuild(build_ext):
 
 extras_require = {'test': ['pytest', 'pytest-asyncio<0.17']}
 extras_require['all'] = [y for x in extras_require.values() for y in x]
+
 setup(
     name='replicat',
     version='1.0.0',
@@ -82,7 +83,7 @@ setup(
     'deduplication and encryption.',
     long_description=get_long_description(),
     long_description_content_type="text/markdown",
-    packages=find_namespace_packages(include=['replicat*']),
+    packages=find_namespace_packages(include=['replicat', 'replicat.*']),
     install_requires=[
         'httpx',
         'cryptography',
