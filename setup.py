@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 
 import pybind11
-from setuptools import Extension, find_namespace_packages, find_packages, setup
+from setuptools import Extension, find_namespace_packages, setup
 from setuptools.command.build_ext import build_ext
 
 
@@ -83,7 +83,7 @@ setup(
     'deduplication and encryption.',
     long_description=get_long_description(),
     long_description_content_type="text/markdown",
-    packages=find_packages() + find_namespace_packages(include=['replicat.*']),
+    packages=find_namespace_packages(include=['replicat', 'replicat.*']),
     install_requires=[
         'httpx',
         'cryptography',
