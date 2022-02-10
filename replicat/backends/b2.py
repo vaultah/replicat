@@ -198,7 +198,7 @@ class B2(Backend):
     @backoff_reauth
     @on_error
     async def list_files(self, prefix=''):
-        url = f'{self.auth.apiUrl}/b2api/v{B2_API_VERSION}/b2_list_file_versions'
+        url = f'{self.auth.apiUrl}/b2api/v{B2_API_VERSION}/b2_list_file_names'
         bucket_info = await self._get_bucket_info()
         files = []
         params = {
