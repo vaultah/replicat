@@ -228,7 +228,7 @@ def parser_from_backend_class(cls, *, inherit_common=True):
             continue
 
         environment_var = f'{cls.__name__.upper()}_{name.upper()}'
-        help_text = f"or the {environment_var} environment variable"
+        help_text = f'or the {environment_var} environment variable'
         if arg.default is not arg.empty:
             default = arg.default
             help_text += f', or the constructor default {default!r}'
