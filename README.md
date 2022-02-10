@@ -20,8 +20,7 @@ Python 3.9 (or newer) running on Linux, MacOS, or Windows.
  - Backblaze B2
 
 You can implement and use your own adapter for pretty much any backup destination without
-changing the source code of replicat (more on that later). You can also submit a PR to add
-your adapter to this repository.
+changing the source code of Replicat (more on that later).
 
 ## Installation
 
@@ -51,10 +50,10 @@ a copycat.
 
 # Introduction
 
-You can use Replicat to backup files from your machine to a remote location called a *repository*,
-located on a *backend* like *local* (a local path) or *b2* (Backblaze B2). Files are stored in an
-optionally encrypted and chunked form, and references to *chunks* (i.e. their digests) are stored
-in *snapshots* along with file name and metadata.
+You can use Replicat to backup files from your machine to a *repository*, located on a *backend*
+like *local* (a local path) or *b2* (Backblaze B2). Files are stored in an optionally encrypted
+and chunked form, and references to *chunks* (i.e. their digests) are stored in *snapshots* along
+with file name and metadata.
 
 Replicat supports two types of repositories: encrypted (the default) and unencrypted.
 
@@ -116,14 +115,14 @@ There are several available subcommands:
 
 There are several command line arguments that are common to all subcommands:
 
- - `-r`/`--repository` -- used to specify the type and location of the repository backend.
- The format is `<backend>:<connection string>`, where `<backend>` is the name of a
- module in the `replicat.backends` package. For example: `b2:bucket-name` (B2 backend).
- The `<backend>:` part can be omitted for the local destinations (local backend).
- The `<connection string>` part is passed directly to the `replicat.backends.<backend>.Client`
- class constructor. If `replicat.backends.<backend>.Client` expects additional backend-specific
- arguments, they will appear in the `--help` output. `replicat.backends` is a namespace package,
- making it possible to add custom backends without changing `replicat` source code.
+ - `-r`/`--repository` -- used to specify the type and location of the repository backend
+ (backup destination). The format is `<backend>:<connection string>`, where `<backend>` is
+ the short name of a Replicat-compatible backend and `<connection string>` is open to
+ interpretation by the adapter for the selected backend. Examples:
+ `b2:bucket-name` for the B2 backend or `local:some/local/path` for the local backend
+ (or just `some/local/path`, since the `<backend>:` part can be omitted for local
+ destinations). If the backend requires additional arguments, they will appear in the
+ `--help` output. Refer to the section on custom backends for more detailed information.
 
  - `-q`/`--hide-progress` -- suppresses progress indication for commands that support it
  - `-c`/`--concurrent` -- the number of concurrent connections to the backend
@@ -289,7 +288,88 @@ $ replicat clean -r some/directory -P path/to/password/file -K path/to/key/file
 $ replicat upload -r some:repository --skip-existing some/file some/directory
 ```
 
+# Custom backends
+
+`replicat.backends` is a namespace package, making it possible to add custom backends
+without changing `replicat` source code.
+
+Suppose your backend of choice is a hypothetical low low cost cloud storage
+Proud Cloud (`pc` for short). The most barebones implementation of the
+Replicat-compatible adapter for the `pc` backend will require a directory with
+the following structure:
+
+```bash
+$ tree proud-cloud/
+proud-cloud/
+└── replicat
+    └── backends
+        └── pc.py
+```
+
+The `-r` argument of `replicat` commands will take the form of `-r pc:<connection string>`.
+Replicat will use it to locate the `pc` module inside the `replicat.backends` package,
+load the `replicat.backends.pc.Client` class, and pass the `<connection string>`
+to its constructor to create the backend instance. In case there are some additional
+parameters that are required to connect to Proud Cloud (account id, secret token, etc.),
+you should add them to the `replicat.backends.pc.Client` constructor as keyword-only arguments.
+If present, Replicat will generate the corresponding command line arguments with defaults *and*
+you'll even be able to use environment variables to provide them.
+
+`replicat.backends.pc.Client` must subclass `replicat.backends.base.Backend` and implement all
+of the methods marked as abstract. You could use implementations of existing
+`replicat.backends.base.Backend` subclasses as examples. To make your implementation visible
+to Replicat, you'll need to add it to the module search path before invoking `replicat`
+(you could use the
+[`PYTHONPATH`](https://docs.python.org/3/using/cmdline.html#envvar-PYTHONPATH) environment variable
+for that).
+
+Here's an example:
+
+```python
+# ./proud-cloud/replicat/backends/pc.py
+from .base import Backend
+
+class ProudCloud(Backend):
+    def __init__(self, connection_string, *, account_id, secret, port=9_876, legacy=False):
+        print(f'PC arguments: {connection_string=}, {account_id=}, {secret=}, {port=}, {legacy=}')
+        ...
+    ...
+
+Client = ProudCloud
+```
+
+```bash
+$ PYTHONPATH=proud-cloud replicat init -r pc:... --help
+usage: replicat init [-h] [-r REPO] [-q] [-c CONCURRENT] [-v] [-K KEYFILE]
+                     [-p PASSWORD | -P PASSWORD_FILE_PATH] [--account-id ACCOUNT_ID]
+                     [--secret SECRET] [--port PORT] [--legacy LEGACY] [-o KEY_OUTPUT_FILE]
+
+optional arguments:
+  ...
+
+arguments specific to the ProudCloud backend:
+  --account-id ACCOUNT_ID
+                        or the PROUDCLOUD_ACCOUNT_ID environment variable
+  --secret SECRET       or the PROUDCLOUD_SECRET environment variable
+  --port PORT           or the PROUDCLOUD_PORT environment variable, or the constructor default 9876
+  --legacy LEGACY       or the PROUDCLOUD_LEGACY environment variable, or the constructor default False
+```
+
+```bash
+$ PYTHONPATH=proud-cloud PROUDCLOUD_LEGACY=true PROUDCLOUD_SECRET='pr0ud' \
+    replicat init -r pc:... \
+    --account-id 12345 \
+    --port 9877
+PC arguments: connection_string='...', account_id=12345, secret='pr0ud', port=9877, legacy=True
+...
+```
+
+If you've created a Replicat-compatible adapter for a backend that Replicat doesn't already
+support *and* your implementation doesn't depend on additional third-party libraries
+(or at least they are not too heavy and can be moved to extras), consider submitting a PR
+to include it in this repository.
+
 # Security
 
-If you believe you've found a security issue with replicat, please report it to
+If you believe you've found a security issue with Replicat, please report it to
 [flwaultah@gmail.com](mailto:flwaultah@gmail.com) (or DM me on Twitter or Telegram).

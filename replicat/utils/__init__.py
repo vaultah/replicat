@@ -227,20 +227,19 @@ def parser_from_backend_class(cls, *, inherit_common=True):
         if arg.kind is not arg.KEYWORD_ONLY:
             continue
 
-        # TODO: annotations?
+        environment_var = f'{cls.__name__.upper()}_{name.upper()}'
+        help_text = f"or the {environment_var} environment variable"
         if arg.default is not arg.empty:
             default = arg.default
-            help_text = None
+            help_text += f', or the constructor default {default!r}'
         else:
-            environment_var = f'{cls.__name__.upper()}_{name.upper()}'
-            default = os.environ.get(environment_var)
-            help_text = f"or the {environment_var} environment variable."
+            default = None
 
         name = name.replace('_', '-')
         group.add_argument(
             f'--{name}',
-            required=arg.default is arg.empty,
-            default=default,
+            default=os.environ.get(environment_var, default),
+            # TODO: consider annotations?
             type=guess_type,
             help=help_text,
         )
