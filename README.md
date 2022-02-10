@@ -331,7 +331,7 @@ from .base import Backend
 
 class ProudCloud(Backend):
     def __init__(self, connection_string, *, account_id, secret, port=9_876, legacy=False):
-        print(f'PC arguments: {connection_string=}, {account_id=}, {secret=}, {port=}, {legacy=}')
+        print(f'PC args: {connection_string=}, {account_id=}, {secret=}, {port=}, {legacy=}')
         ...
     ...
 
@@ -360,7 +360,7 @@ $ PYTHONPATH=proud-cloud PROUDCLOUD_LEGACY=true PROUDCLOUD_SECRET='pr0ud' \
     replicat init -r pc:... \
     --account-id 12345 \
     --port 9877
-PC arguments: connection_string='...', account_id=12345, secret='pr0ud', port=9877, legacy=True
+PC args: connection_string='...', account_id=12345, secret='pr0ud', port=9877, legacy=True
 ...
 ```
 
