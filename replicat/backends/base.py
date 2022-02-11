@@ -5,48 +5,54 @@ logger = logging.getLogger(__name__)
 
 
 class Backend(abc.ABC):
+
+    """All of the methods can be either async or plain functions. Backend adapters
+    are resposible for implementing their own fault handling and retry strategies"""
+
     def __init__(self, connection_string, **ka):
         pass
 
     @abc.abstractmethod
     async def exists(self, name) -> bool:
-        """Either async or plain function"""
+        """Check whether a file with this name exists at the backend"""
         return True
 
     @abc.abstractmethod
     async def upload(self, name, data):
-        """Either async or plain function"""
+        """Upload bytes-like data to the backend under this name"""
         return None
 
     @abc.abstractmethod
     async def upload_stream(self, name, stream, length):
-        """Either async or plain function"""
+        """Upload seekable file-like stream to the backend under this name"""
         return None
 
     @abc.abstractmethod
     async def download(self, name) -> bytes:
-        """Either async or plain function"""
+        """Download file from the backend by name and return its contents as bytes"""
         return b''
 
     @abc.abstractmethod
     async def list_files(self, prefix=''):
-        """Either async or plain function"""
+        """Get the list of files from the backend. Restricts the results to
+        non-deleted files starting with this prefix. The return value can be a
+        plain iterable or an async iterator"""
         return None
 
     @abc.abstractmethod
     async def delete(self, name):
-        """Either async or plain function"""
+        """Delete file by name"""
         return None
 
     async def authenticate(self):
-        """Either async or plain function. Also, it's optional, and must
-        have the same type as the methods that need authentication"""
+        """Called to authenticate the client (see the @requires_auth decorator).
+        Must have the same type as the function that requires authentication"""
         raise NotImplementedError
 
     async def close(self):
-        """Either async or plain function"""
+        """Close resources"""
         pass
 
     async def clean(self):
-        """Either async or plain function"""
+        """Perform clean up"""
         pass
