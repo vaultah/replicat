@@ -108,7 +108,8 @@ class Repository:
         self._concurrent = concurrent
         self._quiet = quiet
         self._slots = asyncio.Queue(maxsize=concurrent)
-        # We need actual integers for TQDM slot management
+        # We need actual integers for TQDM slot management in CLI, but this queue
+        # can also act as a semaphore in the general case
         for slot in range(2, concurrent + 2):
             self._slots.put_nowait(slot)
 
@@ -385,13 +386,19 @@ class Repository:
         else:
             key = None
 
-        print(ef.bold + 'Uploading config' + ef.rs)
-        await self._as_coroutine(self.backend.upload, 'config', self.serialize(config))
+        async with self._acquire_slot():
+            print(ef.bold + 'Uploading config' + ef.rs)
+            await self._as_coroutine(
+                self.backend.upload, 'config', self.serialize(config)
+            )
+
         self.props = props
         return utils.DefaultNamespace(config=config, key=key)
 
     async def _load_config(self):
-        data = await self._as_coroutine(self.backend.download, 'config')
+        async with self._acquire_slot():
+            data = await self._as_coroutine(self.backend.download, 'config')
+
         return RepositoryProps(**self._instantiate_config(self.deserialize(data)))
 
     async def unlock(self, *, password=None, key=None):
@@ -863,21 +870,23 @@ class Repository:
                     await asyncio.sleep(queue_timeout)
                     continue
 
-                async with self._acquire_slot() as slot:
+                async with self._acquire_slot():
                     exists = await self._as_coroutine(
                         self.backend.exists, chunk.location
                     )
-                    logger.info(
-                        'Processing chunk #%d, exists=%s, I=%d, L=%s',
-                        chunk.counter,
-                        exists,
-                        chunk.index,
-                        chunk.location,
-                    )
-                    if exists:
-                        _chunk_done(chunk)
-                        state.bytes_reused += chunk.stream_end - chunk.stream_start
-                    else:
+
+                logger.info(
+                    'Processing chunk #%d, exists=%s, I=%d, L=%s',
+                    chunk.counter,
+                    exists,
+                    chunk.index,
+                    chunk.location,
+                )
+                if exists:
+                    _chunk_done(chunk)
+                    state.bytes_reused += chunk.stream_end - chunk.stream_start
+                else:
+                    async with self._acquire_slot() as slot:
                         length = len(chunk.contents)
                         stream = io.BytesIO(chunk.contents)
                         iowrapper = utils.tqdmio(
@@ -896,7 +905,7 @@ class Repository:
                                 length,
                             )
 
-                        _chunk_done(chunk)
+                    _chunk_done(chunk)
 
         chunk_producer = loop.run_in_executor(
             ThreadPoolExecutor(max_workers=1, thread_name_prefix='chunk-producer'),
@@ -951,8 +960,9 @@ class Repository:
         name, tag = self._snapshot_digest_to_location_parts(digest)
         location = self.get_snapshot_location(name=name, tag=tag)
 
-        print(ef.bold + f'Uploading snapshot {name}' + ef.rs)
-        await self._as_coroutine(self.backend.upload, location, serialized_snapshot)
+        async with self._acquire_slot():
+            print(ef.bold + f'Uploading snapshot {name}' + ef.rs)
+            await self._as_coroutine(self.backend.upload, location, serialized_snapshot)
 
         if state.bytes_reused:
             print(
@@ -1035,36 +1045,37 @@ class Repository:
                 except KeyError:
                     break
 
+                location = self._chunk_digest_to_location(digest)
+
                 async with self._acquire_slot():
-                    location = self._chunk_digest_to_location(digest)
                     logger.info('Downloading %s', location)
                     contents = await self._as_coroutine(self.backend.download, location)
 
-                    logger.info('Decrypting %s', location)
-                    if self.props.encrypted:
-                        decrypted_contents = self.props.decrypt(
-                            contents,
-                            self.props.derive_shared_subkey(digest),
-                        )
-                    else:
-                        decrypted_contents = contents
-
-                    logger.info('Verifying %s', location)
-                    if self.props.hash_digest(decrypted_contents) != digest:
-                        raise exceptions.ReplicatError(
-                            f'Chunk at {location!r} is corrupted'
-                        )
-
-                    logger.info('Chunk %s referenced %d time(s)', location, len(refs))
-                    decrypted_view = memoryview(decrypted_contents)
-                    await asyncio.gather(
-                        *(
-                            loop.run_in_executor(
-                                executor, _write_chunk_ref, ref, decrypted_view
-                            )
-                            for ref in refs
-                        )
+                logger.info('Decrypting %s', location)
+                if self.props.encrypted:
+                    decrypted_contents = self.props.decrypt(
+                        contents,
+                        self.props.derive_shared_subkey(digest),
                     )
+                else:
+                    decrypted_contents = contents
+
+                logger.info('Verifying %s', location)
+                if self.props.hash_digest(decrypted_contents) != digest:
+                    raise exceptions.ReplicatError(
+                        f'Chunk at {location!r} is corrupted'
+                    )
+
+                logger.info('Chunk %s referenced %d time(s)', location, len(refs))
+                decrypted_view = memoryview(decrypted_contents)
+                await asyncio.gather(
+                    *(
+                        loop.run_in_executor(
+                            executor, _write_chunk_ref, ref, decrypted_view
+                        )
+                        for ref in refs
+                    )
+                )
 
         for snapshot_body in snapshots:
             snapshot_chunks = snapshot_body['chunks']
@@ -1168,14 +1179,14 @@ class Repository:
         async def _delete_snapshot(location):
             async with self._acquire_slot():
                 await self._as_coroutine(self.backend.delete, location)
-                finished_snapshots_tracker.update()
+            finished_snapshots_tracker.update()
 
         async def _delete_chunk(digest):
             async with self._acquire_slot():
                 await self._as_coroutine(
                     self.backend.delete, self._chunk_digest_to_location(digest)
                 )
-                finished_chunks_tracker.update()
+            finished_chunks_tracker.update()
 
         with finished_snapshots_tracker:
             await asyncio.gather(*map(_delete_snapshot, snapshots_locations))
@@ -1228,13 +1239,14 @@ class Repository:
         async def _delete_chunk(location):
             async with self._acquire_slot():
                 await self._as_coroutine(self.backend.delete, location)
-                finished_tracker.update()
+            finished_tracker.update()
 
         with finished_tracker:
             await asyncio.gather(*map(_delete_chunk, to_delete))
 
-        print(ef.bold + 'Running post-deletion cleanup' + ef.rs)
-        await self._as_coroutine(self.backend.clean)
+        async with self._acquire_slot():
+            print(ef.bold + 'Running post-deletion cleanup' + ef.rs)
+            await self._as_coroutine(self.backend.clean)
 
     @utils.disable_gc
     def _benchmark_chunker(self, adapter, number=10, size=512_000_000):
@@ -1312,13 +1324,16 @@ class Repository:
                 os.path.commonpath([path, base_directory])
             ).as_posix()
             length = path.stat().st_size
+            exists = False
 
-            async with self._acquire_slot() as slot:
-                if skip_existing and await self._as_coroutine(
-                    self.backend.exists, name
-                ):
-                    logger.info('Skipping file %r (exists)', name)
-                else:
+            if skip_existing:
+                async with self._acquire_slot():
+                    exists = await self._as_coroutine(self.backend.exists, name)
+
+            if exists:
+                logger.info('Skipping file %r (exists)', name)
+            else:
+                async with self._acquire_slot() as slot:
                     logger.info('Uploading file %r', name)
                     stream = path.open('rb')
                     iowrapper = utils.tqdmio(
@@ -1329,14 +1344,13 @@ class Repository:
                         disable=self._quiet,
                         rate_limiter=rate_limiter,
                     )
-
                     with stream, iowrapper:
                         await self._as_coroutine(
                             self.backend.upload_stream, name, iowrapper, length
                         )
 
-                finished_tracker.update()
-                bytes_tracker.update(length)
+            finished_tracker.update()
+            bytes_tracker.update(length)
 
         await asyncio.gather(*map(_upload_path, files))
         return utils.DefaultNamespace(files=files)
