@@ -14,6 +14,7 @@ import threading
 import time
 from collections import namedtuple
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import asynccontextmanager
 from datetime import datetime
 from decimal import Decimal
 from functools import cached_property
@@ -132,6 +133,14 @@ class Repository:
     @property
     def _unlocked(self):
         return hasattr(self, 'props')
+
+    @asynccontextmanager
+    async def _acquire_slot(self):
+        slot = await self._slots.get()
+        try:
+            yield slot
+        finally:
+            self._slots.put_nowait(slot)
 
     def default_serialization_hook(self, data, /):
         return utils.type_hint(data)
@@ -474,12 +483,9 @@ class Repository:
         encrypted_snapshots = {}
 
         async def _download_snapshot(path, digest):
-            slot = await self._slots.get()
-            try:
+            async with self._acquire_slot():
                 logger.info('Downloading %s', path)
                 contents = await self._as_coroutine(self.backend.download, path)
-            finally:
-                self._slots.put_nowait(slot)
 
             logger.info('Verifying %s', path)
             if self.props.hash_digest(contents) != digest:
@@ -857,8 +863,7 @@ class Repository:
                     await asyncio.sleep(queue_timeout)
                     continue
 
-                slot = await self._slots.get()
-                try:
+                async with self._acquire_slot() as slot:
                     exists = await self._as_coroutine(
                         self.backend.exists, chunk.location
                     )
@@ -892,8 +897,6 @@ class Repository:
                             )
 
                         _chunk_done(chunk)
-                finally:
-                    self._slots.put_nowait(slot)
 
         chunk_producer = loop.run_in_executor(
             ThreadPoolExecutor(max_workers=1, thread_name_prefix='chunk-producer'),
@@ -1032,8 +1035,7 @@ class Repository:
                 except KeyError:
                     break
 
-                slot = await self._slots.get()
-                try:
+                async with self._acquire_slot():
                     location = self._chunk_digest_to_location(digest)
                     logger.info('Downloading %s', location)
                     contents = await self._as_coroutine(self.backend.download, location)
@@ -1063,8 +1065,6 @@ class Repository:
                             for ref in refs
                         )
                     )
-                finally:
-                    self._slots.put_nowait(slot)
 
         for snapshot_body in snapshots:
             snapshot_chunks = snapshot_body['chunks']
@@ -1166,22 +1166,16 @@ class Repository:
         )
 
         async def _delete_snapshot(location):
-            slot = await self._slots.get()
-            try:
+            async with self._acquire_slot():
                 await self._as_coroutine(self.backend.delete, location)
                 finished_snapshots_tracker.update()
-            finally:
-                self._slots.put_nowait(slot)
 
         async def _delete_chunk(digest):
-            slot = await self._slots.get()
-            try:
+            async with self._acquire_slot():
                 await self._as_coroutine(
                     self.backend.delete, self._chunk_digest_to_location(digest)
                 )
                 finished_chunks_tracker.update()
-            finally:
-                self._slots.put_nowait(slot)
 
         with finished_snapshots_tracker:
             await asyncio.gather(*map(_delete_snapshot, snapshots_locations))
@@ -1232,12 +1226,9 @@ class Repository:
         )
 
         async def _delete_chunk(location):
-            slot = await self._slots.get()
-            try:
+            async with self._acquire_slot():
                 await self._as_coroutine(self.backend.delete, location)
                 finished_tracker.update()
-            finally:
-                self._slots.put_nowait(slot)
 
         with finished_tracker:
             await asyncio.gather(*map(_delete_chunk, to_delete))
@@ -1321,8 +1312,8 @@ class Repository:
                 os.path.commonpath([path, base_directory])
             ).as_posix()
             length = path.stat().st_size
-            slot = await self._slots.get()
-            try:
+
+            async with self._acquire_slot() as slot:
                 if skip_existing and await self._as_coroutine(
                     self.backend.exists, name
                 ):
@@ -1346,8 +1337,6 @@ class Repository:
 
                 finished_tracker.update()
                 bytes_tracker.update(length)
-            finally:
-                self._slots.put_nowait(slot)
 
         await asyncio.gather(*map(_upload_path, files))
         return utils.DefaultNamespace(files=files)

@@ -555,8 +555,7 @@ class tqdmio:
 
 
 def iter_chunks(file, chunk_size=128_000):
-    for chunk in iter(lambda: file.read(chunk_size), b''):
-        yield chunk
+    return iter(lambda: file.read(chunk_size), b'')
 
 
 async def aiter_chunks(file, chunk_size=128_000):
