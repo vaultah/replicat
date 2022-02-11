@@ -49,10 +49,10 @@ class Backend(abc.ABC):
         Must have the same type as the function that requires authentication"""
         raise NotImplementedError
 
-    async def close(self):
-        """Close resources"""
+    async def clean(self):
+        """Perform clean up at the backend"""
         pass
 
-    async def clean(self):
-        """Perform clean up"""
+    async def close(self):
+        """Close instance resources"""
         pass
