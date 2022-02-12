@@ -1,7 +1,12 @@
 import asyncio
 import functools
+import hashlib
+import hmac
 import logging
 import sys
+from datetime import datetime
+from urllib.parse import urlencode, urlparse
+from xml.etree.ElementTree import XMLPullParser
 
 import backoff
 import httpx
@@ -9,38 +14,88 @@ import httpx
 from .. import exceptions, utils
 from .base import Backend
 
-B2_API_VERSION = 2
-B2_API_BASE_URL = f'https://api.backblazeb2.com/b2api/v{B2_API_VERSION}'
+EMPTY_PAYLOAD_DIGEST = hashlib.sha256().hexdigest()
+B2_API_BASE_URL = 'https://api.backblazeb2.com/b2api/v2'
 
 logger = logging.getLogger(__name__)
 
 
-def on_error(func):
-    @functools.wraps(func)
-    async def wrapper(*args, **kwargs):
-        try:
-            return await func(*args, **kwargs)
-        except httpx.HTTPStatusError as e:
-            try:
-                details = e.response.json()
-            except ValueError:
-                details = e.response.text
-            e.args += (details,)
-            if e.response.status_code == httpx.codes.UNAUTHORIZED:
-                raise exceptions.AuthRequired
-            raise
-
-    return wrapper
+def _get_data_hexdigest(data):
+    return hashlib.sha256(data).hexdigest()
 
 
-def forbidden(e):
+def _get_stream_hexdigest(stream):
+    hasher = hashlib.sha256()
+    chunk_size = hasher.block_size * 10_000
+    for chunk in iter(lambda: stream.read(chunk_size), b''):
+        hasher.update(chunk)
+
+    stream.seek(0)
+    return hasher.hexdigest()
+
+
+def _hmac_sha256(key, message):
+    return hmac.new(key, message, hashlib.sha256).digest()
+
+
+def _make_signature_key(*, key, date, region, service):
+    date_key = _hmac_sha256(b'AWS4' + key.encode(), date.encode())
+    date_region_key = _hmac_sha256(date_key, region.encode())
+    date_region_service_key = _hmac_sha256(date_region_key, service.encode())
+    signing_key = _hmac_sha256(date_region_service_key, b'aws4_request')
+    return signing_key
+
+
+def _make_canonical_headers(headers):
+    result = '\n'.join(f'{name}:{value}' for name, value in headers.items())
+    result += '\n'
+    return result
+
+
+def _make_credential_scope(*, date, region, service):
+    return '/'.join([date, region, service, 'aws4_request'])
+
+
+def _make_canonical_request(
+    *,
+    method,
+    canonical_uri,
+    canonical_query,
+    canonical_headers,
+    signed_headers,
+    payload_digest,
+):
+    return '\n'.join(
+        [
+            method,
+            canonical_uri,
+            canonical_query,
+            canonical_headers,
+            signed_headers,
+            payload_digest,
+        ]
+    )
+
+
+def _make_string_to_sign(amzdate, credential_scope, canonical_request):
+    return '\n'.join(
+        [
+            'AWS4-HMAC-SHA256',
+            amzdate,
+            credential_scope,
+            hashlib.sha256(canonical_request.encode()).hexdigest(),
+        ]
+    )
+
+
+def _check_403(e):
     return (
         isinstance(e, httpx.HTTPStatusError)
         and e.response.status_code == httpx.codes.FORBIDDEN
     )
 
 
-async def on_backoff_reauth(details):
+async def _on_backoff_reauth(details):
     exc = sys.exc_info()[1]
     if isinstance(exc, httpx.HTTPStatusError):
         try:
@@ -57,76 +112,151 @@ async def on_backoff_reauth(details):
             raise exceptions.AuthRequired
 
 
-async def on_backoff_no_reauth(details):
-    # Simply suppress it
+async def _on_backoff_no_reauth(details):
     try:
-        await on_backoff_reauth(details)
+        await _on_backoff_reauth(details)
     except exceptions.AuthRequired:
+        # Simply suppress it
         pass
 
 
-backoff_decorator = functools.partial(
+async def _raise_for_status_hook(response):
+    try:
+        response.raise_for_status()
+    except httpx.HTTPStatusError as e:
+        e.args += (await e.response.aread(),)
+        if e.response.status_code == httpx.codes.UNAUTHORIZED:
+            raise exceptions.AuthRequired
+        raise
+
+
+_backoff_decorator = functools.partial(
     backoff.on_exception,
     backoff.expo,
     httpx.HTTPError,
-    max_time=64,
-    giveup=forbidden,
+    max_tries=64,
+    giveup=_check_403,
 )
-backoff_no_reauth = backoff_decorator(on_backoff=[on_backoff_no_reauth])
-backoff_reauth = backoff_decorator(on_backoff=[on_backoff_reauth])
+
+backoff_no_reauth = _backoff_decorator(on_backoff=[_on_backoff_no_reauth])
+backoff_reauth = _backoff_decorator(on_backoff=[_on_backoff_reauth])
 
 
 class B2(Backend):
-
-    client = utils.async_client(timeout=None)
+    client = utils.async_client(
+        timeout=None, event_hooks={'response': [_raise_for_status_hook]}
+    )
 
     def __init__(self, connection_string, *, key_id, application_key):
         # Name or id
         self.bucket_identifier = connection_string
         self.key_id, self.application_key = key_id, application_key
 
+    @backoff_no_reauth
+    async def authenticate(self):
+        """This should normally be called once in the lifetime of this instance.
+        We only use it to get the S3 endpoint and region"""
+        logger.debug('Obtaining B2 account information')
+        auth_url = f'{B2_API_BASE_URL}/b2_authorize_account'
+        response = await self.client.get(
+            auth_url, auth=(self.key_id, self.application_key)
+        )
+        self._auth = utils.DefaultNamespace(**response.json())
+        self._auth.s3Hostname = urlparse(self._auth.s3ApiUrl).hostname
+        # https://help.backblaze.com/hc/en-us/articles/360047425453
+        # "The region will be the 2nd part of your S3 Endpoint"
+        self._auth.s3Region = self._auth.s3Hostname.split('.', 2)[1]
+
+    @utils.requires_auth
+    @backoff_reauth
     async def _list_buckets(self):
-        url = f'{self.auth.apiUrl}/b2api/v{B2_API_VERSION}/b2_list_buckets'
-        headers = {'Authorization': self.auth.authorizationToken}
-        params = {'accountId': self.auth.accountId}
+        url = f'{self._auth.apiUrl}/b2api/v2/b2_list_buckets'
+        headers = {'Authorization': self._auth.authorizationToken}
+        params = {'accountId': self._auth.accountId}
         response = await self.client.post(url, headers=headers, json=params)
-        response.raise_for_status()
         return response.json()['buckets']
 
-    async def _get_bucket_info(self):
+    async def _get_bucket_name(self):
+        # Select the bucket by its id or name. After we find it, cache the name
+        # and use it for all calls from now on
         try:
-            return self._bucket_info
+            return self._bucket_name
         except AttributeError:
             for bucket in await self._list_buckets():
                 if self.bucket_identifier in {bucket['bucketId'], bucket['bucketName']}:
-                    self._bucket_info = utils.DefaultNamespace(**bucket)
-                    return self._bucket_info
+                    self._bucket_name = bucket['bucketName']
+                    return self._bucket_name
 
             raise exceptions.ReplicatError(
                 f'Bucket {self.bucket_identifier} was not found'
             )
 
-    @backoff_no_reauth
-    async def authenticate(self):
-        logger.debug('Authenticating')
-        auth_url = f'{B2_API_BASE_URL}/b2_authorize_account'
-        response = await self.client.get(
-            auth_url, auth=(self.key_id, self.application_key)
+    async def _make_s3_request(
+        self,
+        method,
+        canonical_uri,
+        *,
+        query=None,
+        payload_digest,
+        headers=None,
+        **kwargs,
+    ):
+        url = self._auth.s3ApiUrl + canonical_uri
+        if query:
+            query_string = urlencode(sorted(query.items()))
+            url += f'?{query_string}'
+        else:
+            query_string = ''
+
+        if headers is None:
+            headers = {}
+
+        now = datetime.utcnow()
+        x_amz_date = f'{now:%Y%m%dT%H%M%S}Z'
+        date = f'{now:%Y%m%d}'
+
+        canonical_headers = {'host': self._auth.s3Hostname, 'x-amz-date': x_amz_date}
+        signed_headers = ";".join(canonical_headers)
+        canonical_request = _make_canonical_request(
+            method=method,
+            canonical_uri=canonical_uri,
+            canonical_query=query_string,
+            canonical_headers=_make_canonical_headers(canonical_headers),
+            signed_headers=signed_headers,
+            payload_digest=payload_digest,
         )
-        response.raise_for_status()
-        self.auth = utils.DefaultNamespace(**response.json())
-        logger.debug('Authentication set')
+        credential_scope = _make_credential_scope(
+            date=date, region=self._auth.s3Region, service='s3'
+        )
+        string_to_sign = _make_string_to_sign(
+            x_amz_date, credential_scope, canonical_request
+        )
+        signing_key = _make_signature_key(
+            key=self.application_key,
+            date=date,
+            region=self._auth.s3Region,
+            service='s3',
+        )
+        signature = _hmac_sha256(signing_key, string_to_sign.encode()).hex()
+        authorization_header = (
+            f'AWS4-HMAC-SHA256 Credential={self.key_id}/{credential_scope}, '
+            f'SignedHeaders={signed_headers}, Signature={signature}'
+        )
+
+        headers['x-amz-date'] = x_amz_date
+        headers['authorization'] = authorization_header
+        return await self.client.request(method, url, headers=headers, **kwargs)
 
     @utils.requires_auth
     @backoff_reauth
-    @on_error
     async def exists(self, name):
-        bucket_info = await self._get_bucket_info()
-        url = f'{self.auth.downloadUrl}/file/{bucket_info.bucketName}/{name}'
-        headers = {'Authorization': self.auth.authorizationToken}
+        bucket_name = await self._get_bucket_name()
         try:
-            response = await self.client.head(url, headers=headers)
-            response.raise_for_status()
+            await self._make_s3_request(
+                'HEAD',
+                f'/{bucket_name}/{name}',
+                payload_digest=EMPTY_PAYLOAD_DIGEST,
+            )
         except httpx.HTTPStatusError as e:
             if e.response.status_code == httpx.codes.NOT_FOUND:
                 return False
@@ -134,107 +264,111 @@ class B2(Backend):
         else:
             return True
 
-    async def _get_upload_url_token(self):
-        url = f'{self.auth.apiUrl}/b2api/v{B2_API_VERSION}/b2_get_upload_url'
-        bucket_info = await self._get_bucket_info()
-        params = {'bucketId': bucket_info.bucketId}
-        headers = {'Authorization': self.auth.authorizationToken}
-
-        response = await self.client.post(url, json=params, headers=headers)
-        response.raise_for_status()
-        decoded = response.json()
-        return decoded['uploadUrl'], decoded['authorizationToken']
-
     @utils.requires_auth
     @backoff_reauth
-    @on_error
-    async def upload(self, name, data):
-        upload_url, upload_token = await self._get_upload_url_token()
-        upload_headers = {
-            'Authorization': upload_token,
-            'X-Bz-File-Name': name,
-            'Content-Type': 'application/octet-stream',
-            'Content-Length': str(len(data)),
-            'X-Bz-Content-Sha1': 'do_not_verify',  # TODO
-        }
-        response = await self.client.post(
-            upload_url, headers=upload_headers, content=data
+    async def _put_object(self, name, data, payload_digest):
+        bucket_name = await self._get_bucket_name()
+        await self._make_s3_request(
+            'PUT',
+            f'/{bucket_name}/{name}',
+            content=data,
+            payload_digest=payload_digest,
+            headers={'content-length': str(len(data))},
         )
-        response.raise_for_status()
+
+    async def upload(self, name, data):
+        payload_digest = _get_data_hexdigest(data)
+        await self._put_object(name, data, payload_digest)
 
     @utils.requires_auth
     @backoff_reauth
-    @on_error
-    async def upload_stream(self, name, stream, length):
-        upload_url, upload_token = await self._get_upload_url_token()
-        upload_headers = {
-            'Authorization': upload_token,
-            'X-Bz-File-Name': name,
-            'Content-Type': 'application/octet-stream',
-            'Content-Length': str(length),
-            'X-Bz-Content-Sha1': 'do_not_verify',  # TODO
-        }
+    async def _put_object_stream(self, name, stream, length, payload_digest):
+        bucket_name = await self._get_bucket_name()
         try:
-            response = await self.client.post(
-                upload_url, headers=upload_headers, content=utils.aiter_chunks(stream)
+            await self._make_s3_request(
+                'PUT',
+                f'/{bucket_name}/{name}',
+                content=utils.aiter_chunks(stream),
+                payload_digest=payload_digest,
+                headers={'content-length': str(length)},
             )
-            response.raise_for_status()
         except BaseException:
             stream.seek(0)
             raise
 
+    async def upload_stream(self, name, stream, length):
+        payload_digest = _get_stream_hexdigest(stream)
+        await self._put_object_stream(name, stream, length, payload_digest)
+
     @utils.requires_auth
     @backoff_reauth
-    @on_error
     async def download(self, name):
-        bucket_info = await self._get_bucket_info()
-        url = f'{self.auth.downloadUrl}/file/{bucket_info.bucketName}/{name}'
-        headers = {'Authorization': self.auth.authorizationToken}
-        response = await self.client.get(url, headers=headers)
-        response.raise_for_status()
-        return response.read()
+        bucket_name = await self._get_bucket_name()
+        response = await self._make_s3_request(
+            'GET',
+            f'/{bucket_name}/{name}',
+            payload_digest=EMPTY_PAYLOAD_DIGEST,
+        )
+        return await response.aread()
 
     @utils.requires_auth
     @backoff_reauth
-    @on_error
+    async def _list_objects(self, *, continuation_token=None, prefix=''):
+        bucket_name = await self._get_bucket_name()
+        query = {'list-type': '2'}
+
+        if continuation_token is not None:
+            query['continuation-token'] = continuation_token
+
+        if prefix:
+            query['prefix'] = prefix
+
+        return await self._make_s3_request(
+            'GET',
+            f'/{bucket_name}',
+            query=query,
+            payload_digest=EMPTY_PAYLOAD_DIGEST,
+        )
+
     async def list_files(self, prefix=''):
-        url = f'{self.auth.apiUrl}/b2api/v{B2_API_VERSION}/b2_list_file_names'
-        bucket_info = await self._get_bucket_info()
-        files = []
-        params = {
-            'bucketId': bucket_info.bucketId,
-            'maxFileCount': 10_000,
-            'prefix': prefix,
-        }
-        headers = {'Authorization': self.auth.authorizationToken}
+        is_truncated = True
+        continuation_token = None
 
-        while True:
-            response = await self.client.post(url, json=params, headers=headers)
-            decoded = response.json()
-            for file in decoded['files']:
-                files.append(file['fileName'])
+        while is_truncated:
+            response = await self._list_objects(
+                continuation_token=continuation_token, prefix=prefix
+            )
+            parser = XMLPullParser()
+            async for data in response.aiter_bytes(128_000):
+                parser.feed(data)
 
-            if decoded['nextFileName'] is None:
-                break
-
-            params['startFileName'] = decoded['nextFileName']
-
-        return files
+            for _, element in parser.read_events():
+                tag = element.tag.rpartition('}')[2]
+                if tag == 'IsTruncated' and element.text == 'false':
+                    is_truncated = False
+                elif tag == 'NextContinuationToken':
+                    continuation_token = element.text
+                elif tag == 'Key':
+                    yield element.text
 
     @utils.requires_auth
     @backoff_reauth
-    @on_error
     async def delete(self, name):
-        url = f'{self.auth.apiUrl}/b2api/v{B2_API_VERSION}/b2_hide_file'
-        bucket_info = await self._get_bucket_info()
-        params = {'bucketId': bucket_info.bucketId, 'fileName': name}
-        headers = {'Authorization': self.auth.authorizationToken}
-        response = await self.client.post(url, json=params, headers=headers)
-        response.raise_for_status()
+        bucket_name = await self._get_bucket_name()
+        await self._make_s3_request(
+            'DELETE',
+            f'/{bucket_name}/{name}',
+            payload_digest=EMPTY_PAYLOAD_DIGEST,
+        )
 
     async def close(self):
+        for attr in ('_auth', '_bucket_name'):
+            try:
+                delattr(self, attr)
+            except AttributeError:
+                pass
+
         await self.client.aclose()
-        del self.auth
 
 
 Client = B2
