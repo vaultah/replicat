@@ -124,12 +124,25 @@ class Repository:
             self._executor = ThreadPoolExecutor(max_workers=self._concurrent)
             return self._executor
 
-    def _as_coroutine(self, func, *args, **kwargs):
-        if inspect.iscoroutinefunction(func):
+    def _awrap(self, func, *args, **kwargs):
+        if inspect.iscoroutinefunction(func) or inspect.isasyncgenfunction(func):
             return func(*args, **kwargs)
         else:
             loop = asyncio.get_running_loop()
             return loop.run_in_executor(self.executor, func, *args, **kwargs)
+
+    async def _aiter(self, func, *args, **kwargs):
+        unknown = self._awrap(func, *args, **kwargs)
+        if inspect.isawaitable(unknown):
+            result = await unknown
+        else:
+            result = unknown
+
+        if not isinstance(result, collections.abc.AsyncIterable):
+            result = utils.async_gen_wrapper(result)
+
+        async for value in result:
+            yield value
 
     @property
     def _unlocked(self):
@@ -388,16 +401,14 @@ class Repository:
 
         async with self._acquire_slot():
             print(ef.bold + 'Uploading config' + ef.rs)
-            await self._as_coroutine(
-                self.backend.upload, 'config', self.serialize(config)
-            )
+            await self._awrap(self.backend.upload, 'config', self.serialize(config))
 
         self.props = props
         return utils.DefaultNamespace(config=config, key=key)
 
     async def _load_config(self):
         async with self._acquire_slot():
-            data = await self._as_coroutine(self.backend.download, 'config')
+            data = await self._awrap(self.backend.download, 'config')
 
         return RepositoryProps(**self._instantiate_config(self.deserialize(data)))
 
@@ -492,7 +503,7 @@ class Repository:
         async def _download_snapshot(path, digest):
             async with self._acquire_slot():
                 logger.info('Downloading %s', path)
-                contents = await self._as_coroutine(self.backend.download, path)
+                contents = await self._awrap(self.backend.download, path)
 
             logger.info('Verifying %s', path)
             if self.props.hash_digest(contents) != digest:
@@ -504,9 +515,7 @@ class Repository:
 
             encrypted_snapshots[path] = contents
 
-        for path in await self._as_coroutine(
-            self.backend.list_files, self.SNAPSHOT_PREFIX
-        ):
+        async for path in self._aiter(self.backend.list_files, self.SNAPSHOT_PREFIX):
             name, tag = self.parse_snapshot_location(path)
             digest = bytes.fromhex(name)
 
@@ -871,9 +880,7 @@ class Repository:
                     continue
 
                 async with self._acquire_slot():
-                    exists = await self._as_coroutine(
-                        self.backend.exists, chunk.location
-                    )
+                    exists = await self._awrap(self.backend.exists, chunk.location)
 
                 logger.info(
                     'Processing chunk #%d, exists=%s, I=%d, L=%s',
@@ -898,7 +905,7 @@ class Repository:
                             rate_limiter=rate_limiter,
                         )
                         with stream, iowrapper:
-                            await self._as_coroutine(
+                            await self._awrap(
                                 self.backend.upload_stream,
                                 chunk.location,
                                 iowrapper,
@@ -962,7 +969,7 @@ class Repository:
 
         async with self._acquire_slot():
             print(ef.bold + f'Uploading snapshot {name}' + ef.rs)
-            await self._as_coroutine(self.backend.upload, location, serialized_snapshot)
+            await self._awrap(self.backend.upload, location, serialized_snapshot)
 
         if state.bytes_reused:
             print(
@@ -1049,7 +1056,7 @@ class Repository:
 
                 async with self._acquire_slot():
                     logger.info('Downloading %s', location)
-                    contents = await self._as_coroutine(self.backend.download, location)
+                    contents = await self._awrap(self.backend.download, location)
 
                 logger.info('Decrypting %s', location)
                 if self.props.encrypted:
@@ -1178,12 +1185,12 @@ class Repository:
 
         async def _delete_snapshot(location):
             async with self._acquire_slot():
-                await self._as_coroutine(self.backend.delete, location)
+                await self._awrap(self.backend.delete, location)
             finished_snapshots_tracker.update()
 
         async def _delete_chunk(digest):
             async with self._acquire_slot():
-                await self._as_coroutine(
+                await self._awrap(
                     self.backend.delete, self._chunk_digest_to_location(digest)
                 )
             finished_chunks_tracker.update()
@@ -1207,9 +1214,7 @@ class Repository:
         to_delete = set()
 
         print(ef.bold + 'Fetching chunks list' + ef.rs)
-        for location in await self._as_coroutine(
-            self.backend.list_files, self.CHUNK_PREFIX
-        ):
+        async for location in self._aiter(self.backend.list_files, self.CHUNK_PREFIX):
             if location in referenced_locations:
                 logger.info('Chunk %s is referenced, skipping', location)
                 continue
@@ -1238,7 +1243,7 @@ class Repository:
 
         async def _delete_chunk(location):
             async with self._acquire_slot():
-                await self._as_coroutine(self.backend.delete, location)
+                await self._awrap(self.backend.delete, location)
             finished_tracker.update()
 
         with finished_tracker:
@@ -1246,7 +1251,7 @@ class Repository:
 
         async with self._acquire_slot():
             print(ef.bold + 'Running post-deletion cleanup' + ef.rs)
-            await self._as_coroutine(self.backend.clean)
+            await self._awrap(self.backend.clean)
 
     @utils.disable_gc
     def _benchmark_chunker(self, adapter, number=10, size=512_000_000):
@@ -1328,7 +1333,7 @@ class Repository:
 
             if skip_existing:
                 async with self._acquire_slot():
-                    exists = await self._as_coroutine(self.backend.exists, name)
+                    exists = await self._awrap(self.backend.exists, name)
 
             if exists:
                 logger.info('Skipping file %r (exists)', name)
@@ -1345,7 +1350,7 @@ class Repository:
                         rate_limiter=rate_limiter,
                     )
                     with stream, iowrapper:
-                        await self._as_coroutine(
+                        await self._awrap(
                             self.backend.upload_stream, name, iowrapper, length
                         )
 
@@ -1361,4 +1366,4 @@ class Repository:
         except AttributeError:
             pass
 
-        await self._as_coroutine(self.backend.close)
+        await self._awrap(self.backend.close)

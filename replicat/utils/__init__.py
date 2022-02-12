@@ -554,11 +554,17 @@ class tqdmio:
         self._tracker.close()
 
 
+async def async_gen_wrapper(it):
+    # Probably sufficient for now
+    for value in it:
+        yield value
+        await asyncio.sleep(0)
+
+
 def iter_chunks(file, chunk_size=128_000):
     return iter(lambda: file.read(chunk_size), b'')
 
 
 async def aiter_chunks(file, chunk_size=128_000):
-    for chunk in iter_chunks(file, chunk_size=chunk_size):
+    async for chunk in async_gen_wrapper(iter_chunks(file, chunk_size=chunk_size)):
         yield chunk
-        await asyncio.sleep(0)
