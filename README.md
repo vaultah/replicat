@@ -58,36 +58,39 @@ with file name and metadata.
 
 Replicat supports two types of repositories: encrypted (the default) and unencrypted.
 
-Chunks, snapshots, and all other pieces of data inside unencrypted repositories are stored unencrypted.
-The storage names for chunks and snapshots are simply the hash digests of their contents.
+Chunks, snapshots, and all other pieces of data inside unencrypted repositories are stored
+unencrypted. The storage names for chunks and snapshots are simply the hash digests of their
+contents.
 
 Currently, the only supported type of encryption is symmetric encryption. To use symmetric encryption
-you will need a key and the password associated with that key. A key contains parameters for the KDF
-and an encrypted section, which can only be decrypted by the owner of the key using the matching password.
-That section contains secrets for the cryptographic primitives that control how the data is split into
-chunks, visibility of chunks of data, and more.
+you will need a key and the password associated with that key. A key contains parameters for the
+KDF and an encrypted section, which can only be decrypted by the owner of the key using the matching
+password. That section contains secrets for the cryptographic primitives that control how the data
+is split into chunks, visibility of chunks of data, and more.
 
-You can create multiple keys with different passwords and settings. When adding a new key to a repository
-with symmetric encryption, you'll have to unlock it with one of the existing keys. You have a choice
-to either share secrets with the other key OR generate new secrets. Owners of keys with shared secrets
-("shared" keys) can use deduplication features *together*, i.e., chunks of data that were uploaded by
-the owner of one such key can be accessed and decrypted by the owner of the other key. Assume that they
-will also be able to check whether you have a specific piece of data. To avoid such risk, you can create
-a key with new secrets (an "independent" key). That way, Replicat will isolate your data and make it
-inaccessible to the owners of other keys. Of course, if you use your key to create a yet another (new) key,
-you will also have the ability to share your secrets with others, even if they were originally copied
-from some other key. This creates a web of trust of sorts.
+You can create multiple keys with different passwords and settings. When adding a new key to a
+repository with symmetric encryption, you'll have to unlock it with one of the existing keys.
+You have a choice to either share secrets with the other key OR generate new secrets. Owners of
+keys with shared secrets ("shared" keys) can use deduplication features *together*, i.e., chunks
+of data that were uploaded by the owner of one such key can be accessed and decrypted by the owner
+of the other key. Assume that they will also be able to check whether you have a specific piece
+of data. To avoid such risk, you can create a key with new secrets (an "independent" key).
+That way, Replicat will isolate your data and make it inaccessible to the owners of other keys.
+Of course, if you use your key to create a yet another (new) key, you will also have the ability
+to share your secrets with others, even if they were originally copied from some other key.
+This creates a web of trust of sorts.
 
-In contrast with unencrypted repositories, the storage name for the chunk is derived from the hash digest
-of its contents **and** one of the aforementioned secrets, in order to reduce the chance of successful
-"confirmation of file" attacks. The chunk itself is encrypted with the combination of the hash digest of
-its contents **and** another one of those secrets, since the usual convergent encryption is vulnerable to
-that same "confirmation of file" attack. Table of chunk references inside a snapshot is encrypted
-similarly, but the list of files that reference those chunks is encrypted using the key and the password
-that were used to unlock the repository, and therefore can only be decrypted by the owner of that key
-(even in the case of shared secrets). A snapshot created using an independent key will not be visible.
-A snapshot created using a shared key will be visible, but there will be no available information about
-it beyond its storage name and the table of chunk references.
+In contrast with unencrypted repositories, the storage name for the chunk is derived from
+the hash digest of its contents **and** one of the aforementioned secrets, in order to reduce
+the chance of successful "confirmation of file" attacks. The chunk itself is encrypted with
+the combination of the hash digest of its contents **and** another one of those secrets, since
+the usual convergent encryption is vulnerable to that same "confirmation of file" attack. Table
+of chunk references inside a snapshot is encrypted similarly, but the list of files that reference
+those chunks is encrypted using the key and the password that were used to unlock the repository,
+and therefore can only be decrypted by the owner of that key (even in the case of shared secrets).
+A snapshot created using an independent key will not be visible. A snapshot created using a
+shared key will be visible, but there will be no available information about it beyond its storage
+name and the table of chunk references.
 
 # Command line interface
 
@@ -123,7 +126,7 @@ There are several command line arguments that are common to all subcommands:
  `b2:bucket-name` for the B2 backend or `local:some/local/path` for the local backend
  (or just `some/local/path`, since the `<backend>:` part can be omitted for local
  destinations). If the backend requires additional arguments, they will appear in the
- `--help` output. Refer to the section on custom backends for more detailed information.
+ `--help` output. Refer to the section on backends for more detailed information.
 
  - `-q`/`--hide-progress` -- suppresses progress indication for commands that support it
  - `-c`/`--concurrent` -- the number of concurrent connections to the backend
@@ -289,6 +292,17 @@ $ replicat clean -r some/directory -P path/to/password/file -K path/to/key/file
 $ replicat upload -r some:repository --skip-existing some/file some/directory
 ```
 
+# Backends
+
+ - `-r some/local/path` -- local backend.
+ - `-r b2:bucket-id`/`-r b2:bucket-name` -- B2 backend (uses B2 native API).
+ Requires arguments `--key-id` and `--application-key`.
+ - `-r s3:bucket-name` -- S3 backend. Requires arguments `--key-id`, `--access-key`, and
+ `--region`.
+ - `-r s3c:bucket-name` -- S3-compatible backend. Requires arguments `--key-id`, `--access-key`,
+ `--region`, and `--host`. `--host` must *not* include the scheme. The default scheme is
+ `https`, but it can be changed via the `--scheme` argument.
+
 # Custom backends
 
 `replicat.backends` is a namespace package, making it possible to add custom backends
@@ -321,8 +335,8 @@ of the methods marked as abstract. You could use implementations of existing
 `replicat.backends.base.Backend` subclasses as examples. To make your implementation visible
 to Replicat, you'll need to add it to the module search path before invoking `replicat`
 (you could use the
-[`PYTHONPATH`](https://docs.python.org/3/using/cmdline.html#envvar-PYTHONPATH) environment variable
-for that).
+[`PYTHONPATH`](https://docs.python.org/3/using/cmdline.html#envvar-PYTHONPATH) environment
+variable for that).
 
 Here's an example:
 
