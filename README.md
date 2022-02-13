@@ -18,6 +18,7 @@ Python 3.9 (or newer) running on Linux, MacOS, or Windows.
 
  - local path
  - Backblaze B2
+ - any S3-compatible service
 
 You can implement and use your own adapter for pretty much any backup destination without
 changing the source code of Replicat (more on that later).
