@@ -7,7 +7,7 @@ logger = logging.getLogger(__name__)
 class Backend(abc.ABC):
 
     """All of the methods can be either async or plain functions. Backend adapters
-    are resposible for implementing their own fault handling and retry strategies"""
+    are responsible for implementing their own fault handling and retry strategies"""
 
     def __init__(self, connection_string, **ka):
         pass
