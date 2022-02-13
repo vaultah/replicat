@@ -56,3 +56,15 @@ class Backend(abc.ABC):
     async def close(self):
         """Close instance resources"""
         pass
+
+    def __init_subclass__(cls, /, short_name=None, display_name=None, **kwargs):
+        super().__init_subclass__(**kwargs)
+
+        if short_name is None:
+            short_name = cls.__name__
+
+        if display_name is None:
+            display_name = short_name
+
+        cls.short_name = short_name
+        cls.display_name = display_name

@@ -7,6 +7,7 @@ import functools
 import gc
 import importlib
 import inspect
+import logging
 import os
 import re
 import threading
@@ -44,6 +45,9 @@ HUMAN_SIZE_REGEX = (
 )
 
 
+logger = logging.getLogger(__name__)
+
+
 def _backend_tuple(uri):
     parts = uri.split(':', 1)
     if len(parts) < 2:
@@ -52,10 +56,17 @@ def _backend_tuple(uri):
         name, connection_string = parts
 
     if not name.isidentifier():
+        logger.error('Invalid backend module name format')
         raise ValueError
 
-    mod = importlib.import_module(f'..backends.{name}', package=__package__)
-    return (mod.Client, connection_string)
+    try:
+        mod = importlib.import_module(f'..backends.{name}', package=__package__)
+    except BaseException as e:
+        if not isinstance(e, ModuleNotFoundError):
+            logger.exception('Error loading module %s', name)
+        raise
+    else:
+        return (mod.Client, connection_string)
 
 
 def _read_bytes(arg):
@@ -218,7 +229,7 @@ def parser_from_backend_class(cls, *, inherit_common=True):
 
     parser = argparse.ArgumentParser(add_help=False, parents=parent_parsers)
     group = parser.add_argument_group(
-        f'arguments specific to the {cls.__name__} backend'
+        f'arguments specific to the {cls.display_name} backend'
     )
     params = inspect.signature(cls).parameters
 
@@ -227,7 +238,7 @@ def parser_from_backend_class(cls, *, inherit_common=True):
         if arg.kind is not arg.KEYWORD_ONLY:
             continue
 
-        environment_var = f'{cls.__name__.upper()}_{name.upper()}'
+        environment_var = f'{cls.short_name.upper()}_{name.upper()}'
         help_text = f'or the {environment_var} environment variable'
         if arg.default is not arg.empty:
             default = arg.default

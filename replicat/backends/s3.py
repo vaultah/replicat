@@ -1,7 +1,7 @@
-from .s3c import S3Compatible
+from .s3c import Client as S3CompatibleClient
 
 
-class S3(S3Compatible):
+class S3(S3CompatibleClient):
     def __init__(self, connection_string, *, key_id, access_key, region):
         super().__init__(
             connection_string,
@@ -12,4 +12,4 @@ class S3(S3Compatible):
         )
 
 
-Client = S3Compatible
+Client = S3

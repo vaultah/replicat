@@ -106,7 +106,7 @@ backoff_on_httperror = backoff.on_exception(
 )
 
 
-class S3Compatible(Backend):
+class S3Compatible(Backend, short_name='S3C'):
     client = utils.async_client(
         timeout=None, event_hooks={'response': [_raise_for_status_hook]}
     )
