@@ -9,6 +9,7 @@ from concurrent.futures import ThreadPoolExecutor
 import pytest
 
 from replicat import exceptions, utils
+from replicat.backends.base import Backend
 
 # TODO: tests for make_main_parser
 
@@ -229,7 +230,7 @@ def test_bytes_to_human(bytes_amount, human):
 def test_parser_from_backend_class():
     weird_default = object()
 
-    class A:
+    class A(Backend):
         def __init__(
             self,
             positional,
