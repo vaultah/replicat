@@ -312,7 +312,7 @@ The format is `-r local:some/local/path` or simply `-r some/local/path`.
 
 The format is `-r b2:bucket-id` or `-r b2:bucket-name`. This backend uses B2 native API.
 The required arguments are `--key-id` (keyId) and `--application-key` (applicationKey).
-Sign in to your Backblaze B2 account to generate them. You can use master application key
+Sign into your Backblaze B2 account to generate them. You can use master application key
 or a normal application key (which can also be restricted to a single bucket).
 
 ## S3
