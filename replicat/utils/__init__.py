@@ -87,8 +87,8 @@ def _get_environb(var, default=None):
         return value
 
 
-common_options = argparse.ArgumentParser(add_help=False)
-common_options.add_argument(
+repository_parser = argparse.ArgumentParser(add_help=False)
+repository_parser.add_argument(
     '-r',
     '--repository',
     type=_backend_tuple,
@@ -97,28 +97,30 @@ common_options.add_argument(
     "variable is used as a fallback. If neither is provided, we'll use the CWD.",
     default=os.environ.get('REPLICAT_REPOSITORY', str(Path())),
 )
-common_options.add_argument(
+
+common_options_parser = argparse.ArgumentParser(add_help=False)
+common_options_parser.add_argument(
     '-q',
     '--hide-progress',
     dest='quiet',
     action='store_true',
     help='Disable progress bar for commands that support it.',
 )
-common_options.add_argument(
+common_options_parser.add_argument(
     '-c',
     '--concurrent',
     default=5,
     type=int,
     help='The number of concurrent connections to the backend.',
 )
-common_options.add_argument('-v', '--verbose', action='count', default=0)
-common_options.add_argument(
+common_options_parser.add_argument('-v', '--verbose', action='count', default=0)
+common_options_parser.add_argument(
     '-K', '--key-file', metavar='KEYFILE', dest='key', type=_read_bytes
 )
 # All the different ways to provide the repository password.
 # We could add a proper description for this group, but there's
 # a long-standing argparse bug https://bugs.python.org/issue16807
-password_options = common_options.add_mutually_exclusive_group()
+password_options = common_options_parser.add_mutually_exclusive_group()
 password_options.add_argument(
     '-p',
     '--password',
@@ -135,7 +137,7 @@ password_options.add_argument(
     "password file is provided, we'll use the REPLICAT_PASSWORD environment variable.",
     type=_read_bytes,
 )
-common_options.set_defaults(password=_get_environb('REPLICAT_PASSWORD'))
+common_options_parser.set_defaults(password=_get_environb('REPLICAT_PASSWORD'))
 
 
 def make_main_parser(*parent_parsers):
@@ -223,7 +225,7 @@ def parser_from_backend_class(cls, *, inherit_common=True):
     and adds arguments based on the class constructor signature
     """
     if inherit_common:
-        parent_parsers = [common_options]
+        parent_parsers = [common_options_parser]
     else:
         parent_parsers = []
 

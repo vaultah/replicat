@@ -1,3 +1,4 @@
+import argparse
 import asyncio
 import logging
 
@@ -7,13 +8,18 @@ from .repository import Repository
 logger = logging.getLogger(__name__)
 
 
-async def _cmd_handler(args, unknown):
+async def _cmd_handler(args, unknown, error):
     backend_type, connection_string = args.repo
     backend_params = utils.safe_kwargs(backend_type, vars(args))
     backend = backend_type(connection_string, **backend_params)
     repository = Repository(backend, concurrent=args.concurrent, quiet=args.quiet)
 
-    settings = utils.flat_to_nested(utils.parse_unknown_args(unknown))
+    if unknown:
+        if args.action not in {'init', 'benchmark', 'add-key'}:
+            error('unrecognized arguments: ' + ' '.join(unknown))
+        settings = utils.flat_to_nested(utils.parse_unknown_args(unknown))
+    else:
+        settings = None
 
     if args.action == 'init':
         await repository.init(
@@ -65,11 +71,19 @@ async def _cmd_handler(args, unknown):
 
 
 def main():
-    common, _ = utils.common_options.parse_known_args()
-    backend_type, _ = common.repo
-    backend_args_parser = utils.parser_from_backend_class(backend_type)
-    parser = utils.make_main_parser(backend_args_parser)
-    args, unknown = parser.parse_known_args()
+    args = argparse.Namespace()
+
+    # Start by obtaining the repository backend type and location
+    _, remaining_args = utils.repository_parser.parse_known_args(namespace=args)
+
+    # Create the main parser incorporating common and backend-specific options
+    backend_args_parser = utils.parser_from_backend_class(
+        args.repo[0], inherit_common=False
+    )
+    main_parser = utils.make_main_parser(
+        utils.common_options_parser, backend_args_parser
+    )
+    _, unknown = main_parser.parse_known_args(remaining_args, namespace=args)
 
     if args.verbose >= 2:
         log_level = logging.DEBUG
@@ -82,7 +96,7 @@ def main():
     logging.getLogger('backoff').addHandler(logging.StreamHandler())
     logging.getLogger('backoff').setLevel(log_level)
 
-    asyncio.run(_cmd_handler(args, unknown))
+    asyncio.run(_cmd_handler(args, unknown, main_parser.error))
 
 
 if __name__ == '__main__':
