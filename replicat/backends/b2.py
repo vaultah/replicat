@@ -121,7 +121,7 @@ class B2(Backend):
                     self._bucket = utils.DefaultNamespace(
                         id=bucket_id, name=bucket_name
                     )
-                    return bucket
+                    return self._bucket
 
             raise exceptions.ReplicatError(
                 f'Bucket {self._bucket_identifier} was not found'
