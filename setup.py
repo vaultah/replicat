@@ -2,6 +2,7 @@
 
 import os
 import re
+import runpy
 import subprocess
 import sys
 from pathlib import Path
@@ -9,6 +10,11 @@ from pathlib import Path
 import pybind11
 from setuptools import Extension, find_namespace_packages, setup
 from setuptools.command.build_ext import build_ext
+
+
+def get_version():
+    run_globals = runpy.run_path(Path(__file__).parent / 'replicat/__version__.py')
+    return run_globals['version']
 
 
 def get_long_description():
@@ -74,7 +80,7 @@ extras_require['all'] = [y for x in extras_require.values() for y in x]
 
 setup(
     name='replicat',
-    version='1.2.0',
+    version=get_version(),
     url="https://github.com/vaultah/replicat",
     maintainer='vaultah',
     maintainer_email='flwaultah+replicat@gmail.com',

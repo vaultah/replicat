@@ -21,7 +21,7 @@ from typing import Optional
 import httpx
 from tqdm import tqdm
 
-from .. import exceptions
+from .. import __version__, exceptions
 from . import adapters, fs  # noqa
 
 PREFIXES_TABLE = {
@@ -141,6 +141,8 @@ common_options_parser.set_defaults(password=_get_environb('REPLICAT_PASSWORD'))
 
 def make_main_parser(*parent_parsers):
     parser = argparse.ArgumentParser(add_help=True)
+    parser.add_argument('--version', action='version', version=__version__)
+
     subparsers = parser.add_subparsers(dest='action', required=True)
 
     init_parser = subparsers.add_parser('init', parents=parent_parsers)
