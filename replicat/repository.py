@@ -1174,19 +1174,23 @@ class Repository:
             disable=self._quiet,
             leave=True,
         )
-        finished_chunks_tracker = tqdm(
-            desc='Unreferenced chunks deleted',
-            unit='',
-            total=len(chunks_digests),
-            position=1,
-            disable=self._quiet,
-            leave=True,
-        )
 
         async def _delete_snapshot(location):
             async with self._acquire_slot():
                 await self._awrap(self.backend.delete, location)
             finished_snapshots_tracker.update()
+
+        with finished_snapshots_tracker:
+            await asyncio.gather(*map(_delete_snapshot, snapshots_locations))
+
+        finished_chunks_tracker = tqdm(
+            desc='Unreferenced chunks deleted',
+            unit='',
+            total=len(chunks_digests),
+            position=0,
+            disable=self._quiet,
+            leave=True,
+        )
 
         async def _delete_chunk(digest):
             async with self._acquire_slot():
@@ -1194,9 +1198,6 @@ class Repository:
                     self.backend.delete, self._chunk_digest_to_location(digest)
                 )
             finished_chunks_tracker.update()
-
-        with finished_snapshots_tracker:
-            await asyncio.gather(*map(_delete_snapshot, snapshots_locations))
 
         with finished_chunks_tracker:
             await asyncio.gather(*map(_delete_chunk, chunks_digests))
