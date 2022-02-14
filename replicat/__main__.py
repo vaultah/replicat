@@ -1,17 +1,37 @@
 import argparse
 import asyncio
+import inspect
 import logging
 
 from . import utils
 from .repository import Repository
 
+MISSING_BACKEND_ARGUMENT = object()
 logger = logging.getLogger(__name__)
+
+
+def _instantiate_backend(backend_type, connection_string, **kwargs):
+    params = inspect.signature(backend_type).parameters
+    kwonly = {}
+
+    for name, arg in params.items():
+        if arg.kind is not arg.KEYWORD_ONLY:
+            continue
+
+        if (value := kwargs[name]) is MISSING_BACKEND_ARGUMENT:
+            raise ValueError(
+                f'Cannot instantiate backend {backend_type.short_name} '
+                f'without the argument {name}'
+            )
+        else:
+            kwonly[name] = value
+
+    return backend_type(connection_string, **kwonly)
 
 
 async def _cmd_handler(args, unknown, error):
     backend_type, connection_string = args.repo
-    backend_params = utils.safe_kwargs(backend_type, vars(args))
-    backend = backend_type(connection_string, **backend_params)
+    backend = _instantiate_backend(backend_type, connection_string, **vars(args))
     repository = Repository(backend, concurrent=args.concurrent, quiet=args.quiet)
 
     if unknown:
@@ -78,7 +98,7 @@ def main():
 
     # Create the main parser incorporating common and backend-specific options
     backend_args_parser = utils.parser_from_backend_class(
-        args.repo[0], inherit_common=False
+        args.repo[0], inherit_common=False, missing=MISSING_BACKEND_ARGUMENT
     )
     main_parser = utils.make_main_parser(
         utils.common_options_parser, backend_args_parser

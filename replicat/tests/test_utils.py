@@ -161,12 +161,6 @@ def test_type_hint_reverse_invalid():
     assert deserialized == serialized
 
 
-def test_safe_kwargs():
-    mixed_args = lambda a, b=1, *c, d, e=1, **f: None
-    args = {x: x for x in mixed_args.__code__.co_varnames}
-    assert utils.safe_kwargs(mixed_args, args) == {'d': 'd', 'e': 'e'}
-
-
 @pytest.mark.parametrize(
     'value, expected',
     [

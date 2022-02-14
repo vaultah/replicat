@@ -44,7 +44,6 @@ HUMAN_SIZE_REGEX = (
     % "|".join(PREFIXES_TABLE)
 )
 
-
 logger = logging.getLogger(__name__)
 
 
@@ -220,7 +219,7 @@ def make_main_parser(*parent_parsers):
     return parser
 
 
-def parser_from_backend_class(cls, *, inherit_common=True):
+def parser_from_backend_class(cls, *, inherit_common=True, missing=None):
     """Create a parser instance that inherits arguments from the common parser
     and adds arguments based on the class constructor signature
     """
@@ -244,9 +243,9 @@ def parser_from_backend_class(cls, *, inherit_common=True):
         help_text = f'or the {environment_var} environment variable'
         if arg.default is not arg.empty:
             default = arg.default
-            help_text += f', or the constructor default {default!r}'
+            help_text += f', or the constructor default ({default})'
         else:
-            default = None
+            default = missing
 
         name = name.replace('_', '-')
         group.add_argument(
@@ -367,15 +366,6 @@ def type_reverse(object):
         return object
     else:
         return base64.standard_b64decode(encoded)
-
-
-def safe_kwargs(func, args):
-    params = inspect.signature(func).parameters
-    return {
-        name: args[name]
-        for name, arg in params.items()
-        if arg.kind is arg.KEYWORD_ONLY and name in args
-    }
 
 
 _async_auth_glock = asyncio.Lock()
