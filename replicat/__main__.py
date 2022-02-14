@@ -18,12 +18,7 @@ def _instantiate_backend(backend_type, connection_string, **kwargs):
         if arg.kind is not arg.KEYWORD_ONLY:
             continue
 
-        if (value := kwargs[name]) is MISSING_BACKEND_ARGUMENT:
-            raise ValueError(
-                f'Cannot instantiate backend {backend_type.short_name} '
-                f'without the argument {name}'
-            )
-        else:
+        if (value := kwargs[name]) is not MISSING_BACKEND_ARGUMENT:
             kwonly[name] = value
 
     return backend_type(connection_string, **kwonly)
