@@ -280,6 +280,9 @@ def parse_cli_settings(args_list):
             else:
                 unknown.append(arg)
 
+    if flag is not None:
+        unknown.append(flag)
+
     return mapping, unknown
 
 

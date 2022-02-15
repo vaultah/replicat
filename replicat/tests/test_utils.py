@@ -275,6 +275,7 @@ def test_parse_cli_settings():
         'what?',
         '--sixth',
         '1_234',
+        '--seventh-trailing',
     ]
     parsed, unknown = utils.parse_cli_settings(args_list)
     assert len(parsed) == 5
@@ -291,6 +292,7 @@ def test_parse_cli_settings():
         '4',
         '5',
         'def',
+        '--seventh-trailing',
     ]
 
 
