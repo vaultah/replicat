@@ -6,7 +6,7 @@ import logging
 from . import utils
 from .repository import Repository
 
-MISSING_BACKEND_ARGUMENT = object()
+_missing_backend_argument = object()
 logger = logging.getLogger(__name__)
 
 
@@ -18,7 +18,7 @@ def _instantiate_backend(backend_type, connection_string, **kwargs):
         if arg.kind is not arg.KEYWORD_ONLY:
             continue
 
-        if (value := kwargs[name]) is not MISSING_BACKEND_ARGUMENT:
+        if (value := kwargs[name]) is not _missing_backend_argument:
             kwonly[name] = value
 
     return backend_type(connection_string, **kwonly)
@@ -96,7 +96,7 @@ def main():
 
     # Create the main parser incorporating common and backend-specific options
     backend_args_parser = utils.parser_from_backend_class(
-        args.repo[0], inherit_common=False, missing=MISSING_BACKEND_ARGUMENT
+        args.repo[0], inherit_common=False, missing=_missing_backend_argument
     )
     main_parser = utils.make_main_parser(
         utils.common_options_parser, backend_args_parser

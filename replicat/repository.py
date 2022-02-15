@@ -109,20 +109,17 @@ class Repository:
         self._quiet = quiet
         self._slots = asyncio.Queue(maxsize=concurrent)
         # We need actual integers for TQDM slot management in CLI, but this queue
-        # can also act as a semaphore in the general case
+        # can also act as a semaphore in the general case. Note that numbering starts
+        # from 2, leaving two topmost slots to non-slotable trackers
         for slot in range(2, concurrent + 2):
             self._slots.put_nowait(slot)
 
         self.backend = backend
 
-    @property
+    @cached_property
     def executor(self):
         """Executor for non-async methods of the backend instance"""
-        try:
-            return self._executor
-        except AttributeError:
-            self._executor = ThreadPoolExecutor(max_workers=self._concurrent)
-            return self._executor
+        return ThreadPoolExecutor(max_workers=self._concurrent)
 
     def _awrap(self, func, *args, **kwargs):
         if inspect.iscoroutinefunction(func) or inspect.isasyncgenfunction(func):
