@@ -244,6 +244,29 @@ class Repository:
             'st_ctime': stat_result.st_ctime,
         }
 
+    def _validate_settings(self, schema, obj):
+        extra_keys = obj.keys() - schema.keys()
+        if extra_keys:
+            raise exceptions.ReplicatError(
+                'Settings include unrecognized properties: '
+                + ', '.join(map(repr, extra_keys))
+            )
+
+        for key, value in obj.items():
+            allowed_types = schema[key]
+            if isinstance(value, allowed_types):
+                continue
+
+            if isinstance(allowed_types, tuple):
+                type_names = ', '.join([x.__name__ for x in allowed_types])
+            else:
+                type_names = allowed_types.__name__
+
+            raise exceptions.ReplicatError(
+                f'{key!r} -> {value!r} does not match any '
+                f'of the allowed types ({type_names})'
+            )
+
     def _make_config(self, *, settings=None):
         if settings is None:
             settings = {}
@@ -360,7 +383,29 @@ class Repository:
             'private': private,
         }
 
+    def _validate_init_settings(self, settings):
+        self._validate_settings(
+            {
+                'hashing': collections.abc.Mapping,
+                'chunking': collections.abc.Mapping,
+                'encryption': (collections.abc.Mapping, type(None)),
+            },
+            settings,
+        )
+
+        if (encryption_settings := settings.get('encryption')) is not None:
+            self._validate_settings(
+                {
+                    'cipher': collections.abc.Mapping,
+                    'kdf': collections.abc.Mapping,
+                },
+                encryption_settings,
+            )
+
     async def init(self, *, password=None, settings=None, key_output_path=None):
+        if settings:
+            self._validate_init_settings(settings)
+
         logger.info('Using provided settings: %r', settings)
         print(ef.bold + 'Generating new config' + ef.rs)
         config = self._make_config(settings=settings)
@@ -460,9 +505,22 @@ class Repository:
 
         return key
 
+    def _validate_add_key_settings(self, settings):
+        self._validate_settings(
+            {'encryption': collections.abc.Mapping},
+            settings,
+        )
+        self._validate_settings(
+            {'kdf': collections.abc.Mapping},
+            settings['encryption'],
+        )
+
     async def add_key(
         self, *, password, settings=None, shared=False, key_output_path=None
     ):
+        if settings:
+            self._validate_add_key_settings(settings)
+
         logger.info('Using provided settings: %r', settings)
         if password is None:
             raise exceptions.ReplicatError(
