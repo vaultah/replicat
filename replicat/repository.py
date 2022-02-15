@@ -1144,10 +1144,9 @@ class Repository:
         snapshots_locations = set()
         remaining_names = set(snapshots)
 
-        for location in list(snapshots_mapping):
+        for location, body in snapshots_mapping.items():
             name = self.parse_snapshot_location(location).name
             if name in remaining_names:
-                body = snapshots_mapping[location]
                 if body['data'] is None:
                     raise exceptions.ReplicatError(
                         f'Cannot delete snapshot {name} (different key)'
