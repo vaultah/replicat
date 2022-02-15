@@ -261,28 +261,26 @@ def parser_from_backend_class(cls, *, inherit_common=True, missing=None):
     return parser
 
 
-def parse_unknown_args(args_list):
-    stack = list(args_list)
+def parse_cli_settings(args_list):
     mapping = {}
-    group = []
+    unknown = []
+    flag = None
 
-    while stack:
-        last = stack.pop()
-        if last.startswith('--') and group:
-            if len(group) > 1:
-                group.reverse()
-                value = group
-            else:
-                (value,) = group
-
-            mapping[last.lstrip('-').replace('-', '_')] = value
-            group = []
-        elif last.startswith('-'):
-            group = []
+    for arg in args_list:
+        if arg.startswith('--'):
+            if flag is not None:
+                unknown.append(flag)
+            flag = arg
         else:
-            group.append(guess_type(last))
+            if flag is not None:
+                key = flag.lstrip('-').replace('-', '_')
+                value = guess_type(arg)
+                mapping[key] = value
+                flag = None
+            else:
+                unknown.append(arg)
 
-    return mapping
+    return mapping, unknown
 
 
 def adapter_from_config(name, **kwargs):

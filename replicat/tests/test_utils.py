@@ -256,11 +256,11 @@ def test_parser_from_backend_class():
     assert known.j == 2
 
 
-def test_parse_unknown_args():
+def test_parse_cli_settings():
     args_list = [
         '--first-long-name.very-empty',
         '--second-long-name.single-value',
-        'true',
+        'none',
         '--third-long-name.multiple-values',
         '1',
         '2',
@@ -271,12 +271,27 @@ def test_parse_unknown_args():
         '--fourth-long-name.final',
         'abc',
         'def',
+        '--fifth',
+        'what?',
+        '--sixth',
+        '1_234',
     ]
-    parsed_args = utils.parse_unknown_args(args_list)
-    assert len(parsed_args) == 3
-    assert parsed_args['second_long_name.single_value'] is True
-    assert parsed_args['third_long_name.multiple_values'] == [1, 2, 3]
-    assert parsed_args['fourth_long_name.final'] == ['abc', 'def']
+    parsed, unknown = utils.parse_cli_settings(args_list)
+    assert len(parsed) == 5
+    assert parsed['second_long_name.single_value'] is None
+    assert parsed['third_long_name.multiple_values'] == 1
+    assert parsed['fourth_long_name.final'] == 'abc'
+    assert parsed['fifth'] == 'what?'
+    assert parsed['sixth'] == 1234
+    assert unknown == [
+        '--first-long-name.very-empty',
+        '2',
+        '3',
+        '-a',
+        '4',
+        '5',
+        'def',
+    ]
 
 
 def test_stream_files(tmp_path):

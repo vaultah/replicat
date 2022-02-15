@@ -25,16 +25,18 @@ def _instantiate_backend(backend_type, connection_string, **kwargs):
 
 
 async def _cmd_handler(args, unknown, error):
+    settings = None
+    if args.action in {'init', 'benchmark', 'add-key'}:
+        flat_settings, unknown = utils.parse_cli_settings(unknown)
+        if not unknown:
+            settings = utils.flat_to_nested(flat_settings)
+
+    if unknown:
+        error('unrecognized arguments: ' + ' '.join(unknown))
+
     backend_type, connection_string = args.repo
     backend = _instantiate_backend(backend_type, connection_string, **vars(args))
     repository = Repository(backend, concurrent=args.concurrent, quiet=args.quiet)
-
-    if unknown:
-        if args.action not in {'init', 'benchmark', 'add-key'}:
-            error('unrecognized arguments: ' + ' '.join(unknown))
-        settings = utils.flat_to_nested(utils.parse_unknown_args(unknown))
-    else:
-        settings = None
 
     if args.action == 'init':
         await repository.init(
