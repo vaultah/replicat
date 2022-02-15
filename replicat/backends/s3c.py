@@ -11,7 +11,6 @@ import httpx
 from .. import utils
 from .base import Backend
 
-EMPTY_PAYLOAD_DIGEST = hashlib.sha256().hexdigest()
 logger = logging.getLogger(__name__)
 
 
@@ -29,15 +28,15 @@ def _get_stream_hexdigest(stream):
     return hasher.hexdigest()
 
 
-def _hmac_sha256(key, message):
+def _hmac_sha256_digest(key, message):
     return hmac.new(key, message, hashlib.sha256).digest()
 
 
 def _make_signature_key(*, key, date, region, service):
-    date_key = _hmac_sha256(b'AWS4' + key.encode(), date.encode())
-    date_region_key = _hmac_sha256(date_key, region.encode())
-    date_region_service_key = _hmac_sha256(date_region_key, service.encode())
-    signing_key = _hmac_sha256(date_region_service_key, b'aws4_request')
+    date_key = _hmac_sha256_digest(b'AWS4' + key.encode(), date.encode())
+    date_region_key = _hmac_sha256_digest(date_key, region.encode())
+    date_region_service_key = _hmac_sha256_digest(date_region_key, service.encode())
+    signing_key = _hmac_sha256_digest(date_region_service_key, b'aws4_request')
     return signing_key
 
 
@@ -78,7 +77,7 @@ def _make_string_to_sign(amzdate, credential_scope, canonical_request):
             'AWS4-HMAC-SHA256',
             amzdate,
             credential_scope,
-            hashlib.sha256(canonical_request.encode()).hexdigest(),
+            _get_data_hexdigest(canonical_request.encode()),
         ]
     )
 
@@ -104,6 +103,8 @@ backoff_on_httperror = backoff.on_exception(
     max_tries=4,
     giveup=_check_403,
 )
+# No harm in precomputing this digest
+_empty_payload_digest = _get_data_hexdigest(b'')
 
 
 class S3Compatible(Backend, short_name='S3C'):
@@ -172,7 +173,7 @@ class S3Compatible(Backend, short_name='S3C'):
             region=self.region,
             service='s3',
         )
-        signature = _hmac_sha256(signing_key, string_to_sign.encode()).hex()
+        signature = _hmac_sha256_digest(signing_key, string_to_sign.encode()).hex()
         authorization_header = (
             f'AWS4-HMAC-SHA256 Credential={self.key_id}/{credential_scope}, '
             f'SignedHeaders={signed_headers}, Signature={signature}'
@@ -189,7 +190,7 @@ class S3Compatible(Backend, short_name='S3C'):
             await self._make_request(
                 'HEAD',
                 f'/{self.bucket_name}/{name}',
-                payload_digest=EMPTY_PAYLOAD_DIGEST,
+                payload_digest=_empty_payload_digest,
             )
         except httpx.HTTPStatusError as e:
             if e.response.status_code == httpx.codes.NOT_FOUND:
@@ -235,7 +236,7 @@ class S3Compatible(Backend, short_name='S3C'):
         response = await self._make_request(
             'GET',
             f'/{self.bucket_name}/{name}',
-            payload_digest=EMPTY_PAYLOAD_DIGEST,
+            payload_digest=_empty_payload_digest,
         )
         return await response.aread()
 
@@ -253,7 +254,7 @@ class S3Compatible(Backend, short_name='S3C'):
             'GET',
             f'/{self.bucket_name}',
             query=query,
-            payload_digest=EMPTY_PAYLOAD_DIGEST,
+            payload_digest=_empty_payload_digest,
         )
 
     async def list_files(self, prefix=''):
@@ -282,7 +283,7 @@ class S3Compatible(Backend, short_name='S3C'):
         await self._make_request(
             'DELETE',
             f'/{self.bucket_name}/{name}',
-            payload_digest=EMPTY_PAYLOAD_DIGEST,
+            payload_digest=_empty_payload_digest,
         )
 
     async def close(self):
