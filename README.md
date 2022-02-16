@@ -38,7 +38,7 @@ For various reasons, I wasn't 100% happy with any of the similar projects that I
 It's likely that I will never be 100% happy with Replicat either, but at least it will be
 easier for me to fix problems or add new features.
 
-Highlights/goals
+Highlights/goals:
 
   - efficient, concise, easily auditable implementation
   - extendable and configurable
