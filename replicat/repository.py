@@ -550,25 +550,49 @@ class Repository:
         return utils.DefaultNamespace(new_key=key)
 
     async def _load_snapshots(self, *, snapshot_regex=None, cache_loaded=True):
-        snapshots = {}
-        tasks = []
+        tasks = {}
         cached_snapshots = {str(x) for x in utils.fs.list_cached(self.SNAPSHOT_PREFIX)}
-        encrypted_snapshots = {}
 
         async def _download_snapshot(path, digest):
-            async with self._acquire_slot():
-                logger.info('Downloading %s', path)
-                contents = await self._awrap(self.backend.download, path)
+            if path in cached_snapshots:
+                contents = utils.fs.get_cached(path)
+            else:
+                async with self._acquire_slot():
+                    logger.info('Downloading %s', path)
+                    contents = await self._awrap(self.backend.download, path)
 
-            logger.info('Verifying %s', path)
-            if self.props.hash_digest(contents) != digest:
-                raise exceptions.ReplicatError(f'Snapshot at {path!r} is corrupted')
+                logger.info('Verifying %s', path)
+                if self.props.hash_digest(contents) != digest:
+                    raise exceptions.ReplicatError(f'Snapshot at {path!r} is corrupted')
 
-            if cache_loaded:
-                logger.info('Caching %s', path)
-                utils.fs.store_cached(path, contents)
+                if cache_loaded:
+                    logger.info('Caching %s', path)
+                    utils.fs.store_cached(path, contents)
 
-            encrypted_snapshots[path] = contents
+            body = self.deserialize(contents)
+
+            if self.props.encrypted:
+                logger.info('Decrypting %s', path)
+                body['chunks'] = self.deserialize(
+                    self.props.decrypt(
+                        body['chunks'],
+                        self.props.derive_shared_subkey(
+                            self.props.hash_digest(body['data'])
+                        ),
+                    )
+                )
+                try:
+                    data = self.props.decrypt(body['data'], self.props.userkey)
+                except exceptions.DecryptionError:
+                    logger.info(
+                        "Decryption of %s failed, but it's not corrupted (different key?)",
+                        path,
+                    )
+                    body['data'] = None
+                else:
+                    body['data'] = self.deserialize(data)
+
+            return body
 
         async for path in self._aiter(self.backend.list_files, self.SNAPSHOT_PREFIX):
             name, tag = self.parse_snapshot_location(path)
@@ -582,41 +606,11 @@ class Repository:
                 logger.info('Skipping %s (does not match the filter)', path)
                 continue
 
-            if path in cached_snapshots:
-                encrypted_snapshots[path] = utils.fs.get_cached(path)
-            else:
-                tasks.append(asyncio.create_task(_download_snapshot(path, digest)))
+            task = asyncio.create_task(_download_snapshot(path, digest))
+            tasks[task] = path
 
-        if tasks:
-            await asyncio.gather(*tasks)
-
-        for path, contents in encrypted_snapshots.items():
-            snapshot_body = self.deserialize(contents)
-
-            if self.props.encrypted:
-                logger.info('Decrypting %s', path)
-                snapshot_body['chunks'] = self.deserialize(
-                    self.props.decrypt(
-                        snapshot_body['chunks'],
-                        self.props.derive_shared_subkey(
-                            self.props.hash_digest(snapshot_body['data'])
-                        ),
-                    )
-                )
-                try:
-                    data = self.props.decrypt(snapshot_body['data'], self.props.userkey)
-                except exceptions.DecryptionError:
-                    logger.info(
-                        "Decryption of %s failed, but it's not corrupted (different key?)",
-                        path,
-                    )
-                    snapshot_body['data'] = None
-                else:
-                    snapshot_body['data'] = self.deserialize(data)
-
-            snapshots[path] = snapshot_body
-
-        return snapshots
+        async for task in utils.as_completed(tasks):
+            yield tasks[task], await task
 
     def _format_snapshot_name(self, *, path, chunks, data):
         return self.parse_snapshot_location(path).name
@@ -645,11 +639,6 @@ class Repository:
         return utils.bytes_to_human(sum(r[1] - r[0] for r in ranges_it))
 
     async def list_snapshots(self, *, snapshot_regex=None):
-        print(ef.bold + 'Loading snapshots' + ef.rs)
-        snapshots_mapping = await self._load_snapshots(snapshot_regex=snapshot_regex)
-        if not snapshots_mapping:
-            return
-
         columns_getters = {
             'snapshot': self._format_snapshot_name,
             'note': self._format_snapshot_note,
@@ -658,26 +647,37 @@ class Repository:
             'size': self._format_snaphot_size,
         }
         columns_widths = {}
-        sorted_snapshots = sorted(
-            snapshots_mapping.items(),
-            key=lambda x: (x[1]['data'] or {}).get('utc_timestamp', ''),
-            reverse=True,
-        )
-        rows = []
+        snapshots = []
 
-        for snapshot_path, snapshot_body in sorted_snapshots:
+        print(ef.bold + 'Loading snapshots' + ef.rs)
+        async for snapshot_path, snapshot_body in self._load_snapshots(
+            snapshot_regex=snapshot_regex
+        ):
             row = {}
+            snapshot_chunks = snapshot_body['chunks']
+            snapshot_data = snapshot_body['data']
+
             for column, getter in columns_getters.items():
                 value = getter(
                     path=snapshot_path,
-                    chunks=snapshot_body['chunks'],
-                    data=snapshot_body['data'],
+                    chunks=snapshot_chunks,
+                    data=snapshot_data,
                 )
                 value = str(value if value is not None else self.EMPTY_TABLE_VALUE)
                 row[column] = value
                 columns_widths[column] = max(len(value), columns_widths.get(column, 0))
 
-            rows.append(row)
+            if snapshot_data is not None:
+                snapshot_timestamp = snapshot_data['utc_timestamp']
+            else:
+                snapshot_timestamp = None
+
+            snapshots.append((snapshot_timestamp, row))
+
+        if not snapshots:
+            return
+
+        snapshots.sort(key=lambda x: x[0] or '', reverse=True)
 
         formatted_headers = []
         for column in columns_widths:
@@ -685,7 +685,7 @@ class Repository:
             formatted_headers.append(column.upper().center(width))
 
         print(*formatted_headers)
-        for row in rows:
+        for _, row in snapshots:
             print(*(value.ljust(columns_widths[col]) for col, value in row.items()))
 
     def _format_file_snapshot_date(
@@ -711,11 +711,6 @@ class Repository:
         return utils.bytes_to_human(sum(r[1] - r[0] for r in ranges_it))
 
     async def list_files(self, *, snapshot_regex=None, files_regex=None):
-        print(ef.bold + 'Loading snapshots' + ef.rs)
-        snapshots_mapping = await self._load_snapshots(snapshot_regex=snapshot_regex)
-        if not snapshots_mapping:
-            return
-
         columns_getters = {
             'snapshot date': self._format_file_snapshot_date,
             'path': self._format_file_path,
@@ -725,7 +720,10 @@ class Repository:
         columns_widths = {}
         files = []
 
-        for snapshot_path, snapshot_body in snapshots_mapping.items():
+        print(ef.bold + 'Loading snapshots' + ef.rs)
+        async for snapshot_path, snapshot_body in self._load_snapshots(
+            snapshot_regex=snapshot_regex
+        ):
             snapshot_chunks = snapshot_body['chunks']
             snapshot_data = snapshot_body['data']
             if snapshot_data is None:
@@ -1050,8 +1048,13 @@ class Repository:
         logger.info("Will restore files to %s", path)
 
         print(ef.bold + 'Loading snapshots' + ef.rs)
-        snapshots_mapping = await self._load_snapshots(snapshot_regex=snapshot_regex)
-        snapshots = [x for x in snapshots_mapping.values() if x['data'] is not None]
+        snapshots = []
+        async for _, snapshot_body in self._load_snapshots(
+            snapshot_regex=snapshot_regex
+        ):
+            if snapshot_body['data'] is not None:
+                snapshots.append(snapshot_body)
+
         snapshots.sort(key=lambda x: x['data']['utc_timestamp'], reverse=True)
 
         chunks_references = {}
@@ -1194,31 +1197,31 @@ class Repository:
     async def delete_snapshots(self, snapshots):
         # TODO: locking
         print(ef.bold + 'Loading snapshots' + ef.rs)
-        snapshots_mapping = await self._load_snapshots()
-        chunks_digests = set()
+        to_delete = set()
+        to_keep = set()
         snapshots_locations = set()
         remaining_names = set(snapshots)
 
-        for location, body in snapshots_mapping.items():
-            name = self.parse_snapshot_location(location).name
+        async for path, body in self._load_snapshots():
+            name = self.parse_snapshot_location(path).name
             if name in remaining_names:
                 if body['data'] is None:
                     raise exceptions.ReplicatError(
                         f'Cannot delete snapshot {name} (different key)'
                     )
 
-                chunks_digests.update(body['chunks'])
-                snapshots_locations.add(location)
+                to_delete.update(body['chunks'])
+                snapshots_locations.add(path)
                 remaining_names.discard(name)
+            else:
+                to_keep.update(body['chunks'])
 
         if remaining_names:
             raise exceptions.ReplicatError(
                 f'Snapshots {", ".join(remaining_names)} are not available'
             )
 
-        for location, body in snapshots_mapping.items():
-            if location not in snapshots_locations:
-                chunks_digests.difference_update(body['chunks'])
+        to_delete.difference_update(to_keep)
 
         finished_snapshots_tracker = tqdm(
             desc='Snapshots deleted',
@@ -1240,7 +1243,7 @@ class Repository:
         finished_chunks_tracker = tqdm(
             desc='Unreferenced chunks deleted',
             unit='',
-            total=len(chunks_digests),
+            total=len(to_delete),
             position=0,
             disable=self._quiet,
             leave=True,
@@ -1254,14 +1257,13 @@ class Repository:
             finished_chunks_tracker.update()
 
         with finished_chunks_tracker:
-            await asyncio.gather(*map(_delete_chunk, chunks_digests))
+            await asyncio.gather(*map(_delete_chunk, to_delete))
 
     async def clean(self):
         # TODO: locking
         print(ef.bold + 'Loading snapshots' + ef.rs)
-        snapshots_mapping = await self._load_snapshots()
         referenced_digests = {
-            y for x in snapshots_mapping.values() for y in x['chunks']
+            y async for _, x in self._load_snapshots() for y in x['chunks']
         }
         referenced_locations = set(
             map(self._chunk_digest_to_location, referenced_digests)

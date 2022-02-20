@@ -574,3 +574,13 @@ def iter_chunks(file, chunk_size=128_000):
 async def aiter_chunks(file, chunk_size=128_000):
     async for chunk in async_gen_wrapper(iter_chunks(file, chunk_size=chunk_size)):
         yield chunk
+
+
+async def as_completed(tasks):
+    queue = asyncio.Queue()
+
+    for task in tasks:
+        task.add_done_callback(queue.put_nowait)
+
+    for _ in tasks:
+        yield await queue.get()
