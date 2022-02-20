@@ -223,7 +223,7 @@ class S3Compatible(Backend, short_name='S3C'):
                 payload_digest=payload_digest,
                 headers={'content-length': str(length)},
             )
-        except BaseException:
+        except:
             stream.seek(0)
             raise
 

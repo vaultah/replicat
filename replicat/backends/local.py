@@ -46,7 +46,7 @@ class Local(Backend):
             # os.replace may throw a PermissionError on Windows if the target is
             # replaced simultaneously from multiple threads (in CI, at least)
             temp.replace(destination)
-        except BaseException:
+        except:
             temp.unlink(missing_ok=True)
             raise
 
@@ -57,7 +57,7 @@ class Local(Backend):
             with temp.open('wb') as file:
                 shutil.copyfileobj(stream, file)
             temp.replace(destination)
-        except BaseException:
+        except:
             temp.unlink(missing_ok=True)
             stream.seek(0)
             raise

@@ -974,7 +974,7 @@ class Repository:
         with bytes_tracker, finished_tracker:
             try:
                 await asyncio.gather(*(_worker() for _ in range(self._concurrent)))
-            except BaseException:
+            except:
                 abort.set()
                 raise
             finally:

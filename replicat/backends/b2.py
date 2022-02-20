@@ -182,7 +182,7 @@ class B2(Backend):
             await self.client.post(
                 upload_url, headers=upload_headers, content=utils.aiter_chunks(stream)
             )
-        except BaseException:
+        except:
             stream.seek(0)
             raise
 
