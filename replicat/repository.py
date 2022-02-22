@@ -10,6 +10,7 @@ import os.path
 import posixpath
 import queue
 import re
+import sys
 import threading
 import time
 from collections import namedtuple
@@ -125,6 +126,9 @@ class Repository:
             self._slots.put_nowait(slot)
 
         self.backend = backend
+
+    def display_status(self, message):
+        print(ef.bold + message + ef.rs, file=sys.stderr)
 
     def _get_cached(self, path):
         assert self._cache_directory is not None
@@ -424,13 +428,13 @@ class Repository:
             self._validate_init_settings(settings)
 
         logger.info('Using provided settings: %r', settings)
-        print(ef.bold + 'Generating new config' + ef.rs)
+        self.display_status('Generating new config')
         config = self._make_config(settings=settings)
         print(json.dumps(config, indent=4, default=self.default_serialization_hook))
         props = RepositoryProps(**self._instantiate_config(config))
 
         if props.encrypted:
-            print(ef.bold + 'Generating new key' + ef.rs)
+            self.display_status('Generating new key')
             if password is None:
                 raise exceptions.ReplicatError(
                     'A password is needed to initialize encrypted repository'
@@ -452,7 +456,7 @@ class Repository:
             # TODO: store keys in the repository?
             if key_output_path is not None:
                 key_output_path = Path(key_output_path).resolve()
-                print(ef.bold + f'Writing key to {key_output_path}' + ef.rs)
+                self.display_status(f'Writing key to {key_output_path}')
                 key_output_path.write_bytes(self.serialize(key))
             else:
                 print(
@@ -462,7 +466,7 @@ class Repository:
             key = None
 
         async with self._acquire_slot():
-            print(ef.bold + 'Uploading config' + ef.rs)
+            self.display_status('Uploading config')
             await self._awrap(self.backend.upload, 'config', self.serialize(config))
 
         self.props = props
@@ -475,11 +479,11 @@ class Repository:
         return RepositoryProps(**self._instantiate_config(self.deserialize(data)))
 
     async def unlock(self, *, password=None, key=None):
-        print(ef.bold + 'Loading config' + ef.rs)
+        self.display_status('Loading config')
         props = await self._load_config()
 
         if props.encrypted:
-            print(ef.bold + 'Unlocking repository' + ef.rs)
+            self.display_status('Unlocking repository')
             if password is None or key is None:
                 raise exceptions.ReplicatError(
                     'Both password and key are needed to unlock this repository'
@@ -497,7 +501,7 @@ class Repository:
         self.props = props
 
     async def _add_key(self, *, password, settings, props, private, key_output_path):
-        print(ef.bold + 'Generating new key' + ef.rs)
+        self.display_status('Generating new key')
         key = self._make_key(
             cipher=props.cipher,
             chunker=props.chunker,
@@ -515,7 +519,7 @@ class Repository:
         # TODO: store it in the repository?
         if key_output_path is not None:
             key_output_path = Path(key_output_path).resolve()
-            print(ef.bold + f'Writing key to {key_output_path}' + ef.rs)
+            self.display_status(f'Writing key to {key_output_path}')
             key_output_path.write_bytes(self.serialize(key))
         else:
             print(json.dumps(key, indent=4, default=self.default_serialization_hook))
@@ -554,7 +558,7 @@ class Repository:
             if self._unlocked:
                 props = self.props
             else:
-                print(ef.bold + 'Loading config' + ef.rs)
+                self.display_status('Loading config')
                 props = await self._load_config()
 
         if not props.encrypted:
@@ -674,7 +678,7 @@ class Repository:
         columns_widths = {}
         snapshots = []
 
-        print(ef.bold + 'Loading snapshots' + ef.rs)
+        self.display_status('Loading snapshots')
         async for snapshot_path, snapshot_body in self._load_snapshots(
             snapshot_regex=snapshot_regex
         ):
@@ -745,7 +749,7 @@ class Repository:
         columns_widths = {}
         files = []
 
-        print(ef.bold + 'Loading snapshots' + ef.rs)
+        self.display_status('Loading snapshots')
         async for snapshot_path, snapshot_body in self._load_snapshots(
             snapshot_regex=snapshot_regex
         ):
@@ -793,7 +797,7 @@ class Repository:
         return list(utils.fs.flatten_paths(path.resolve(strict=True) for path in paths))
 
     async def snapshot(self, *, paths, note=None, rate_limit=None):
-        print(ef.bold + 'Collecting files' + ef.rs)
+        self.display_status('Collecting files')
         files = self._flatten_paths(paths)
         logger.info('Found %d files', len(files))
         # Small files are more likely to change than big files, read them quickly
@@ -1046,14 +1050,12 @@ class Repository:
         location = self.get_snapshot_location(name=name, tag=tag)
 
         async with self._acquire_slot():
-            print(ef.bold + f'Uploading snapshot {name}' + ef.rs)
+            self.display_status(f'Uploading snapshot {name}')
             await self._awrap(self.backend.upload, location, serialized_snapshot)
 
         if state.bytes_reused:
-            print(
-                ef.bold
-                + f'Used {utils.bytes_to_human(state.bytes_reused)} of existing data'
-                + ef.rs,
+            self.display_status(
+                f'Used {utils.bytes_to_human(state.bytes_reused)} of existing data'
             )
 
         return utils.DefaultNamespace(
@@ -1072,7 +1074,7 @@ class Repository:
 
         logger.info("Will restore files to %s", path)
 
-        print(ef.bold + 'Loading snapshots' + ef.rs)
+        self.display_status('Loading snapshots')
         snapshots = []
         async for _, snapshot_body in self._load_snapshots(
             snapshot_regex=snapshot_regex
@@ -1221,7 +1223,7 @@ class Repository:
 
     async def delete_snapshots(self, snapshots):
         # TODO: locking
-        print(ef.bold + 'Loading snapshots' + ef.rs)
+        self.display_status('Loading snapshots')
         to_delete = set()
         to_keep = set()
         snapshots_locations = set()
@@ -1286,7 +1288,7 @@ class Repository:
 
     async def clean(self):
         # TODO: locking
-        print(ef.bold + 'Loading snapshots' + ef.rs)
+        self.display_status('Loading snapshots')
         referenced_digests = {
             y async for _, x in self._load_snapshots() for y in x['chunks']
         }
@@ -1295,7 +1297,7 @@ class Repository:
         )
         to_delete = set()
 
-        print(ef.bold + 'Fetching chunks list' + ef.rs)
+        self.display_status('Fetching chunks list')
         async for location in self._aiter(self.backend.list_files, self.CHUNK_PREFIX):
             if location in referenced_locations:
                 logger.info('Chunk %s is referenced, skipping', location)
@@ -1311,7 +1313,6 @@ class Repository:
             to_delete.add(location)
 
         if not to_delete:
-            print('Nothing to do')
             return
 
         finished_tracker = tqdm(
@@ -1332,7 +1333,7 @@ class Repository:
             await asyncio.gather(*map(_delete_chunk, to_delete))
 
         async with self._acquire_slot():
-            print(ef.bold + 'Running post-deletion cleanup' + ef.rs)
+            self.display_status('Running post-deletion cleanup')
             await self._awrap(self.backend.clean)
 
     @utils.disable_gc
@@ -1356,9 +1357,9 @@ class Repository:
         processed_bytes = sum(map(len, adapter(stream)))
         elapsed = Decimal(time.perf_counter_ns() - start - prep_time).scaleb(-9)
         rate = processed_bytes / elapsed
-        print(
-            ef.bold + f'Processed {utils.bytes_to_human(processed_bytes, 3)} '
-            f'in {elapsed:.3f} seconds ({utils.bytes_to_human(rate, 3)}/s)' + ef.rs
+        self.display_status(
+            f'Processed {utils.bytes_to_human(processed_bytes, 3)} '
+            f'in {elapsed:.3f} seconds ({utils.bytes_to_human(rate, 3)}/s)'
         )
 
     async def benchmark(self, name, settings=None):
@@ -1371,7 +1372,7 @@ class Repository:
         argument_string = ', '.join(
             f'{name}={value!r}' for name, value in adapter_args.items()
         )
-        print(ef.bold + f'Benchmarking {name}({argument_string})' + ef.rs)
+        self.display_status(f'Benchmarking {name}({argument_string})')
 
         if isinstance(adapter, ChunkerAdapter):
             loop = asyncio.get_running_loop()
@@ -1382,7 +1383,7 @@ class Repository:
             raise RuntimeError('Sorry, not yet')
 
     async def upload(self, paths, *, rate_limit=None, skip_existing=False):
-        print(ef.bold + 'Collecting files' + ef.rs)
+        self.display_status('Collecting files')
         files = self._flatten_paths(paths)
         logger.info('Found %d files', len(files))
         bytes_tracker = tqdm(
