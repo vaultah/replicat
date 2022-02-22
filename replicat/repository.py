@@ -996,7 +996,7 @@ class Repository:
             ThreadPoolExecutor(max_workers=1, thread_name_prefix='chunk-producer'),
             _chunk_producer,
         )
-        with bytes_tracker, finished_tracker:
+        with finished_tracker, bytes_tracker:
             try:
                 await asyncio.gather(*(_worker() for _ in range(self._concurrent)))
             except:
@@ -1374,7 +1374,10 @@ class Repository:
         print(ef.bold + f'Benchmarking {name}({argument_string})' + ef.rs)
 
         if isinstance(adapter, ChunkerAdapter):
-            self._benchmark_chunker(adapter)
+            loop = asyncio.get_running_loop()
+            await loop.run_in_executor(
+                ThreadPoolExecutor(max_workers=1), self._benchmark_chunker, adapter
+            )
         else:
             raise RuntimeError('Sorry, not yet')
 
