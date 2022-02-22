@@ -22,6 +22,7 @@ from pathlib import Path
 from random import Random
 from typing import Any, Dict, Optional
 
+from appdirs import user_cache_dir
 from sty import ef
 from tqdm import tqdm
 
@@ -103,10 +104,20 @@ class Repository:
     # Fast KDF for high-entropy inputs (used for shared data)
     DEFAULT_SHARED_KDF_NAME = 'blake2b'
     EMPTY_TABLE_VALUE = '--'
+    DEFAULT_CACHE_DIRECTORY = user_cache_dir('replicat', 'replicat')
 
-    def __init__(self, backend, *, concurrent, quiet=True):
+    def __init__(
+        self,
+        backend,
+        *,
+        concurrent,
+        quiet=True,
+        cache_directory=DEFAULT_CACHE_DIRECTORY,
+    ):
         self._concurrent = concurrent
         self._quiet = quiet
+        self._cache_directory = cache_directory
+
         self._slots = asyncio.Queue(maxsize=concurrent)
         # We need actual integers for TQDM slot management in CLI, but this queue
         # can also act as a semaphore in the general case. Note that numbering starts
@@ -115,6 +126,14 @@ class Repository:
             self._slots.put_nowait(slot)
 
         self.backend = backend
+
+    def _get_cached(self, path):
+        return Path(self._cache_directory, path).read_bytes()
+
+    def _store_cached(self, path, data):
+        file = Path(self._cache_directory, path)
+        file.parent.mkdir(parents=True, exist_ok=True)
+        file.write_bytes(data)
 
     @cached_property
     def executor(self):
@@ -554,7 +573,7 @@ class Repository:
 
         async def _download_snapshot(path, digest):
             try:
-                contents = utils.fs.get_cached(path)
+                contents = self._get_cached(path)
             except FileNotFoundError:
                 async with self._acquire_slot():
                     logger.info('Downloading %s', path)
@@ -566,7 +585,7 @@ class Repository:
 
                 if cache_loaded:
                     logger.info('Caching %s', path)
-                    utils.fs.store_cached(path, contents)
+                    self._store_cached(path, contents)
 
             body = self.deserialize(contents)
 
