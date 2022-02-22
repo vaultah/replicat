@@ -550,13 +550,12 @@ class Repository:
         return utils.DefaultNamespace(new_key=key)
 
     async def _load_snapshots(self, *, snapshot_regex=None, cache_loaded=True):
-        tasks = {}
-        cached_snapshots = {str(x) for x in utils.fs.list_cached(self.SNAPSHOT_PREFIX)}
+        task_to_path = {}
 
         async def _download_snapshot(path, digest):
-            if path in cached_snapshots:
+            try:
                 contents = utils.fs.get_cached(path)
-            else:
+            except FileNotFoundError:
                 async with self._acquire_slot():
                     logger.info('Downloading %s', path)
                     contents = await self._awrap(self.backend.download, path)
@@ -607,10 +606,10 @@ class Repository:
                 continue
 
             task = asyncio.create_task(_download_snapshot(path, digest))
-            tasks[task] = path
+            task_to_path[task] = path
 
-        async for task in utils.as_completed(tasks):
-            yield tasks[task], await task
+        async for task in utils.as_completed(task_to_path):
+            yield task_to_path[task], await task
 
     def _format_snapshot_name(self, *, path, chunks, data):
         return self.parse_snapshot_location(path).name
