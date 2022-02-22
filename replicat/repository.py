@@ -140,6 +140,10 @@ class Repository:
         file.parent.mkdir(parents=True, exist_ok=True)
         file.write_bytes(data)
 
+    @property
+    def _unlocked(self):
+        return hasattr(self, 'props')
+
     @cached_property
     def executor(self):
         """Executor for non-async methods of the backend instance"""
@@ -165,10 +169,6 @@ class Repository:
         async for value in result:
             yield value
 
-    @property
-    def _unlocked(self):
-        return hasattr(self, 'props')
-
     @asynccontextmanager
     async def _acquire_slot(self):
         slot = await self._slots.get()
@@ -176,6 +176,33 @@ class Repository:
             yield slot
         finally:
             self._slots.put_nowait(slot)
+
+    # Convenience wrappers for backend methods that do not need to know
+    # the actual slot they are occupying (so most of them)
+    async def _exists(self, location):
+        async with self._acquire_slot():
+            logger.info('Checking existence of %s', location)
+            return await self._awrap(self.backend.exists, location)
+
+    async def _download(self, location):
+        async with self._acquire_slot():
+            logger.info('Downloading %s', location)
+            return await self._awrap(self.backend.download, location)
+
+    async def _upload_data(self, location, data):
+        async with self._acquire_slot():
+            logger.info('Uploading binary data to %s', location)
+            await self._awrap(self.backend.upload, location, data)
+
+    async def _delete(self, location):
+        async with self._acquire_slot():
+            logger.info('Deleting %s', location)
+            await self._awrap(self.backend.delete, location)
+
+    async def _clean(self):
+        async with self._acquire_slot():
+            logger.info('Running backend clean-up')
+            await self._awrap(self.backend.clean)
 
     def default_serialization_hook(self, data, /):
         return utils.type_hint(data)
@@ -465,17 +492,14 @@ class Repository:
         else:
             key = None
 
-        async with self._acquire_slot():
-            self.display_status('Uploading config')
-            await self._awrap(self.backend.upload, 'config', self.serialize(config))
+        self.display_status('Uploading config')
+        await self._upload_data('config', self.serialize(config))
 
         self.props = props
         return utils.DefaultNamespace(config=config, key=key)
 
     async def _load_config(self):
-        async with self._acquire_slot():
-            data = await self._awrap(self.backend.download, 'config')
-
+        data = await self._download('config')
         return RepositoryProps(**self._instantiate_config(self.deserialize(data)))
 
     async def unlock(self, *, password=None, key=None):
@@ -586,10 +610,7 @@ class Repository:
                     pass
 
             if contents is empty:
-                async with self._acquire_slot():
-                    logger.info('Downloading %s', path)
-                    contents = await self._awrap(self.backend.download, path)
-
+                contents = await self._download(path)
                 logger.info('Verifying %s', path)
                 if self.props.hash_digest(contents) != digest:
                     raise exceptions.ReplicatError(f'Snapshot at {path!r} is corrupted')
@@ -961,9 +982,7 @@ class Repository:
                     await asyncio.sleep(queue_timeout)
                     continue
 
-                async with self._acquire_slot():
-                    exists = await self._awrap(self.backend.exists, chunk.location)
-
+                exists = await self._exists(chunk.location)
                 logger.info(
                     'Processing chunk #%d, exists=%s, I=%d, L=%s',
                     chunk.counter,
@@ -1049,14 +1068,12 @@ class Repository:
         name, tag = self._snapshot_digest_to_location_parts(digest)
         location = self.get_snapshot_location(name=name, tag=tag)
 
-        async with self._acquire_slot():
-            self.display_status(f'Uploading snapshot {name}')
-            await self._awrap(self.backend.upload, location, serialized_snapshot)
+        self.display_status(f'Uploading snapshot {name}')
+        await self._upload_data(location, serialized_snapshot)
 
         if state.bytes_reused:
-            self.display_status(
-                f'Used {utils.bytes_to_human(state.bytes_reused)} of existing data'
-            )
+            reused_human = utils.bytes_to_human(state.bytes_reused)
+            self.display_status(f'Used {reused_human} of existing data')
 
         return utils.DefaultNamespace(
             name=name,
@@ -1138,10 +1155,7 @@ class Repository:
                     break
 
                 location = self._chunk_digest_to_location(digest)
-
-                async with self._acquire_slot():
-                    logger.info('Downloading %s', location)
-                    contents = await self._awrap(self.backend.download, location)
+                contents = await self._download(location)
 
                 logger.info('Decrypting %s', location)
                 if self.props.encrypted:
@@ -1260,8 +1274,7 @@ class Repository:
         )
 
         async def _delete_snapshot(location):
-            async with self._acquire_slot():
-                await self._awrap(self.backend.delete, location)
+            await self._delete(location)
             finished_snapshots_tracker.update()
 
         with finished_snapshots_tracker:
@@ -1277,10 +1290,8 @@ class Repository:
         )
 
         async def _delete_chunk(digest):
-            async with self._acquire_slot():
-                await self._awrap(
-                    self.backend.delete, self._chunk_digest_to_location(digest)
-                )
+            location = self._chunk_digest_to_location(digest)
+            await self._delete(location)
             finished_chunks_tracker.update()
 
         with finished_chunks_tracker:
@@ -1325,16 +1336,14 @@ class Repository:
         )
 
         async def _delete_chunk(location):
-            async with self._acquire_slot():
-                await self._awrap(self.backend.delete, location)
+            await self._delete(location)
             finished_tracker.update()
 
         with finished_tracker:
             await asyncio.gather(*map(_delete_chunk, to_delete))
 
-        async with self._acquire_slot():
-            self.display_status('Running post-deletion cleanup')
-            await self._awrap(self.backend.clean)
+        self.display_status('Running post-deletion cleanup')
+        await self._clean()
 
     @utils.disable_gc
     def _benchmark_chunker(self, adapter, number=10, size=512_000_000):
@@ -1415,13 +1424,8 @@ class Repository:
                 os.path.commonpath([path, base_directory])
             ).as_posix()
             length = path.stat().st_size
-            exists = False
 
-            if skip_existing:
-                async with self._acquire_slot():
-                    exists = await self._awrap(self.backend.exists, name)
-
-            if exists:
+            if skip_existing and await self._exists(name):
                 logger.info('Skipping file %r (exists)', name)
             else:
                 async with self._acquire_slot() as slot:
