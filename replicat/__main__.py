@@ -37,7 +37,12 @@ async def _cmd_handler(args, unknown, error):
 
     backend_type, connection_string = args.repo
     backend = _instantiate_backend(backend_type, connection_string, **vars(args))
-    repository = Repository(backend, concurrent=args.concurrent, quiet=args.quiet)
+    repository = Repository(
+        backend,
+        concurrent=args.concurrent,
+        quiet=args.quiet,
+        cache_directory=args.cache_directory,
+    )
 
     if args.action == 'init':
         await repository.init(

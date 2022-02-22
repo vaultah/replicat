@@ -22,7 +22,6 @@ from pathlib import Path
 from random import Random
 from typing import Any, Dict, Optional
 
-from appdirs import user_cache_dir
 from sty import ef
 from tqdm import tqdm
 
@@ -104,7 +103,7 @@ class Repository:
     # Fast KDF for high-entropy inputs (used for shared data)
     DEFAULT_SHARED_KDF_NAME = 'blake2b'
     EMPTY_TABLE_VALUE = '--'
-    DEFAULT_CACHE_DIRECTORY = user_cache_dir('replicat', 'replicat')
+    DEFAULT_CACHE_DIRECTORY = utils.fs.DEFAULT_CACHE_DIRECTORY
 
     def __init__(
         self,
@@ -128,9 +127,11 @@ class Repository:
         self.backend = backend
 
     def _get_cached(self, path):
+        assert self._cache_directory is not None
         return Path(self._cache_directory, path).read_bytes()
 
     def _store_cached(self, path, data):
+        assert self._cache_directory is not None
         file = Path(self._cache_directory, path)
         file.parent.mkdir(parents=True, exist_ok=True)
         file.write_bytes(data)
@@ -568,13 +569,19 @@ class Repository:
         )
         return utils.DefaultNamespace(new_key=key)
 
-    async def _load_snapshots(self, *, snapshot_regex=None, cache_loaded=True):
+    async def _load_snapshots(self, *, snapshot_regex=None):
+        empty = object()
         task_to_path = {}
 
         async def _download_snapshot(path, digest):
-            try:
-                contents = self._get_cached(path)
-            except FileNotFoundError:
+            contents = empty
+            if self._cache_directory is not None:
+                try:
+                    contents = self._get_cached(path)
+                except FileNotFoundError:
+                    pass
+
+            if contents is empty:
                 async with self._acquire_slot():
                     logger.info('Downloading %s', path)
                     contents = await self._awrap(self.backend.download, path)
@@ -583,7 +590,7 @@ class Repository:
                 if self.props.hash_digest(contents) != digest:
                     raise exceptions.ReplicatError(f'Snapshot at {path!r} is corrupted')
 
-                if cache_loaded:
+                if self._cache_directory is not None:
                     logger.info('Caching %s', path)
                     self._store_cached(path, contents)
 

@@ -112,6 +112,13 @@ common_options_parser.add_argument(
     type=int,
     help='The number of concurrent connections to the backend.',
 )
+cache_options = common_options_parser.add_mutually_exclusive_group()
+cache_options.add_argument(
+    '--cache-directory', help='Cache directory', default=fs.DEFAULT_CACHE_DIRECTORY
+)
+cache_options.add_argument(
+    '--no-cache', action='store_const', const=None, dest='cache_directory'
+)
 common_options_parser.add_argument('-v', '--verbose', action='count', default=0)
 common_options_parser.add_argument(
     '-K', '--key-file', metavar='KEYFILE', dest='key', type=_read_bytes

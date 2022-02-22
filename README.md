@@ -131,6 +131,8 @@ There are several command line arguments that are common to all subcommands:
 
  - `-q`/`--hide-progress` -- suppresses progress indication for commands that support it
  - `-c`/`--concurrent` -- the number of concurrent connections to the backend
+ - `--cache-directory` -- specifies the directory to use for cache. `--no-cache` disables
+ cache completely.
  - `-v`/`--verbose` -- specifies the logging verbosity. The default verbosity is `WARNING`,
  `-v` means `INFO`, `-vv` means `DEBUG`.
 

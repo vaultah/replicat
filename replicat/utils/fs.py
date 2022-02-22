@@ -2,6 +2,9 @@ import os
 import os.path
 from pathlib import Path
 
+from appdirs import user_cache_dir
+
+DEFAULT_CACHE_DIRECTORY = user_cache_dir('replicat', 'replicat')
 DEFAULT_STREAM_CHUNK_SIZE = 16_777_216
 
 
