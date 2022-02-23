@@ -52,24 +52,6 @@ jobs:
     with:
       python-version: '3.10'
 
-  build-311-windows:
-    needs: lint
-    uses: ./.github/workflows/build-windows.yml
-    with:
-      python-version: '3.11'
-
-  build-311-linux:
-    needs: lint
-    uses: ./.github/workflows/build-linux.yml
-    with:
-      python-version: '3.11'
-
-  build-311-macos:
-    needs: lint
-    uses: ./.github/workflows/build-macos.yml
-    with:
-      python-version: '3.11'
-
   test-39-windows:
     needs: build-39-windows
     runs-on: windows-latest
@@ -161,47 +143,17 @@ jobs:
       - run: python -m pytest --pyargs replicat.tests
 
 
-  test-311-windows:
-    needs: build-311-windows
-    runs-on: windows-latest
+  test-311:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
     steps:
+      - name: Checkout
+        uses: actions/checkout@v2
       - name: Setup Python
         uses: actions/setup-python@v2
         with:
           python-version: '3.11'
-      - uses: actions/download-artifact@v2
-        id: dwnl
-        with:
-          name: ${{ needs.build-311-windows.outputs.wheel_name }}
-      - run: python -m pip install ${{ needs.build-311-windows.outputs.wheel_name }}[test]
-      - run: python -m pytest --pyargs replicat.tests
-
-  test-311-linux:
-    needs: build-311-linux
-    runs-on: ubuntu-latest
-    steps:
-      - name: Setup Python
-        uses: actions/setup-python@v2
-        with:
-          python-version: '3.11'
-      - uses: actions/download-artifact@v2
-        id: dwnl
-        with:
-          name: ${{ needs.build-311-linux.outputs.wheel_name }}
-      - run: python -m pip install ${{ needs.build-311-linux.outputs.wheel_name }}[test]
-      - run: python -m pytest --pyargs replicat.tests
-
-  test-311-macos:
-    needs: build-311-macos
-    runs-on: macos-latest
-    steps:
-      - name: Setup Python
-        uses: actions/setup-python@v2
-        with:
-          python-version: '3.11'
-      - uses: actions/download-artifact@v2
-        id: dwnl
-        with:
-          name: ${{ needs.build-311-macos.outputs.wheel_name }}
-      - run: python -m pip install ${{ needs.build-311-macos.outputs.wheel_name }}[test]
+      - run: python -m pip install .[test]
       - run: python -m pytest --pyargs replicat.tests
