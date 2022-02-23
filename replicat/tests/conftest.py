@@ -13,4 +13,6 @@ def local_backend(tmpdir):
 
 @pytest.fixture
 def local_repo(local_backend, tmpdir):
-    return Repository(local_backend, concurrent=5, cache_directory=tmpdir / '.cache')
+    return Repository(
+        local_backend, concurrent=5, cache_directory=tmpdir / '.cache', exclusive=True
+    )

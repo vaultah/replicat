@@ -99,6 +99,12 @@ repository_parser.add_argument(
 
 common_options_parser = argparse.ArgumentParser(add_help=False)
 common_options_parser.add_argument(
+    '-x',
+    '--exclusive',
+    action='store_true',
+    help='Assume exclusive access to the respository',
+)
+common_options_parser.add_argument(
     '-q',
     '--hide-progress',
     dest='quiet',
