@@ -5,6 +5,8 @@ import threading
 import time
 from base64 import standard_b64encode
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timezone
+from unittest.mock import patch
 
 import pytest
 
@@ -44,7 +46,7 @@ class PlainBackend:
         # Simulate work, wait for all the calls to finish
         if self.counter:
             while True:
-                time.sleep(0.5)
+                time.sleep(0.1)
                 if self.results.count('ERROR') >= self.raise_on - 1:
                     break
 
@@ -79,7 +81,7 @@ class AsyncBackend:
         # Simulate work, wait for all the calls to finish
         if self.counter:
             while True:
-                await asyncio.sleep(0.5)
+                await asyncio.sleep(0.1)
                 if self.results.count('ERROR') >= self.raise_on - 1:
                     break
 
@@ -333,3 +335,22 @@ def test_iterative_scandir(tmp_path):
         str(tmp_path / 'A/B/K/differentfile'),
         str(tmp_path / 'Y/yetanotherfile'),
     ]
+
+
+@pytest.mark.parametrize(
+    'now, expected',
+    [
+        (datetime(1970, 1, 1, tzinfo=timezone.utc), 0),
+        (datetime(1970, 1, 15, 1, 2, 3, tzinfo=timezone.utc), 1_213_323),
+        (
+            datetime(2022, 12, 11, 10, 9, 8, 765432, tzinfo=timezone.utc),
+            1_670_753_348,
+        ),
+    ],
+)
+def test_utc_timestamp(now, expected):
+    with patch('replicat.utils.datetime') as datetime_mock:
+        datetime_mock.side_effect = datetime
+        datetime_mock.now.return_value = now
+        assert utils.utc_timestamp() == expected
+        datetime_mock.now.assert_called_once_with(timezone.utc)

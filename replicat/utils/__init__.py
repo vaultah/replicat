@@ -13,6 +13,7 @@ import re
 import threading
 import time
 import weakref
+from datetime import datetime, timezone
 from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
@@ -597,3 +598,9 @@ async def as_completed(tasks):
 
     for _ in tasks:
         yield await queue.get()
+
+
+def utc_timestamp():
+    epoch = datetime(1970, 1, 1, tzinfo=timezone.utc)
+    now = datetime.now(timezone.utc)
+    return int((now - epoch).total_seconds())

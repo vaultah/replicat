@@ -1,15 +1,17 @@
+import asyncio
 import os
 import re
 import threading
 import time
+from itertools import islice
 from random import Random
-from unittest.mock import ANY, patch
+from unittest.mock import ANY, call, patch
 
 import pytest
 
-from replicat import exceptions
+from replicat import exceptions, utils
 from replicat.backends.local import Local
-from replicat.repository import Repository
+from replicat.repository import LockTypes, Repository
 from replicat.utils import adapters
 
 
@@ -37,6 +39,55 @@ class TestHelperMethods:
         name, tag = local_repo.parse_snapshot_location(location)
         assert name == 'GHIJKLMNOPQR'
         assert tag == '0123456789ABCDEF'
+
+    def test_get_lock_location(self, local_repo):
+        location = local_repo.get_lock_location(name='a-b-c-d-e', tag='012345678')
+        assert location == local_repo.LOCK_PREFIX + 'a-b-c-d-e-012345678'
+
+    def test_parse_lock_location(self, local_repo):
+        location = local_repo.LOCK_PREFIX + 'a-b-c-d-e-012345678'
+        name, tag = local_repo.parse_lock_location(location)
+        assert name == 'a-b-c-d-e'
+        assert tag == '012345678'
+
+    @pytest.mark.parametrize(
+        'ts, start, end',
+        [
+            (0, 0, Repository.LOCK_TTL),
+            (Repository.LOCK_TTL - 1, 0, Repository.LOCK_TTL),
+            (Repository.LOCK_TTL, Repository.LOCK_TTL, Repository.LOCK_TTL * 2),
+            (Repository.LOCK_TTL + 1, Repository.LOCK_TTL, Repository.LOCK_TTL * 2),
+            (Repository.LOCK_TTL * 2 - 1, Repository.LOCK_TTL, Repository.LOCK_TTL * 2),
+        ],
+    )
+    def test_get_lock_frame(self, local_repo, ts, start, end):
+        assert local_repo.get_lock_frame(ts) == (start, end)
+
+    @pytest.mark.parametrize(
+        'tss, lock_ttl, lock_ttp, values',
+        [
+            ([123, 187, 188, 189], 10, 1, [120, 180, 180, 190]),
+            ([125, 127, 127, 127], 10, 3, [120, 130, 130, 130]),
+            ([123, 188, 188, 188, 188], 10, 2, [120, 190, 190, 190, 190]),
+            ([100, 109, 2_198, 2_199, 2_200], 1_000, 1, [0, 0, 2_000, 2_000, 2_000]),
+            ([39, 39], 20, 0, [20, 20]),
+            ([39, 39], 20, 1, [20, 40]),
+            ([39, 100], 100, 0, [0, 100]),
+        ],
+    )
+    def test_lock_frames(self, local_backend, tss, lock_ttl, lock_ttp, values):
+        class _repository(Repository):
+            LOCK_TTL = lock_ttl
+            LOCK_TTP = lock_ttp
+
+        repository = _repository(local_backend, concurrent=5)
+        it = iter(tss)
+
+        with patch.object(utils, 'utc_timestamp', side_effect=lambda: next(it)):
+            frames_it = repository.lock_frames(next(it))
+            generated = list(islice(frames_it, len(values)))
+
+        assert generated == values
 
 
 class TestInit:
@@ -1109,7 +1160,7 @@ class TestUpload:
     @pytest.mark.asyncio
     async def test_within_cwd(self, tmp_path):
         backend = Local(tmp_path / 'backend')
-        repository = Repository(backend, concurrent=5)
+        repository = Repository(backend, concurrent=5, exclusive=True)
 
         files_base_path = tmp_path / 'files'
         contents = {
@@ -1144,7 +1195,7 @@ class TestUpload:
         )
 
     @pytest.mark.asyncio
-    async def test_overwrites(self, local_backend, tmp_path):
+    async def test_overwrites(self, tmp_path):
         backend = Local(tmp_path / 'backend')
         backend.upload('files/file', b'<old data>')
 
@@ -1152,14 +1203,14 @@ class TestUpload:
         files_base_path.mkdir()
         (files_base_path / 'file').write_bytes(b'<updated data>')
 
-        repository = Repository(backend, concurrent=5)
+        repository = Repository(backend, concurrent=5, exclusive=True)
 
         await repository.upload([files_base_path / 'file'])
         assert set(backend.list_files()) == {'files/file'}
         assert backend.download('files/file') == b'<updated data>'
 
     @pytest.mark.asyncio
-    async def test_skip_existing(self, local_backend, tmp_path):
+    async def test_skip_existing(self, tmp_path):
         backend = Local(tmp_path / 'backend')
         backend.upload('files/file', b'<old data>')
 
@@ -1167,8 +1218,118 @@ class TestUpload:
         files_base_path.mkdir()
         (files_base_path / 'file').write_bytes(b'<updated data>')
 
-        repository = Repository(backend, concurrent=5)
+        repository = Repository(backend, concurrent=5, exclusive=True)
 
         await repository.upload([files_base_path / 'file'], skip_existing=True)
         assert set(backend.list_files()) == {'files/file'}
         assert backend.download('files/file') == b'<old data>'
+
+
+class TestLockWorker:
+    @pytest.mark.parametrize('lock_type', LockTypes)
+    @pytest.mark.asyncio
+    async def test_exclusive(self, local_backend, tmp_path, lock_type):
+        repository = Repository(local_backend, concurrent=5, exclusive=True)
+        await repository.init(
+            password=b'<password>', settings={'encryption': {'kdf': {'n': 4}}}
+        )
+        with patch.object(local_backend, 'upload') as upload_mock, patch.object(
+            local_backend, 'delete'
+        ) as delete_mock:
+            await repository.lock_worker(12_345, LockTypes.create_read)
+            upload_mock.assert_not_called()
+            delete_mock.assert_not_called()
+
+    @pytest.mark.parametrize('lock_type', LockTypes)
+    @pytest.mark.asyncio
+    async def test_not_exclusive(self, local_backend, tmp_path, lock_type):
+        repository = Repository(local_backend, concurrent=5)
+        await repository.init(
+            password=b'<password>', settings={'encryption': {'kdf': {'n': 4}}}
+        )
+
+        with patch.object(local_backend, 'upload') as upload_mock, patch.object(
+            local_backend, 'delete'
+        ) as delete_mock, patch.object(
+            repository,
+            'lock_frames',
+            return_value=[1_234, 1_234, 1_987, 1_987, 9_456, 9_457, 9_457],
+        ) as timestamp_mock:
+            await repository.lock_worker(1_111, lock_type, delay=0)
+
+        unique_tss = sorted(set(timestamp_mock.return_value))
+        assert upload_mock.call_count == len(unique_tss)
+        lock_locations = [
+            repository._lock_ts_to_location(x, lock_type) for x in unique_tss
+        ]
+        upload_mock.assert_has_calls([call(x, b'') for x in lock_locations])
+
+        assert delete_mock.call_count == len(unique_tss)
+        delete_mock.assert_has_calls([call(x) for x in lock_locations], any_order=True)
+
+
+class TestWaitForLock:
+    @pytest.mark.parametrize('lock_type', LockTypes)
+    @pytest.mark.asyncio
+    async def test_exclusive(self, local_backend, tmp_path, lock_type):
+        repository = Repository(local_backend, concurrent=5, exclusive=True)
+        await repository.init(
+            password=b'<password>', settings={'encryption': {'kdf': {'n': 4}}}
+        )
+        with patch.object(local_backend, 'exists') as exists_mock, patch.object(
+            asyncio, 'sleep'
+        ) as sleep_mock:
+            await repository.wait_for_lock(1, lock_type)
+            sleep_mock.assert_not_awaited()
+            exists_mock.assert_not_called()
+
+    @pytest.mark.parametrize('lock_type', LockTypes)
+    @pytest.mark.parametrize('wait_time', [-10, 0, 7])
+    @pytest.mark.asyncio
+    async def test_exists(self, local_backend, tmp_path, lock_type, wait_time):
+        repository = Repository(local_backend, concurrent=5)
+        await repository.init(
+            password=b'<password>', settings={'encryption': {'kdf': {'n': 4}}}
+        )
+        with patch.object(
+            local_backend, 'exists', return_value=True
+        ) as exists_mock, patch.object(utils, 'utc_timestamp') as ts_mock, patch.object(
+            repository,
+            'get_lock_frame',
+            return_value=(1_432, 5_876),
+        ) as frame_mock, patch.object(
+            asyncio, 'sleep'
+        ) as sleep_mock:
+            with pytest.raises(exceptions.Locked):
+                await repository.wait_for_lock(wait_time, lock_type)
+
+            sleep_mock.assert_awaited_once_with(wait_time)
+            frame_mock.assert_called_once_with(ts_mock.return_value)
+            exists_mock.assert_called_once_with(
+                repository._lock_ts_to_location(frame_mock.return_value[0], lock_type)
+            )
+
+    @pytest.mark.parametrize('lock_type', LockTypes)
+    @pytest.mark.parametrize('wait_time', [-10, 0, 7])
+    @pytest.mark.asyncio
+    async def test_does_not_exist(self, local_backend, tmp_path, lock_type, wait_time):
+        repository = Repository(local_backend, concurrent=5)
+        await repository.init(
+            password=b'<password>', settings={'encryption': {'kdf': {'n': 4}}}
+        )
+        with patch.object(
+            local_backend, 'exists', return_value=False
+        ) as exists_mock, patch.object(utils, 'utc_timestamp') as ts_mock, patch.object(
+            repository,
+            'get_lock_frame',
+            return_value=(1_234, 5_678),
+        ) as frame_mock, patch.object(
+            asyncio, 'sleep'
+        ) as sleep_mock:
+            await repository.wait_for_lock(wait_time, lock_type)
+
+            sleep_mock.assert_awaited_once_with(wait_time)
+            frame_mock.assert_called_once_with(ts_mock.return_value)
+            exists_mock.assert_called_once_with(
+                repository._lock_ts_to_location(frame_mock.return_value[0], lock_type)
+            )
