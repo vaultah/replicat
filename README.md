@@ -108,7 +108,7 @@ There are several available subcommands:
  - `clean` -- performs garbage collection
  - `upload` -- uploads files to the backend (no chunking, no encryption, keeping original names)
 
-It's always safe to upload and read from a Replicat repository concurrently. In order to
+It's always safe to read from and upload to a Replicat repository concurrently. In order to
 make it possible for you to run destructive actions (`delete`, `clean`) concurrently with
 uploads and reads, Replicat uses lock-based guards. Here's what you should know:
 
