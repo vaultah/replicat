@@ -274,7 +274,6 @@ class TestInit:
     @pytest.mark.asyncio
     async def test_unencrypted_ok(self, local_backend, local_repo):
         result = await local_repo.init(
-            password=b'<password>',
             settings={'encryption': None, 'chunking': {'max_length': 128_129}},
         )
 
@@ -736,7 +735,7 @@ class TestSnapshot:
     async def test_not_locked(self, monkeypatch, local_backend, tmp_path, encryption):
         local_repo = Repository(local_backend, concurrent=5)
         await local_repo.init(
-            password=b'<password>',
+            password=encryption and b'<password>',
             settings={'encryption': encryption},
         )
 
@@ -780,7 +779,7 @@ class TestSnapshot:
     async def test_locked(self, monkeypatch, local_backend, tmp_path, encryption):
         local_repo = Repository(local_backend, concurrent=5)
         await local_repo.init(
-            password=b'<password>',
+            password=encryption and b'<password>',
             settings={'encryption': encryption},
         )
 
@@ -1154,7 +1153,7 @@ class TestDeleteSnapshots:
     async def test_not_locked(self, monkeypatch, local_backend, encryption):
         local_repo = Repository(local_backend, concurrent=5)
         await local_repo.init(
-            password=b'<password>',
+            password=encryption and b'<password>',
             settings={'encryption': encryption},
         )
 
@@ -1187,7 +1186,7 @@ class TestDeleteSnapshots:
     async def test_locked(self, monkeypatch, local_backend, encryption):
         local_repo = Repository(local_backend, concurrent=5)
         await local_repo.init(
-            password=b'<password>',
+            password=encryption and b'<password>',
             settings={'encryption': encryption},
         )
 

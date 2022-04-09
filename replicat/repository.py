@@ -677,6 +677,12 @@ class Repository:
                     json.dumps(key, indent=4, default=self.default_serialization_hook)
                 )
         else:
+            if password is not None or key_output_path is not None:
+                raise exceptions.ReplicatError(
+                    'Password and key output path can only be provided to initialise '
+                    'encrypted repositories'
+                )
+
             key = None
 
         self.display_status('Uploading config')
@@ -707,6 +713,10 @@ class Repository:
             props = dataclasses.replace(
                 props,
                 **self._instantiate_key(key, password=password, cipher=props.cipher),
+            )
+        elif password is not None or key is not None:
+            raise exceptions.ReplicatError(
+                'Cannot provide password or key to unlock unencrypted repositories'
             )
 
         self.props = props
