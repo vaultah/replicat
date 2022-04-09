@@ -100,7 +100,7 @@ class LockTypes(str, Enum):
     delete = 'd'
 
 
-class _RepositoryLock:
+class RepositoryLock:
     """An instance of this class can be used as a decorator for methods of Repository.
     It manages the lock worker for the specified lock type"""
 
@@ -164,7 +164,7 @@ class _RepositoryLock:
         )
 
 
-lock = _RepositoryLock()
+lock = RepositoryLock()
 
 
 class Repository:
