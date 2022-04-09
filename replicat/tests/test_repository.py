@@ -5,7 +5,7 @@ import threading
 import time
 from itertools import islice
 from random import Random
-from unittest.mock import ANY, AsyncMock, call, patch
+from unittest.mock import ANY, DEFAULT, AsyncMock, call, patch
 
 import pytest
 
@@ -1148,6 +1148,72 @@ class TestDeleteSnapshots:
 
         assert not any(map(local_backend.exists, snapshot_paths))
         assert not local_backend.exists(snapshot.location)
+
+    @pytest.mark.parametrize('encryption', [None, {'kdf': {'n': 4}}])
+    @pytest.mark.asyncio
+    async def test_not_locked(self, monkeypatch, local_backend, encryption):
+        local_repo = Repository(local_backend, concurrent=5)
+        await local_repo.init(
+            password=b'<password>',
+            settings={'encryption': encryption},
+        )
+
+        with patch.multiple(local_repo, lock_worker=DEFAULT, wait_for_lock=DEFAULT):
+            snapshot = await local_repo.snapshot(paths=[])
+
+        with patch.object(
+            utils,
+            'utc_timestamp',
+            side_effect=lambda it=iter(
+                [local_repo.LOCK_TTP * 37, local_repo.LOCK_TTP * 157]
+            ): next(it),
+        ), patch.object(local_repo, 'lock_worker') as lock_worker_mock, patch.object(
+            local_repo, 'wait_for_lock'
+        ) as wait_for_lock_mock, patch.object(
+            local_backend, 'delete'
+        ) as delete_mock:
+            await local_repo.delete_snapshots([snapshot.name])
+
+        lock_worker_mock.assert_awaited_once_with(
+            local_repo.LOCK_TTP * 37, LockTypes.delete
+        )
+        wait_for_lock_mock.assert_awaited_once_with(
+            local_repo.LOCK_TTP * (37 - 157 + 1), LockTypes.create_read
+        )
+        delete_mock.assert_called_once_with(snapshot.location)
+
+    @pytest.mark.parametrize('encryption', [None, {'kdf': {'n': 4}}])
+    @pytest.mark.asyncio
+    async def test_locked(self, monkeypatch, local_backend, encryption):
+        local_repo = Repository(local_backend, concurrent=5)
+        await local_repo.init(
+            password=b'<password>',
+            settings={'encryption': encryption},
+        )
+
+        with patch.multiple(local_repo, lock_worker=DEFAULT, wait_for_lock=DEFAULT):
+            snapshot = await local_repo.snapshot(paths=[])
+
+        with pytest.raises(exceptions.Locked), patch.object(
+            utils,
+            'utc_timestamp',
+            side_effect=lambda it=iter(
+                [local_repo.LOCK_TTP * 41, local_repo.LOCK_TTP * 161]
+            ): next(it),
+        ), patch.object(local_repo, 'lock_worker') as lock_worker_mock, patch.object(
+            local_repo, 'wait_for_lock', side_effect=exceptions.Locked
+        ) as wait_for_lock_mock, patch.object(
+            local_backend, 'delete'
+        ) as delete_mock:
+            await local_repo.delete_snapshots([snapshot.name])
+
+        lock_worker_mock.assert_awaited_once_with(
+            local_repo.LOCK_TTP * 41, LockTypes.delete
+        )
+        wait_for_lock_mock.assert_awaited_once_with(
+            local_repo.LOCK_TTP * (41 - 161 + 1), LockTypes.create_read
+        )
+        delete_mock.assert_not_called()
 
 
 class TestClean:
