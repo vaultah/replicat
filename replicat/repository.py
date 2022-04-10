@@ -1501,7 +1501,7 @@ class Repository:
             await asyncio.gather(*map(_delete_chunk, to_delete))
 
     @lock(LockTypes.delete)
-    async def clean(self):
+    async def delete_unreferenced_chunks(self):
         self.display_status('Loading snapshots')
         referenced_digests = {
             y async for _, x in self._load_snapshots() for y in x['chunks']
@@ -1527,7 +1527,7 @@ class Repository:
             to_delete.add(location)
 
         if not to_delete:
-            print('Nothing to do')
+            print('No unreferenced chunks found')
             return
 
         await lock.wait(self.LOCK_TTP, LockTypes.create_read)
@@ -1548,8 +1548,55 @@ class Repository:
         with finished_tracker:
             await asyncio.gather(*map(_delete_chunk, to_delete))
 
-        self.display_status('Running post-deletion cleanup')
-        await self._clean()
+        return to_delete
+
+    async def delete_stale_locks(self):
+        self.display_status('Checking for stale locks')
+        to_delete = []
+
+        async for location in self._aiter(self.backend.list_files, self.LOCK_PREFIX):
+            name, tag = self.parse_lock_location(location)
+            if self.props.encrypted:
+                logger.info('Validating tag for %s', location)
+                if self.props.mac(name.encode('ascii')) != bytes.fromhex(tag):
+                    logger.info('Tag for %s did not match, skipping', location)
+                    continue
+
+            encoded_lock_ts = name.rpartition('-')[2]
+            lock_ts = int.from_bytes(bytes.fromhex(encoded_lock_ts), 'little')
+            if utils.utc_timestamp() - lock_ts > self.LOCK_TTL * 2:
+                to_delete.append(location)
+
+        if not to_delete:
+            print('No stale locks found')
+            return
+
+        finished_tracker = tqdm(
+            desc='Stale locks deleted',
+            unit='',
+            total=len(to_delete),
+            position=0,
+            disable=self.quiet,
+            leave=True,
+        )
+
+        async def _delete_lock(location):
+            await self._delete(location)
+            finished_tracker.update()
+
+        with finished_tracker:
+            await asyncio.gather(*map(_delete_lock, to_delete))
+
+        return to_delete
+
+    async def clean(self):
+        deleted = any(
+            [await self.delete_unreferenced_chunks(), await self.delete_stale_locks()]
+        )
+
+        if deleted:
+            self.display_status('Running post-deletion cleanup')
+            await self._clean()
 
     @utils.disable_gc
     def _benchmark_chunker(self, adapter, number=10, size=512_000_000):
