@@ -95,13 +95,13 @@ name and the table of chunk references.
 
 Here are the common parts of replicat repositories, along with some diagrams and comments:
 
-![replicat configuration file](https://user-images.githubusercontent.com/4944562/172207128-0eef23bd-6993-419e-bc4b-5355cd2b117c.svg)
+![replicat config](https://user-images.githubusercontent.com/4944562/172215519-f98e5522-a36b-4f73-8089-ab78d5393cd7.svg)
 
-![replicat keys](https://user-images.githubusercontent.com/4944562/172207350-ecdfe62d-9e7b-42cc-ac08-ff9ed13ebd16.svg)
+![replicat keys](https://user-images.githubusercontent.com/4944562/172216260-d6be087e-2fa2-4396-b2b0-16fee82a29a4.svg)
 
-![replicat chunks](https://user-images.githubusercontent.com/4944562/172207486-a303f823-22af-4af9-9800-971a5dddbeb7.svg)
+![replicat chunks](https://user-images.githubusercontent.com/4944562/172215582-0cffdc9d-1952-49b1-af9c-5db1766ac26e.svg)
 
-![replicat snapshots](https://user-images.githubusercontent.com/4944562/172207545-a348ddfa-92cd-4e76-a7f6-5d97333c36ce.svg)
+![replicat snapshots](https://user-images.githubusercontent.com/4944562/172215594-12cf311e-8752-480f-8ae6-7a0d6bdefa18.svg)
 
 # Command line interface
 
