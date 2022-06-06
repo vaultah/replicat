@@ -93,6 +93,14 @@ A snapshot created using an independent key will not be visible. A snapshot crea
 shared key will be visible, but there will be no available information about it beyond its storage
 name and the table of chunk references.
 
+![replicat configuration file](https://user-images.githubusercontent.com/4944562/172207128-0eef23bd-6993-419e-bc4b-5355cd2b117c.svg)
+
+![replicat keys](https://user-images.githubusercontent.com/4944562/172207350-ecdfe62d-9e7b-42cc-ac08-ff9ed13ebd16.svg)
+
+![replicat chunks](https://user-images.githubusercontent.com/4944562/172207486-a303f823-22af-4af9-9800-971a5dddbeb7.svg)
+
+![replicat snapshots](https://user-images.githubusercontent.com/4944562/172207545-a348ddfa-92cd-4e76-a7f6-5d97333c36ce.svg)
+
 # Command line interface
 
 The installer will create the `replicat` command (same as `python -m replicat`).
