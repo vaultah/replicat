@@ -41,7 +41,7 @@ easier for me to fix problems or add new features.
 Highlights/goals:
 
   - efficient, concise, easily auditable implementation
-  - extendable and configurable
+  - high customizability
   - few external dependencies
   - well-documented behaviour
   - unified repository layout
@@ -53,9 +53,9 @@ a copycat.
 # Introduction
 
 You can use Replicat to backup files from your machine to a *repository*, located on a *backend*
-like a local directory or Backblaze B2. Files are stored in an optionally encrypted and chunked form,
-and references to *chunks* (i.e. their digests) are stored in *snapshots* along with file name
-and metadata.
+such as a local directory or cloud storage (like Backblaze B2). Your files are transfered and stored
+in an optionally encrypted and chunked form, and references to *chunks* (i.e. their hash digests)
+are stored in *snapshots* along with file name and metadata.
 
 Replicat supports two types of repositories: encrypted (the default) and unencrypted.
 
@@ -63,11 +63,11 @@ Chunks, snapshots, and all other pieces of data inside unencrypted repositories 
 unencrypted. The storage names for chunks and snapshots are simply the hash digests of their
 contents.
 
-Currently, the only supported type of encryption is symmetric encryption. To use symmetric encryption
+Currently, the only supported type of encryption is symmetric encryption. To use symmetric encryption,
 you will need a key and the password associated with that key. A key contains parameters for the
-KDF and an encrypted section, which can only be decrypted by the owner of the key using the matching
-password. That section contains secrets for the cryptographic primitives that control how the data
-is split into chunks, visibility of chunks of data, and more.
+KDF and an encrypted (private) section, which can only be decrypted by the owner of the key using
+the matching password. That section contains secrets for the cryptographic primitives that control
+how the data is split into chunks, visibility of chunks of data, and more.
 
 You can create multiple keys with different passwords and settings. When adding a new key to a
 repository with symmetric encryption, you'll have to unlock it with one of the existing keys.
@@ -93,15 +93,46 @@ A snapshot created using an independent key will not be visible. A snapshot crea
 shared key will be visible, but there will be no available information about it beyond its storage
 name and the table of chunk references.
 
-Here are the common parts of replicat repositories, along with some diagrams and comments:
+## Deeper dive
 
-![replicat config](https://user-images.githubusercontent.com/4944562/172215519-f98e5522-a36b-4f73-8089-ab78d5393cd7.svg)
+You're about to see diagrams illustrating how replicat processes data, along with example contents
+of the configuration file, keys, and snapshots. Here's the terminology:
 
-![replicat keys](https://user-images.githubusercontent.com/4944562/172216260-d6be087e-2fa2-4396-b2b0-16fee82a29a4.svg)
+ - **`Encrypt(data, key)`/`Decrypt(data, key)`** -- encrypts/decrypts `data` with the encryption key
+ `key` using an authenticated encryption algorithm. It's normally used to encrypt/decrypt private
+ sections in keys, as well as chunks and snapshots.
 
-![replicat chunks](https://user-images.githubusercontent.com/4944562/172215582-0cffdc9d-1952-49b1-af9c-5db1766ac26e.svg)
+ - **`Hash(data)`** -- computes the hash digest of `data` using a hashing algorithm.
+ It's used to check integrity of data and to derive encryption keys for chunks and snapshots.
 
-![replicat snapshots](https://user-images.githubusercontent.com/4944562/172215594-12cf311e-8752-480f-8ae6-7a0d6bdefa18.svg)
+ - **`Mac(data, key)`** -- computes the message authentication code for `data` using suitable `key`
+ and a MAC algorithm. It's mainly used to verify ownership of chunks.
+
+ - **`SlowKdf(ikm, salt[, context])`/`FastKdf(ikm, salt[, context])`** -- calls a "slow"/"fast" key derivation
+ function to obtain an encryption key from `ikm` using `salt` and an optional `context`. As a general rule,
+ replicat uses "slow" KDF for low-entropy inputs and "fast" KDF for high-entropy inputs. The output length
+ will match the encryption key length of the chosen encryption algorithm.
+
+ - **`UserKey`** -- encryption key derived as `SlowKdf(Password, UserKdfParams)`, where `Password`
+ is the user's password and `UserKdfParams` is the salt. `UserKey` is used to encrypt sensitive
+ personal data: private sections in keys and file metadata in snapshots.
+
+ - **`SharedKey`**, **`SharedKdfParams`**, **`SharedMacKey`** -- secrets stored in the private sections
+ of keys. `SharedKey` and `SharedKdfParams` are used to derive encryption keys using "fast" KDF (they will
+ encrypt shared data, like chunks and chunk references). `SharedMacKey` is used as key for MAC.
+
+ - **`GetChunkLocation(name, authentication_tag)`/`GetSnapshotLocation(name, authentication_tag)`** -- obtains the
+ location for a chunk/snapshot using its name and the corresponding authentication tag.
+
+
+![replicat config](https://user-images.githubusercontent.com/4944562/172221557-9d78beb0-6c07-402d-bec1-34378bd18d7a.svg)
+
+![replicat keys](https://user-images.githubusercontent.com/4944562/172221567-a16d736c-fd6a-45f7-93ff-9f0dc8bce02a.svg)
+
+![replicat chunks](https://user-images.githubusercontent.com/4944562/172221573-ed8fae68-aa4d-4db6-a093-b55f479d22cb.svg)
+
+![replicat snapshots](https://user-images.githubusercontent.com/4944562/172221579-1f21a3a1-df81-4201-a7ec-e52ce514fed7.svg)
+
 
 # Command line interface
 
