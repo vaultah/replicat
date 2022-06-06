@@ -53,9 +53,9 @@ a copycat.
 # Introduction
 
 You can use Replicat to backup files from your machine to a *repository*, located on a *backend*
-like *local* (a local path) or *b2* (Backblaze B2). Files are stored in an optionally encrypted
-and chunked form, and references to *chunks* (i.e. their digests) are stored in *snapshots* along
-with file name and metadata.
+like a local directory or Backblaze B2. Files are stored in an optionally encrypted and chunked form,
+and references to *chunks* (i.e. their digests) are stored in *snapshots* along with file name
+and metadata.
 
 Replicat supports two types of repositories: encrypted (the default) and unencrypted.
 
@@ -92,6 +92,8 @@ and therefore can only be decrypted by the owner of that key (even in the case o
 A snapshot created using an independent key will not be visible. A snapshot created using a
 shared key will be visible, but there will be no available information about it beyond its storage
 name and the table of chunk references.
+
+Here are the common parts of replicat repositories, along with some diagrams and comments:
 
 ![replicat configuration file](https://user-images.githubusercontent.com/4944562/172207128-0eef23bd-6993-419e-bc4b-5355cd2b117c.svg)
 
