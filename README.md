@@ -126,8 +126,11 @@ of the configuration file, keys, and snapshots. Here's the terminology:
  location for a chunk/snapshot using its name and the corresponding authentication tag.
  
 ![replicat config](https://user-images.githubusercontent.com/4944562/172485084-e2935819-0287-442c-a71c-b2098ef12077.svg)
-![replicat keys](https://user-images.githubusercontent.com/4944562/172485088-4b5a34f5-20c9-4735-ac73-dea9dd61a526.svg)
+
+![replicat keys](https://user-images.githubusercontent.com/4944562/172485551-789c608b-5dfd-4846-94e7-7d88a96f19db.svg)
+
 ![replicat chunks](https://user-images.githubusercontent.com/4944562/172485100-f4dc189f-6736-4914-8fe9-51960771f122.svg)
+
 ![replicat snapshots](https://user-images.githubusercontent.com/4944562/172485108-b4d66ee8-d00d-4593-a95a-c84eef53af3e.svg)
 
 # Command line interface
