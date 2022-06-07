@@ -124,14 +124,11 @@ of the configuration file, keys, and snapshots. Here's the terminology:
 
  - **`GetChunkLocation(name, authentication_tag)`/`GetSnapshotLocation(name, authentication_tag)`** -- obtains the
  location for a chunk/snapshot using its name and the corresponding authentication tag.
-
-![replicat configuration file](https://user-images.githubusercontent.com/4944562/172466629-33c4e74e-e774-4903-a529-64bb25824924.svg)
-
-![replicat key](https://user-images.githubusercontent.com/4944562/172466719-0b964a1a-2d9f-4b8a-80e6-2d9ad8c39ca8.svg)
-
-![replicat chunk](https://user-images.githubusercontent.com/4944562/172467904-41bbca78-f4f3-4461-8c63-af58f1879288.svg)
-
-![replicat snapshot](https://user-images.githubusercontent.com/4944562/172468667-f860c89f-b0bc-4e48-9b4c-4b6172b91d24.svg)
+ 
+![replicat config](https://user-images.githubusercontent.com/4944562/172485084-e2935819-0287-442c-a71c-b2098ef12077.svg)
+![replicat keys](https://user-images.githubusercontent.com/4944562/172485088-4b5a34f5-20c9-4735-ac73-dea9dd61a526.svg)
+![replicat chunks](https://user-images.githubusercontent.com/4944562/172485100-f4dc189f-6736-4914-8fe9-51960771f122.svg)
+![replicat snapshots](https://user-images.githubusercontent.com/4944562/172485108-b4d66ee8-d00d-4593-a95a-c84eef53af3e.svg)
 
 # Command line interface
 
