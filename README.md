@@ -117,22 +117,21 @@ of the configuration file, keys, and snapshots. Here's the terminology:
  is the user's password and `UserKdfParams` is the salt. `UserKey` is used to encrypt sensitive
  personal data: private sections in keys and file metadata in snapshots.
 
- - **`SharedKey`**, **`SharedKdfParams`**, **`SharedMacKey`** -- secrets stored in the private sections
- of keys. `SharedKey` and `SharedKdfParams` are used to derive encryption keys using "fast" KDF (they will
- encrypt shared data, like chunks and chunk references). `SharedMacKey` is used as key for MAC.
+ - **`SharedKey`**, **`SharedKdfParams`**, **`SharedMacKey`**, **`SharedChunkerKey`** -- secrets stored in
+ the private sections of keys. `SharedKey` and `SharedKdfParams` are used to derive encryption keys using
+ "fast" KDF (they will encrypt shared data, like chunks and chunk references). `SharedMacKey` is the MAC key.
+ `SharedChunkerKey` personalises content-defined chunking (CDC) to prevent watermarking attacks.
 
  - **`GetChunkLocation(name, authentication_tag)`/`GetSnapshotLocation(name, authentication_tag)`** -- obtains the
  location for a chunk/snapshot using its name and the corresponding authentication tag.
 
+![replicat configuration file](https://user-images.githubusercontent.com/4944562/172466629-33c4e74e-e774-4903-a529-64bb25824924.svg)
 
-![replicat config](https://user-images.githubusercontent.com/4944562/172221557-9d78beb0-6c07-402d-bec1-34378bd18d7a.svg)
+![replicat key](https://user-images.githubusercontent.com/4944562/172466719-0b964a1a-2d9f-4b8a-80e6-2d9ad8c39ca8.svg)
 
-![replicat keys](https://user-images.githubusercontent.com/4944562/172221567-a16d736c-fd6a-45f7-93ff-9f0dc8bce02a.svg)
+![replicat chunk](https://user-images.githubusercontent.com/4944562/172467904-41bbca78-f4f3-4461-8c63-af58f1879288.svg)
 
-![replicat chunks](https://user-images.githubusercontent.com/4944562/172221573-ed8fae68-aa4d-4db6-a093-b55f479d22cb.svg)
-
-![replicat snapshots](https://user-images.githubusercontent.com/4944562/172221579-1f21a3a1-df81-4201-a7ec-e52ce514fed7.svg)
-
+![replicat snapshot](https://user-images.githubusercontent.com/4944562/172468667-f860c89f-b0bc-4e48-9b4c-4b6172b91d24.svg)
 
 # Command line interface
 
