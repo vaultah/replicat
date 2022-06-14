@@ -125,6 +125,9 @@ of the configuration file, keys, and snapshots. Here's the terminology:
  - **`GetChunkLocation(name, authentication_tag)`/`GetSnapshotLocation(name, authentication_tag)`** -- obtains the
  location for a chunk/snapshot using its name and the corresponding authentication tag.
  
+ - **`Upload(data, location)`** -- uploads `data` to the backend to the given `location`.
+ - **`Download(location)`** -- downloads data from the backend at the given `location`.
+ 
 ![replicat config](https://user-images.githubusercontent.com/4944562/172485084-e2935819-0287-442c-a71c-b2098ef12077.svg)
 
 ![replicat keys](https://user-images.githubusercontent.com/4944562/172485551-789c608b-5dfd-4846-94e7-7d88a96f19db.svg)
