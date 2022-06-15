@@ -77,13 +77,12 @@ def _read_bytes(arg):
 # Still, we'll use os.environb when available.
 def _get_environb(var, default=None):
     try:
-        value = os.environb.get(os.fsencode(var), default)
+        return os.environb.get(os.fsencode(var), default)
     except AttributeError:
-        value = os.environ.get(var, default)
-        if value is not default:
+        if (value := os.environ.get(var, default)) is not default:
             return os.fsencode(value)
-    finally:
-        return value
+        else:
+            return value
 
 
 repository_parser = argparse.ArgumentParser(add_help=False)
