@@ -6,6 +6,7 @@ from typing import Optional
 
 import cryptography.exceptions
 from cryptography.hazmat.primitives.ciphers import aead
+from cryptography.hazmat.primitives.kdf.scrypt import Scrypt
 
 import _replicat_adapters
 from .. import exceptions
@@ -139,14 +140,16 @@ class scrypt(KDFAdapter):
         if context is None:
             context = b''
 
-        return hashlib.scrypt(
-            pwd,
+        # If we used hashlib's scrypt, we'd need to take care of maxmem limits
+        # ourselves, plus they are small
+        instance = Scrypt(
             n=self.n,
             r=self.r,
             p=self.p,
-            dklen=self.length,
+            length=self.length,
             salt=params + context,
         )
+        return instance.derive(pwd)
 
 
 class blake2b(KDFAdapter, MACAdapter, HashAdapter):

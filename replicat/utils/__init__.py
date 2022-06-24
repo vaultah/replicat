@@ -18,25 +18,24 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Optional
 
-import httpx
 from tqdm import tqdm
 
 from .. import __version__, exceptions
 from . import adapters, fs  # noqa
 
 PREFIXES_TABLE = {
-    'k': 1000,
-    'K': 1000,
-    'Ki': 1024,
-    'ki': 1024,
-    'M': 1000**2,
-    'm': 1000**2,
-    'Mi': 1024**2,
-    'mi': 1024**2,
-    'g': 1000**3,
-    'G': 1000**3,
-    'gi': 1024**3,
-    'Gi': 1024**3,
+    'k': 1_000,
+    'K': 1_000,
+    'Ki': 1_024,
+    'ki': 1_024,
+    'M': 1_000**2,
+    'm': 1_000**2,
+    'Mi': 1_024**2,
+    'mi': 1_024**2,
+    'g': 1_000**3,
+    'G': 1_000**3,
+    'gi': 1_024**3,
+    'Gi': 1_024**3,
 }
 UNITS_TABLE = {'B': 1, 'b': Decimal('0.125')}
 HUMAN_SIZE_REGEX = (
@@ -469,24 +468,6 @@ def disable_gc(func):
                 gc.enable()
 
     return _decorator
-
-
-class async_client:
-
-    """Creates and stores an httpx.AsyncClient instance when accessed through
-    the parent object. It should only be accessed from within async methods.
-    """
-
-    def __init__(self, *args, **kwargs):
-        self.args, self.kwargs = args, kwargs
-
-    def __get__(self, instance, owner):
-        try:
-            return self._session
-        except AttributeError:
-            # loop should be picked up automatically
-            self._session = httpx.AsyncClient(*self.args, **self.kwargs)
-            return self._session
 
 
 class DefaultNamespace(SimpleNamespace):

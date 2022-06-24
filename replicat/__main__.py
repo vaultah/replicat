@@ -26,7 +26,8 @@ def _instantiate_backend(backend_type, connection_string, **kwargs):
 
 async def _cmd_handler(args, unknown, error):
     settings = None
-    if args.action in {'init', 'benchmark', 'add-key'}:
+
+    if unknown and args.action in {'init', 'benchmark', 'add-key'}:
         # Assume that the unknown arguments are custom settings. Try to re-parse them
         flat_settings, unknown = utils.parse_cli_settings(unknown)
         if not unknown:
