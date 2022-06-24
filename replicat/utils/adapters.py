@@ -5,14 +5,11 @@ from collections.abc import ByteString, Iterator
 from typing import Optional
 
 import cryptography.exceptions
-from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives.ciphers import aead
 from cryptography.hazmat.primitives.kdf.scrypt import Scrypt
 
 import _replicat_adapters
 from .. import exceptions
-
-_backend = default_backend()
 
 
 class CipherAdapter(ABC):
@@ -143,13 +140,14 @@ class scrypt(KDFAdapter):
         if context is None:
             context = b''
 
+        # If we used hashlib's scrypt, we'd need to take care of maxmem limits
+        # ourselves, plus they are small
         instance = Scrypt(
             n=self.n,
             r=self.r,
             p=self.p,
             length=self.length,
             salt=params + context,
-            backend=_backend,
         )
         return instance.derive(pwd)
 

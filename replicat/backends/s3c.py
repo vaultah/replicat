@@ -108,10 +108,6 @@ _empty_payload_digest = _get_data_hexdigest(b'')
 
 
 class S3Compatible(Backend, short_name='S3C'):
-    client = utils.async_client(
-        timeout=None, event_hooks={'response': [_raise_for_status_hook]}
-    )
-
     def __init__(
         self, connection_string, *, key_id, access_key, region, host, scheme='https'
     ):
@@ -122,6 +118,9 @@ class S3Compatible(Backend, short_name='S3C'):
         self.host = host
         self.scheme = scheme
         self.url = f'{scheme}://' + self.host
+        self._client = httpx.AsyncClient(
+            timeout=None, event_hooks={'response': [_raise_for_status_hook]}
+        )
 
     async def _make_request(
         self,
@@ -182,7 +181,7 @@ class S3Compatible(Backend, short_name='S3C'):
         headers['x-amz-content-sha256'] = payload_digest
         headers['x-amz-date'] = x_amz_date
         headers['authorization'] = authorization_header
-        return await self.client.request(method, url, headers=headers, **kwargs)
+        return await self._client.request(method, url, headers=headers, **kwargs)
 
     @backoff_on_httperror
     async def exists(self, name):
@@ -287,7 +286,7 @@ class S3Compatible(Backend, short_name='S3C'):
         )
 
     async def close(self):
-        await self.client.aclose()
+        await self._client.aclose()
 
 
 Client = S3Compatible

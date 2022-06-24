@@ -68,19 +68,18 @@ backoff_reauth = _backoff_decorator(on_backoff=[_wait_and_trigger_reauth])
 
 
 class B2(Backend):
-    client = utils.async_client(
-        timeout=None, event_hooks={'response': [_raise_for_status_hook]}
-    )
-
     def __init__(self, connection_string, *, key_id, application_key):
         # Name or id
         self._bucket_identifier = connection_string
+        self._client = httpx.AsyncClient(
+            timeout=None, event_hooks={'response': [_raise_for_status_hook]}
+        )
         self.key_id, self.application_key = key_id, application_key
 
     @backoff_no_reauth
     async def authenticate(self):
         logger.debug('Requesting authorization')
-        response = await self.client.get(
+        response = await self._client.get(
             'https://api.backblazeb2.com/b2api/v2/b2_authorize_account',
             auth=(self.key_id, self.application_key),
         )
@@ -108,7 +107,7 @@ class B2(Backend):
         try:
             return self._bucket
         except AttributeError:
-            response = await self.client.post(
+            response = await self._client.post(
                 f'{self._auth.apiUrl}/b2api/v2/b2_list_buckets',
                 json={'accountId': self._auth.accountId},
                 headers={'authorization': self._auth.authorizationToken},
@@ -134,7 +133,7 @@ class B2(Backend):
         url = f'{self._auth.downloadUrl}/file/{bucket.name}/{name}'
         headers = {'authorization': self._auth.authorizationToken}
         try:
-            await self.client.head(url, headers=headers)
+            await self._client.head(url, headers=headers)
         except httpx.HTTPStatusError as e:
             if e.response.status_code == httpx.codes.NOT_FOUND:
                 return False
@@ -150,7 +149,7 @@ class B2(Backend):
         params = {'bucketId': bucket.id}
         headers = {'authorization': self._auth.authorizationToken}
 
-        response = await self.client.post(url, json=params, headers=headers)
+        response = await self._client.post(url, json=params, headers=headers)
         decoded = response.json()
         return decoded['uploadUrl'], decoded['authorizationToken']
 
@@ -165,7 +164,7 @@ class B2(Backend):
             'content-length': str(len(data)),
             'x-bz-content-sha1': 'do_not_verify',  # TODO
         }
-        await self.client.post(upload_url, headers=upload_headers, content=data)
+        await self._client.post(upload_url, headers=upload_headers, content=data)
 
     @utils.requires_auth
     @backoff_reauth
@@ -179,7 +178,7 @@ class B2(Backend):
             'x-bz-content-sha1': 'do_not_verify',  # TODO
         }
         try:
-            await self.client.post(
+            await self._client.post(
                 upload_url, headers=upload_headers, content=utils.aiter_chunks(stream)
             )
         except:
@@ -192,7 +191,7 @@ class B2(Backend):
         bucket = await self._get_bucket()
         url = f'{self._auth.downloadUrl}/file/{bucket.name}/{name}'
         headers = {'authorization': self._auth.authorizationToken}
-        response = await self.client.get(url, headers=headers)
+        response = await self._client.get(url, headers=headers)
         return await response.aread()
 
     @utils.requires_auth
@@ -208,7 +207,7 @@ class B2(Backend):
             params['startFileName'] = start_file_name
 
         headers = {'authorization': self._auth.authorizationToken}
-        return await self.client.post(
+        return await self._client.post(
             f'{self._auth.apiUrl}/b2api/v2/b2_list_file_names',
             json=params,
             headers=headers,
@@ -237,7 +236,7 @@ class B2(Backend):
         bucket = await self._get_bucket()
         params = {'bucketId': bucket.id, 'fileName': name}
         headers = {'authorization': self._auth.authorizationToken}
-        await self.client.post(url, json=params, headers=headers)
+        await self._client.post(url, json=params, headers=headers)
 
     async def close(self):
         with suppress(AttributeError):
@@ -246,7 +245,7 @@ class B2(Backend):
         with suppress(AttributeError):
             del self._bucket
 
-        await self.client.aclose()
+        await self._client.aclose()
 
 
 Client = B2
