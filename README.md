@@ -186,7 +186,6 @@ Encrypted repositories require a key and a matching password for every operation
  password in a file via the `-P`/`--password-file` argument, or as an environment variable
  `REPLICAT_PASSWORD`.
 
-
 ## `init` examples
 
 ```bash
@@ -336,6 +335,12 @@ $ replicat clean -r some/directory -P path/to/password/file -K path/to/key/file
                         /absolute/file
 # Uploads files that do not yet exist in the repository (only checks the file names)
 $ replicat upload -r some:repository --skip-existing some/file some/directory
+```
+
+## Check version
+
+```bash
+replicat --version
 ```
 
 # Backends
