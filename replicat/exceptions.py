@@ -8,3 +8,7 @@ class DecryptionError(ReplicatError):
 
 class AuthRequired(ReplicatError):
     pass
+
+
+class Locked(ReplicatError):
+    pass

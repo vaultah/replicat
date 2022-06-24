@@ -151,15 +151,21 @@ There are several available subcommands:
  - `clean` -- performs garbage collection
  - `upload` -- uploads files to the backend (no chunking, no encryption, keeping original names)
 
-> ⚠️ **WARNING**: actions that read from or upload to the repository can safely be run
-> concurrently; however, there are presently no guards in place that would make it safe
-> for you to run destructive actions (`delete`, `clean`) concurrently with those actions
-> *unless* you use independent keys (see the explanation above). I do plan to implement them
-> soon-ish, but in the meantime **DO NOT** use shared keys (or, naturally, the same key)
-> to `snapshot` and `clean` at the same time, for example.
->
-> As far as the upcoming implementation of such guards, it'll be based on locks. I'm familiar
-> with the lock-free deduplication strategy (like in Duplicacy), but I don't like it much.
+It's always safe to read from and upload to a Replicat repository concurrently. In order to
+make it possible for you to run destructive actions (`delete`, `clean`) concurrently with
+uploads and reads, Replicat uses lock-based guards. Here's what you should know:
+
+ - locks are designed to protect the integrity of data in the case of concurrent operations
+ performed with shared keys (or, naturally, the same key), meaning that locks do not lock
+ the whole repository, unless the repository is unencrypted. If you're sure that you're
+ the sole user of the repository, or that no one is using the repository with the same
+ (or shared) key at the same time, then you can safely use the repository in exclusive mode
+
+ - Replicat will terminate if it detects a conflicting operation being performed with
+ the same (or shared) key. It may have to wait a few extra seconds to make sure all of the
+ locks are visible
+
+ - during shutdown Replicat will attempt to delete the locks it created
 
 There are several command line arguments that are common to all subcommands:
 
@@ -172,8 +178,10 @@ There are several command line arguments that are common to all subcommands:
  destinations). If the backend requires additional arguments, they will appear in the
  `--help` output. Refer to the section on backends for more detailed information.
 
+ - `-x`/`--exclusive` -- enables the exclusive mode (see above)
  - `-q`/`--hide-progress` -- suppresses progress indication for commands that support it
- - `-c`/`--concurrent` -- the number of concurrent connections to the backend
+ - `-c`/`--concurrent` -- the number of concurrent connections to the backend.
+ Normal lock operations don't respect this limit
  - `--cache-directory` -- specifies the directory to use for cache. `--no-cache` disables
  cache completely.
  - `-v`/`--verbose` -- specifies the logging verbosity. The default verbosity is `WARNING`,

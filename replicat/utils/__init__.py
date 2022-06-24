@@ -13,6 +13,7 @@ import re
 import threading
 import time
 import weakref
+from datetime import datetime, timezone
 from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
@@ -96,6 +97,12 @@ repository_parser.add_argument(
 )
 
 common_options_parser = argparse.ArgumentParser(add_help=False)
+common_options_parser.add_argument(
+    '-x',
+    '--exclusive',
+    action='store_true',
+    help='Assume exclusive access to the respository',
+)
 common_options_parser.add_argument(
     '-q',
     '--hide-progress',
@@ -571,3 +578,9 @@ async def as_completed(tasks):
 
     for _ in tasks:
         yield await queue.get()
+
+
+def utc_timestamp():
+    epoch = datetime(1970, 1, 1, tzinfo=timezone.utc)
+    now = datetime.now(timezone.utc)
+    return int((now - epoch).total_seconds())

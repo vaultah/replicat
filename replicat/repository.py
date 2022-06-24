@@ -1,5 +1,8 @@
+from __future__ import annotations
+
 import asyncio
 import collections.abc
+import contextvars
 import dataclasses
 import inspect
 import io
@@ -13,12 +16,13 @@ import re
 import sys
 import threading
 import time
-from collections import namedtuple
+from collections import OrderedDict, namedtuple
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from datetime import datetime
 from decimal import Decimal
-from functools import cached_property
+from enum import Enum
+from functools import cached_property, wraps
 from pathlib import Path
 from random import Random
 from typing import Any, Dict, Optional
@@ -91,10 +95,83 @@ class RepositoryProps:
         return self.chunker(it, params=params)
 
 
+class LockTypes(str, Enum):
+    create_read = 'cr'
+    delete = 'd'
+
+
+class RepositoryLock:
+    """An instance of this class can be used as a decorator for methods of Repository.
+    It manages the lock worker for the specified lock type"""
+
+    _locked_at = contextvars.ContextVar('locked_at')
+    _repository = contextvars.ContextVar('repository')
+
+    @property
+    def locked_at(self):
+        try:
+            return self._locked_at.get()
+        except LookupError as e:
+            raise RuntimeError(
+                'lock can only be managed from inside decorated methods'
+            ) from e
+
+    @locked_at.setter
+    def locked_at(self, value):
+        self._locked_at.set(value)
+
+    @property
+    def repository(self):
+        try:
+            return self._repository.get()
+        except LookupError as e:
+            raise RuntimeError(
+                'lock can only be managed from inside decorated methods'
+            ) from e
+
+    @repository.setter
+    def repository(self, value):
+        self._repository.set(value)
+
+    def __call__(self, lock_type: LockTypes):
+        def _decorator(func):
+            @wraps(func)
+            async def _wrapper(repository: Repository, *args, **kwargs):
+                self.repository = repository
+                self.locked_at = started_at = utils.utc_timestamp()
+
+                worker = asyncio.create_task(
+                    repository.lock_worker(started_at, lock_type)
+                )
+                task = asyncio.create_task(func(repository, *args, **kwargs))
+                task.add_done_callback(lambda _: worker.cancel())
+
+                await asyncio.wait([worker, task], return_when=asyncio.FIRST_EXCEPTION)
+                try:
+                    await worker
+                except asyncio.CancelledError:
+                    pass
+
+                return await task
+
+            return _wrapper
+
+        return _decorator
+
+    async def wait(self, wait_time, lock_type: LockTypes):
+        await self.repository.wait_for_lock(
+            wait_time + self.locked_at - utils.utc_timestamp(), lock_type
+        )
+
+
+lock = RepositoryLock()
+
+
 class Repository:
     # NOTE: trailing slashes
     CHUNK_PREFIX = 'data/'
     SNAPSHOT_PREFIX = 'snapshots/'
+    LOCK_PREFIX = 'locks/'
     # These correspond to the names of adapters
     DEFAULT_CHUNKER_NAME = 'gclmulchunker'
     DEFAULT_CIPHER_NAME = 'aes_gcm'
@@ -105,6 +182,8 @@ class Repository:
     DEFAULT_SHARED_KDF_NAME = 'blake2b'
     EMPTY_TABLE_VALUE = '--'
     DEFAULT_CACHE_DIRECTORY = utils.fs.DEFAULT_CACHE_DIRECTORY
+    LOCK_TTL = 15 * 60
+    LOCK_TTP = 15
 
     def __init__(
         self,
@@ -113,10 +192,13 @@ class Repository:
         concurrent,
         quiet=True,
         cache_directory=DEFAULT_CACHE_DIRECTORY,
+        exclusive=False,
     ):
-        self._concurrent = concurrent
-        self._quiet = quiet
-        self._cache_directory = cache_directory
+        self.backend = backend
+        self.concurrent = concurrent
+        self.quiet = quiet
+        self.cache_directory = cache_directory
+        self.exclusive = exclusive
 
         self._slots = asyncio.Queue(maxsize=concurrent)
         # We need actual integers for TQDM slot management in CLI, but this queue
@@ -125,18 +207,16 @@ class Repository:
         for slot in range(2, concurrent + 2):
             self._slots.put_nowait(slot)
 
-        self.backend = backend
-
     def display_status(self, message):
         print(ef.bold + message + ef.rs, file=sys.stderr)
 
     def _get_cached(self, path):
-        assert self._cache_directory is not None
-        return Path(self._cache_directory, path).read_bytes()
+        assert self.cache_directory is not None
+        return Path(self.cache_directory, path).read_bytes()
 
     def _store_cached(self, path, data):
-        assert self._cache_directory is not None
-        file = Path(self._cache_directory, path)
+        assert self.cache_directory is not None
+        file = Path(self.cache_directory, path)
         file.parent.mkdir(parents=True, exist_ok=True)
         file.write_bytes(data)
 
@@ -147,7 +227,7 @@ class Repository:
     @cached_property
     def executor(self):
         """Executor for non-async methods of the backend instance"""
-        return ThreadPoolExecutor(max_workers=self._concurrent)
+        return ThreadPoolExecutor(max_workers=self.concurrent)
 
     def _awrap(self, func, *args, **kwargs):
         if inspect.iscoroutinefunction(func) or inspect.isasyncgenfunction(func):
@@ -191,7 +271,7 @@ class Repository:
 
     async def _upload_data(self, location, data):
         async with self._acquire_slot():
-            logger.info('Uploading binary data to %s', location)
+            logger.info('Uploading binary data as %s', location)
             await self._awrap(self.backend.upload, location, data)
 
     async def _delete(self, location):
@@ -278,6 +358,113 @@ class Repository:
     def _snapshot_digest_to_location_parts(self, digest, /):
         digest_mac = self.props.mac(digest) if self.props.encrypted else digest
         return LocationParts(name=digest.hex(), tag=digest_mac.hex())
+
+    def get_lock_location(self, *, name, tag):
+        """Build POSIX-style storage path for the lock using its name and tag.
+        The tag is included for ownership verification. The part after the last slash
+        (actual filename on the filesystem) must be under 255 bytes for compatibility
+        with most filesystems. You can assume that both name and tag are hex-strings
+        each no longer than 128 characters. The returned path must start with
+        LOCK_PREFIX and is allowed to contain forward slashes, characters from name
+        and tag, and hyphens."""
+        return posixpath.join(self.LOCK_PREFIX, f'{name}-{tag}')
+
+    def parse_lock_location(self, location, /):
+        """Parse the storage path for the lock, extract its name and tag"""
+        if not location.startswith(self.LOCK_PREFIX):
+            raise ValueError('Not a lock location')
+
+        head, _, tag = location.rpartition('-')
+        return LocationParts(name=head.rpartition('/')[2], tag=tag)
+
+    def get_lock_frame(self, ts):
+        """Return the lock frame range for this timestamp"""
+        since_start = ts % self.LOCK_TTL
+        current_start = ts - since_start
+        next_start = current_start + self.LOCK_TTL
+        return current_start, next_start
+
+    def _lock_ts_to_location_parts(self, ts, lock_type):
+        ts_hex = ts.to_bytes(ts.bit_length() // 8 + 1, 'little').hex()
+        name = f'{lock_type}-{ts_hex}'
+
+        if self.props.encrypted:
+            tag = self.props.mac(name.encode('ascii')).hex()
+        else:
+            tag = 'none'
+
+        return LocationParts(name=name, tag=tag)
+
+    def _lock_ts_to_location(self, ts, lock_type):
+        name, tag = self._lock_ts_to_location_parts(ts, lock_type)
+        return self.get_lock_location(name=name, tag=tag)
+
+    async def _upload_lock(self, path):
+        logger.info('Uploading lock %s', path)
+        unknown = self.backend.upload(path, b'')
+        if inspect.isawaitable(unknown):
+            await unknown
+
+    async def _check_lock(self, path):
+        logger.info('Checking lock at %s', path)
+        unknown = self.backend.exists(path)
+        if inspect.isawaitable(unknown):
+            return await unknown
+        else:
+            return unknown
+
+    async def _delete_lock(self, path):
+        logger.info('Deleting lock %s', path)
+        unknown = self.backend.delete(path)
+        if inspect.isawaitable(unknown):
+            await unknown
+
+    def lock_frames(self, ts):
+        frame_start, _ = self.get_lock_frame(ts)
+        yield frame_start
+
+        while True:
+            ts = utils.utc_timestamp()
+            frame_start, frame_end = self.get_lock_frame(ts)
+            yield frame_end if frame_end - ts <= self.LOCK_TTP else frame_start
+
+    async def lock_worker(self, ts, lock_type, delay=1):
+        """Create a lock of this type for every lock frame indefinitely, starting
+        from the given timestamp. By the time it terminates (e.g. if it's canceled),
+        all of the locks must be deleted"""
+        if self.exclusive:
+            return
+
+        created = OrderedDict()
+        try:
+            for frame_start in self.lock_frames(ts):
+                if frame_start not in created:
+                    location = self._lock_ts_to_location(frame_start, lock_type)
+                    await self._upload_lock(location)
+                    created[frame_start] = location
+
+                    if len(created) > 2:
+                        _, to_delete = created.popitem(last=False)
+                        await self._delete_lock(to_delete)
+
+                await asyncio.sleep(delay)
+        finally:
+            logger.info('Running lock cleanup')
+            await asyncio.gather(*map(self._delete_lock, created.values()))
+
+    async def wait_for_lock(self, wait_time, lock_type):
+        """Wait this many seconds, check if the lock of the given type exists,
+        raise exception if that's the case"""
+        if self.exclusive:
+            return
+
+        logger.info('Waiting for %s lock for %d seconds', lock_type, wait_time)
+        await asyncio.sleep(wait_time)
+
+        frame_start, _ = self.get_lock_frame(utils.utc_timestamp())
+        location = self._lock_ts_to_location(frame_start, lock_type)
+        if await self._check_lock(location):
+            raise exceptions.Locked('Repository is locked by another operation')
 
     def read_metadata(self, path, /):
         # TODO: Cache stat result?
@@ -490,6 +677,12 @@ class Repository:
                     json.dumps(key, indent=4, default=self.default_serialization_hook)
                 )
         else:
+            if password is not None or key_output_path is not None:
+                raise exceptions.ReplicatError(
+                    'Password and key output path can only be provided to initialise '
+                    'encrypted repositories'
+                )
+
             key = None
 
         self.display_status('Uploading config')
@@ -520,6 +713,10 @@ class Repository:
             props = dataclasses.replace(
                 props,
                 **self._instantiate_key(key, password=password, cipher=props.cipher),
+            )
+        elif password is not None or key is not None:
+            raise exceptions.ReplicatError(
+                'Cannot provide password or key to unlock unencrypted repositories'
             )
 
         self.props = props
@@ -603,7 +800,7 @@ class Repository:
 
         async def _download_snapshot(path, digest):
             contents = empty
-            if self._cache_directory is not None:
+            if self.cache_directory is not None:
                 try:
                     contents = self._get_cached(path)
                 except FileNotFoundError:
@@ -615,7 +812,7 @@ class Repository:
                 if self.props.hash_digest(contents) != digest:
                     raise exceptions.ReplicatError(f'Snapshot at {path!r} is corrupted')
 
-                if self._cache_directory is not None:
+                if self.cache_directory is not None:
                     logger.info('Caching %s', path)
                     self._store_cached(path, contents)
 
@@ -817,6 +1014,7 @@ class Repository:
     def _flatten_paths(self, paths):
         return list(utils.fs.flatten_paths(path.resolve(strict=True) for path in paths))
 
+    @lock(LockTypes.create_read)
     async def snapshot(self, *, paths, note=None, rate_limit=None):
         self.display_status('Collecting files')
         files = self._flatten_paths(paths)
@@ -843,7 +1041,7 @@ class Repository:
             unit_scale=True,
             total=None,
             position=0,
-            disable=self._quiet,
+            disable=self.quiet,
             leave=True,
         )
         finished_tracker = tqdm(
@@ -851,11 +1049,11 @@ class Repository:
             unit='',
             total=len(files),
             position=1,
-            disable=self._quiet,
+            disable=self.quiet,
             leave=True,
         )
         loop = asyncio.get_running_loop()
-        chunk_queue = queue.Queue(maxsize=self._concurrent * 10)
+        chunk_queue = queue.Queue(maxsize=self.concurrent * 10)
         abort = threading.Event()
 
         if rate_limit is not None:
@@ -1002,7 +1200,7 @@ class Repository:
                             desc=f'Chunk #{chunk.counter:06}',
                             total=length,
                             position=slot,
-                            disable=self._quiet,
+                            disable=self.quiet,
                             rate_limiter=rate_limiter,
                         )
                         with stream, iowrapper:
@@ -1021,7 +1219,10 @@ class Repository:
         )
         with finished_tracker, bytes_tracker:
             try:
-                await asyncio.gather(*(_worker() for _ in range(self._concurrent)))
+                await asyncio.gather(
+                    lock.wait(self.LOCK_TTP, LockTypes.delete),
+                    *(_worker() for _ in range(self.concurrent)),
+                )
             except:
                 abort.set()
                 raise
@@ -1103,7 +1304,7 @@ class Repository:
 
         chunks_references = {}
         executor = ThreadPoolExecutor(
-            max_workers=self._concurrent * 5, thread_name_prefix='file-writer'
+            max_workers=self.concurrent * 5, thread_name_prefix='file-writer'
         )
         glock = threading.Lock()
         flocks = {}
@@ -1227,16 +1428,16 @@ class Repository:
             unit_scale=True,
             total=total_bytes,
             position=0,
-            disable=self._quiet,
+            disable=self.quiet,
             leave=True,
         )
         with bytes_tracker:
-            await asyncio.gather(*(_worker() for _ in range(self._concurrent)))
+            await asyncio.gather(*(_worker() for _ in range(self.concurrent)))
 
         return utils.DefaultNamespace(files=list(seen_files))
 
+    @lock(LockTypes.delete)
     async def delete_snapshots(self, snapshots):
-        # TODO: locking
         self.display_status('Loading snapshots')
         to_delete = set()
         to_keep = set()
@@ -1264,12 +1465,14 @@ class Repository:
 
         to_delete.difference_update(to_keep)
 
+        await lock.wait(self.LOCK_TTP, LockTypes.create_read)
+
         finished_snapshots_tracker = tqdm(
             desc='Snapshots deleted',
             unit='',
             total=len(snapshots_locations),
             position=0,
-            disable=self._quiet,
+            disable=self.quiet,
             leave=True,
         )
 
@@ -1285,7 +1488,7 @@ class Repository:
             unit='',
             total=len(to_delete),
             position=0,
-            disable=self._quiet,
+            disable=self.quiet,
             leave=True,
         )
 
@@ -1297,8 +1500,8 @@ class Repository:
         with finished_chunks_tracker:
             await asyncio.gather(*map(_delete_chunk, to_delete))
 
-    async def clean(self):
-        # TODO: locking
+    @lock(LockTypes.delete)
+    async def delete_unreferenced_chunks(self):
         self.display_status('Loading snapshots')
         referenced_digests = {
             y async for _, x in self._load_snapshots() for y in x['chunks']
@@ -1324,14 +1527,17 @@ class Repository:
             to_delete.add(location)
 
         if not to_delete:
+            print('No unreferenced chunks found')
             return
+
+        await lock.wait(self.LOCK_TTP, LockTypes.create_read)
 
         finished_tracker = tqdm(
             desc='Unreferenced chunks deleted',
             unit='',
             total=len(to_delete),
             position=0,
-            disable=self._quiet,
+            disable=self.quiet,
             leave=True,
         )
 
@@ -1342,8 +1548,55 @@ class Repository:
         with finished_tracker:
             await asyncio.gather(*map(_delete_chunk, to_delete))
 
-        self.display_status('Running post-deletion cleanup')
-        await self._clean()
+        return to_delete
+
+    async def delete_stale_locks(self):
+        self.display_status('Checking for stale locks')
+        to_delete = []
+
+        async for location in self._aiter(self.backend.list_files, self.LOCK_PREFIX):
+            name, tag = self.parse_lock_location(location)
+            if self.props.encrypted:
+                logger.info('Validating tag for %s', location)
+                if self.props.mac(name.encode('ascii')) != bytes.fromhex(tag):
+                    logger.info('Tag for %s did not match, skipping', location)
+                    continue
+
+            encoded_lock_ts = name.rpartition('-')[2]
+            lock_ts = int.from_bytes(bytes.fromhex(encoded_lock_ts), 'little')
+            if utils.utc_timestamp() - lock_ts > self.LOCK_TTL * 2:
+                to_delete.append(location)
+
+        if not to_delete:
+            print('No stale locks found')
+            return
+
+        finished_tracker = tqdm(
+            desc='Stale locks deleted',
+            unit='',
+            total=len(to_delete),
+            position=0,
+            disable=self.quiet,
+            leave=True,
+        )
+
+        async def _delete_lock(location):
+            await self._delete(location)
+            finished_tracker.update()
+
+        with finished_tracker:
+            await asyncio.gather(*map(_delete_lock, to_delete))
+
+        return to_delete
+
+    async def clean(self):
+        deleted = any(
+            [await self.delete_unreferenced_chunks(), await self.delete_stale_locks()]
+        )
+
+        if deleted:
+            self.display_status('Running post-deletion cleanup')
+            await self._clean()
 
     @utils.disable_gc
     def _benchmark_chunker(self, adapter, number=10, size=512_000_000):
@@ -1401,7 +1654,7 @@ class Repository:
             unit_scale=True,
             total=None,
             position=0,
-            disable=self._quiet,
+            disable=self.quiet,
             leave=True,
         )
         finished_tracker = tqdm(
@@ -1409,7 +1662,7 @@ class Repository:
             unit='',
             total=len(files),
             position=1,
-            disable=self._quiet,
+            disable=self.quiet,
             leave=True,
         )
         base_directory = Path.cwd()
@@ -1436,7 +1689,7 @@ class Repository:
                         desc=name,
                         total=length,
                         position=slot,
-                        disable=self._quiet,
+                        disable=self.quiet,
                         rate_limiter=rate_limiter,
                     )
                     with stream, iowrapper:

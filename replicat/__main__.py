@@ -43,6 +43,7 @@ async def _cmd_handler(args, unknown, error):
         concurrent=args.concurrent,
         quiet=args.quiet,
         cache_directory=args.cache_directory,
+        exclusive=args.exclusive,
     )
 
     if args.action == 'init':
