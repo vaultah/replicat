@@ -654,13 +654,33 @@ class TestRestore:
         second_file.parent.mkdir(exist_ok=True, parents=True)
         second_file.write_bytes(second_data)
 
-        snapshot_params = await local_repo.snapshot(paths=[first_file, second_file])
-        result = await local_repo.restore(
-            snapshot_regex=snapshot_params.name, path=tmp_path
-        )
+        snapshot = await local_repo.snapshot(paths=[first_file, second_file])
+
+        with patch.object(local_repo, 'restore_metadata') as restore_metadata_mock:
+            result = await local_repo.restore(
+                snapshot_regex=snapshot.name, path=tmp_path
+            )
+
         assert set(result.files) == {str(first_file), str(second_file)}
-        assert tmp_path.joinpath(*first_file.parts[1:]).read_bytes() == first_data
-        assert tmp_path.joinpath(*second_file.parts[1:]).read_bytes() == second_data
+        assert restore_metadata_mock.call_count == 2
+
+        first_restore_path = tmp_path.joinpath(*first_file.parts[1:])
+        assert first_restore_path.read_bytes() == first_data
+        first_metadata = next(
+            x['metadata']
+            for x in snapshot.data['files']
+            if x['path'].endswith(first_file.name)
+        )
+        restore_metadata_mock.assert_any_call(first_restore_path, first_metadata)
+
+        second_restore_path = tmp_path.joinpath(*second_file.parts[1:])
+        assert second_restore_path.read_bytes() == second_data
+        second_metadata = next(
+            x['metadata']
+            for x in snapshot.data['files']
+            if x['path'].endswith(second_file.name)
+        )
+        restore_metadata_mock.assert_any_call(second_restore_path, second_metadata)
 
     @pytest.mark.asyncio
     async def test_unencrypted_data(self, local_repo, tmp_path):
@@ -684,11 +704,31 @@ class TestRestore:
         second_file.parent.mkdir(exist_ok=True, parents=True)
         second_file.write_bytes(second_data)
 
-        await local_repo.snapshot(paths=[first_file, second_file])
-        result = await local_repo.restore(path=tmp_path)
+        snapshot = await local_repo.snapshot(paths=[first_file, second_file])
+
+        with patch.object(local_repo, 'restore_metadata') as restore_metadata_mock:
+            result = await local_repo.restore(path=tmp_path)
+
         assert set(result.files) == {str(first_file), str(second_file)}
-        assert tmp_path.joinpath(*first_file.parts[1:]).read_bytes() == first_data
-        assert tmp_path.joinpath(*second_file.parts[1:]).read_bytes() == second_data
+        assert restore_metadata_mock.call_count == 2
+
+        first_restore_path = tmp_path.joinpath(*first_file.parts[1:])
+        assert first_restore_path.read_bytes() == first_data
+        first_metadata = next(
+            x['metadata']
+            for x in snapshot.data['files']
+            if x['path'].endswith(first_file.name)
+        )
+        restore_metadata_mock.assert_any_call(first_restore_path, first_metadata)
+
+        second_restore_path = tmp_path.joinpath(*second_file.parts[1:])
+        assert second_restore_path.read_bytes() == second_data
+        second_metadata = next(
+            x['metadata']
+            for x in snapshot.data['files']
+            if x['path'].endswith(second_file.name)
+        )
+        restore_metadata_mock.assert_any_call(second_restore_path, second_metadata)
 
     @pytest.mark.asyncio
     async def test_defaults_to_latest_file_version(self, local_repo, tmp_path):
@@ -708,16 +748,23 @@ class TestRestore:
 
         second_version = rnd.randbytes(4_096)
         file.write_bytes(second_version)
-        await local_repo.snapshot(paths=[file])
+        second_snapshot = await local_repo.snapshot(paths=[file])
 
-        result = await local_repo.restore(
-            files_regex=re.escape(str(file)), path=tmp_path
-        )
+        with patch.object(local_repo, 'restore_metadata') as restore_metadata_mock:
+            result = await local_repo.restore(
+                files_regex=re.escape(str(file)), path=tmp_path
+            )
+
         assert result.files == [str(file)]
-        assert tmp_path.joinpath(*file.parts[1:]).read_bytes() == second_version
+
+        restore_path = tmp_path.joinpath(*file.parts[1:])
+        assert restore_path.read_bytes() == second_version
+        restore_metadata_mock.assert_called_once_with(
+            restore_path, second_snapshot.data['files'][0]['metadata']
+        )
 
     @pytest.mark.asyncio
-    async def test_snapshot_version(self, local_repo, tmp_path):
+    async def test_specific_snapshot_version(self, local_repo, tmp_path):
         await local_repo.init(
             settings={
                 'encryption': None,
@@ -736,11 +783,18 @@ class TestRestore:
         file.write_bytes(rnd.randbytes(4_096))
         await local_repo.snapshot(paths=[file])
 
-        result = await local_repo.restore(
-            snapshot_regex=first_snapshot.name, path=tmp_path
-        )
+        with patch.object(local_repo, 'restore_metadata') as restore_metadata_mock:
+            result = await local_repo.restore(
+                snapshot_regex=first_snapshot.name, path=tmp_path
+            )
+
         assert result.files == [str(file)]
-        assert tmp_path.joinpath(*file.parts[1:]).read_bytes() == first_version
+
+        restore_path = tmp_path.joinpath(*file.parts[1:])
+        assert restore_path.read_bytes() == first_version
+        restore_metadata_mock.assert_called_once_with(
+            restore_path, first_snapshot.data['files'][0]['metadata']
+        )
 
 
 class TestDeleteSnapshots:
