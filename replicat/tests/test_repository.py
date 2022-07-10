@@ -38,6 +38,63 @@ class TestHelperMethods:
         assert name == 'GHIJKLMNOPQR'
         assert tag == '0123456789ABCDEF'
 
+    def test_read_metadata(self, local_repo, tmpdir):
+        file = tmpdir / 'some_file'
+        with file.open('wb') as f:
+            f.write(b'12345')
+
+        stat_result = os.stat(file)
+        metadata = local_repo.read_metadata(file)
+        assert metadata == {
+            'st_mode': stat_result.st_mode,
+            'st_uid': stat_result.st_uid,
+            'st_gid': stat_result.st_gid,
+            'st_size': stat_result.st_size,
+            'st_atime_ns': stat_result.st_atime_ns,
+            'st_mtime_ns': stat_result.st_mtime_ns,
+            'st_ctime_ns': stat_result.st_ctime_ns,
+        }
+
+    def test_restore_metadata_ns_timestamps(self, local_repo, tmpdir):
+        file = tmpdir / 'some_file'
+        with file.open('wb'):
+            pass
+
+        stat_result = os.stat(file)
+        metadata = {
+            'st_mode': 12345,
+            'st_uid': 67890,
+            'st_gid': 54321,
+            'st_size': 98765,
+            'st_atime_ns': 123,
+            'st_mtime_ns': 321,
+            'st_ctime_ns': 987,
+        }
+        local_repo.restore_metadata(file, metadata)
+        stat_result = os.stat(file)
+        assert stat_result.st_atime_ns == 123
+        assert stat_result.st_mtime_ns == 321
+
+    def test_restore_metadata_plain_timestamps(self, local_repo, tmpdir):
+        file = tmpdir / 'some_file'
+        with file.open('wb'):
+            pass
+
+        stat_result = os.stat(file)
+        metadata = {
+            'st_mode': 12345,
+            'st_uid': 67890,
+            'st_gid': 54321,
+            'st_size': 98765,
+            'st_atime': 123,
+            'st_mtime': 321,
+            'st_ctime': 987,
+        }
+        local_repo.restore_metadata(file, metadata)
+        stat_result = os.stat(file)
+        assert stat_result.st_atime == 123
+        assert stat_result.st_mtime == 321
+
 
 class TestInit:
     @pytest.mark.asyncio
