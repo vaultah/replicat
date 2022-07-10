@@ -60,7 +60,6 @@ class TestHelperMethods:
         with file.open('wb'):
             pass
 
-        stat_result = os.stat(file)
         metadata = {
             'st_mode': 12345,
             'st_uid': 67890,
@@ -70,17 +69,18 @@ class TestHelperMethods:
             'st_mtime_ns': 321,
             'st_ctime_ns': 987,
         }
-        local_repo.restore_metadata(file, metadata)
-        stat_result = os.stat(file)
-        assert stat_result.st_atime_ns == 123
-        assert stat_result.st_mtime_ns == 321
+        # We don't know the timestamp resolution of this system and frankly we don't
+        # care. If os.utime gets called with correct arguments, it's enough
+        with patch.object(os, 'utime') as utime_mock:
+            local_repo.restore_metadata(file, metadata)
+
+        utime_mock.assert_called_once_with(file, ns=(123, 321))
 
     def test_restore_metadata_plain_timestamps(self, local_repo, tmpdir):
         file = tmpdir / 'some_file'
         with file.open('wb'):
             pass
 
-        stat_result = os.stat(file)
         metadata = {
             'st_mode': 12345,
             'st_uid': 67890,
@@ -90,10 +90,10 @@ class TestHelperMethods:
             'st_mtime': 321,
             'st_ctime': 987,
         }
-        local_repo.restore_metadata(file, metadata)
-        stat_result = os.stat(file)
-        assert stat_result.st_atime == 123
-        assert stat_result.st_mtime == 321
+        with patch.object(os, 'utime') as utime_mock:
+            local_repo.restore_metadata(file, metadata)
+
+        utime_mock.assert_called_once_with(file, times=(123, 321))
 
 
 class TestInit:
