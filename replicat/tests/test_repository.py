@@ -43,8 +43,10 @@ class TestHelperMethods:
         with file.open('wb') as f:
             f.write(b'12345')
 
-        stat_result = os.stat(file)
-        metadata = local_repo.read_metadata(file)
+        with patch.object(os, 'stat') as stat_mock:
+            metadata = local_repo.read_metadata(file)
+
+        stat_result = stat_mock.return_value
         assert metadata == {
             'st_mode': stat_result.st_mode,
             'st_uid': stat_result.st_uid,
