@@ -105,7 +105,7 @@ def main():
         args.repo[0], inherit_common=False, missing=_missing_backend_argument
     )
     main_parser = utils.make_main_parser(
-        utils.common_options_parser, backend_args_parser
+        utils.repository_parser, utils.common_options_parser, backend_args_parser
     )
     _, unknown = main_parser.parse_known_args(remaining_args, namespace=args)
 
