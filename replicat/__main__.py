@@ -71,13 +71,17 @@ async def _cmd_handler(args, unknown, error):
         await repository.unlock(password=args.password, key=args.key)
         if args.action == 'snapshot':
             await repository.snapshot(
-                paths=args.path, note=args.note, rate_limit=args.rate_limit
+                paths=args.path,
+                note=args.note,
+                rate_limit=args.rate_limit,
+                include_xattrs=args.xattrs,
             )
         elif args.action == 'restore':
             await repository.restore(
                 snapshot_regex=args.snapshot_regex,
                 files_regex=args.files_regex,
                 path=args.path,
+                with_xattrs=args.xattrs,
             )
         elif args.action == 'delete':
             await repository.delete_snapshots(args.snapshot)

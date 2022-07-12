@@ -201,6 +201,12 @@ def make_main_parser(*parent_parsers):
     snapshot_parser.add_argument(
         '--limit-rate', '-L', dest='rate_limit', type=human_to_bytes
     )
+    snapshot_parser.add_argument(
+        '--xattrs',
+        action='store_true',
+        help='Include extended file attributes in the snapshot '
+        '(if supported by the system)',
+    )
 
     restore_parser = subparsers.add_parser('restore', parents=parent_parsers)
     restore_parser.add_argument('path', nargs='?', type=Path)
@@ -208,6 +214,12 @@ def make_main_parser(*parent_parsers):
         '-S', '--snapshot-regex', help='Regex to filter snapshots'
     )
     restore_parser.add_argument('-F', '--files-regex', help='Regex to filter files')
+    restore_parser.add_argument(
+        '--xattrs',
+        action='store_true',
+        help='Restore extended file attributes from the snapshot '
+        '(if supported by the system)',
+    )
 
     delete_parser = subparsers.add_parser('delete', parents=parent_parsers)
     delete_parser.add_argument('snapshot', nargs='+')

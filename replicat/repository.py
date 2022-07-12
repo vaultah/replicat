@@ -279,10 +279,10 @@ class Repository:
         digest_mac = self.props.mac(digest) if self.props.encrypted else digest
         return LocationParts(name=digest.hex(), tag=digest_mac.hex())
 
-    def read_metadata(self, path, /):
+    def read_metadata(self, path, /, *, include_xattrs=False):
         # TODO: Cache stat result?
         stat_result = os.stat(path)
-        return {
+        metadata = {
             'st_mode': stat_result.st_mode,
             'st_uid': stat_result.st_uid,
             'st_gid': stat_result.st_gid,
@@ -291,8 +291,12 @@ class Repository:
             'st_mtime_ns': stat_result.st_mtime_ns,
             'st_ctime_ns': stat_result.st_ctime_ns,
         }
+        if include_xattrs and (xattrs := utils.fs.read_xattrs(path)):
+            metadata['xattrs'] = xattrs
 
-    def restore_metadata(self, path, metadata, /):
+        return metadata
+
+    def restore_metadata(self, path, metadata, /, *, with_xattrs=False):
         # NOTE: fall back to non-nanosecond timestamps for compatibility with snapshots
         # that were created by older replicat versions (pre-1.3)
         try:
@@ -301,6 +305,9 @@ class Repository:
             os.utime(path, times=(metadata['st_atime'], metadata['st_mtime']))
         else:
             os.utime(path, ns=ns)
+
+        if with_xattrs and (xattrs := metadata.get('xattrs')):
+            utils.fs.set_xattrs(path, xattrs)
 
     def _validate_settings(self, schema, obj):
         extra_keys = obj.keys() - schema.keys()
@@ -827,7 +834,9 @@ class Repository:
     def _flatten_paths(self, paths):
         return list(utils.fs.flatten_paths(path.resolve(strict=True) for path in paths))
 
-    async def snapshot(self, *, paths, note=None, rate_limit=None):
+    async def snapshot(
+        self, *, paths, note=None, rate_limit=None, include_xattrs=False
+    ):
         self.display_status('Collecting files')
         files = self._flatten_paths(paths)
         logger.info('Found %d files', len(files))
@@ -884,12 +893,13 @@ class Repository:
 
                 part_start = max(file_start - chunk.stream_start, 0)
                 part_end = min(file_end, chunk.stream_end) - chunk.stream_start
+                metadata = self.read_metadata(file, include_xattrs=include_xattrs)
 
                 if file not in snapshot_files:
                     snapshot_files[file] = {
                         'path': str(file.resolve()),
                         'chunks': [],
-                        'metadata': self.read_metadata(file),
+                        'metadata': metadata,
                     }
 
                 snapshot_files[file]['chunks'].append(
@@ -1093,7 +1103,9 @@ class Repository:
             data=snapshot_body['data'],
         )
 
-    async def restore(self, *, snapshot_regex=None, files_regex=None, path=None):
+    async def restore(
+        self, *, snapshot_regex=None, files_regex=None, path=None, with_xattrs=False
+    ):
         if path is None:
             path = Path()
 
@@ -1197,7 +1209,9 @@ class Repository:
                     if not digests:
                         logger.info('Finished writing file %s', file_path)
                         restore_path, metadata = files_metadata[file_path]
-                        self.restore_metadata(restore_path, metadata)
+                        self.restore_metadata(
+                            restore_path, metadata, with_xattrs=with_xattrs
+                        )
                         del files_metadata[file_path]
 
         self.display_status('Loading snapshots')
