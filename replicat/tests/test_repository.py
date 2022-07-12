@@ -772,8 +772,6 @@ class TestRestore:
         assert tmp_path.joinpath(*file.parts[1:]).read_bytes() == first_version
 
 
-
-
 class TestDeleteSnapshots:
     @pytest.mark.asyncio
     async def test_encrypted_referenced_independent_key(
