@@ -107,7 +107,12 @@ def main():
     main_parser = utils.make_main_parser(
         utils.repository_parser, utils.common_options_parser, backend_args_parser
     )
-    _, unknown = main_parser.parse_known_args(remaining_args, namespace=args)
+    # NOTE: this will parse the -r/--repository CLI argument AGAIN. In theory, we
+    # should need to only parse remaining_args, as the argparse documentation makes
+    # an interesting claim that "if the target namespace already has an attribute set,
+    # the action default [i.e. -r/--repository's default] will not over write it".
+    # This claim turned out to be false. BPO-45235
+    _, unknown = main_parser.parse_known_args(namespace=args)
 
     if args.verbose >= 2:
         log_level = logging.DEBUG
