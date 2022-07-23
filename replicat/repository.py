@@ -13,7 +13,7 @@ import re
 import sys
 import threading
 import time
-from collections import namedtuple
+from collections import defaultdict, namedtuple
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from datetime import datetime
@@ -287,10 +287,20 @@ class Repository:
             'st_uid': stat_result.st_uid,
             'st_gid': stat_result.st_gid,
             'st_size': stat_result.st_size,
-            'st_atime': stat_result.st_atime,
-            'st_mtime': stat_result.st_mtime,
-            'st_ctime': stat_result.st_ctime,
+            'st_atime_ns': stat_result.st_atime_ns,
+            'st_mtime_ns': stat_result.st_mtime_ns,
+            'st_ctime_ns': stat_result.st_ctime_ns,
         }
+
+    def restore_metadata(self, path, metadata, /):
+        # NOTE: fall back to non-nanosecond timestamps for compatibility with snapshots
+        # that were created by older replicat versions (pre-1.3)
+        try:
+            ns = (metadata['st_atime_ns'], metadata['st_mtime_ns'])
+        except KeyError:
+            os.utime(path, times=(metadata['st_atime'], metadata['st_mtime']))
+        else:
+            os.utime(path, ns=ns)
 
     def _validate_settings(self, schema, obj):
         extra_keys = obj.keys() - schema.keys()
@@ -1085,67 +1095,63 @@ class Repository:
 
     async def restore(self, *, snapshot_regex=None, files_regex=None, path=None):
         if path is None:
-            path = Path().resolve()
-        else:
-            path = path.resolve()
+            path = Path()
 
+        path = path.resolve()
         logger.info("Will restore files to %s", path)
 
-        self.display_status('Loading snapshots')
-        snapshots = []
-        async for _, snapshot_body in self._load_snapshots(
-            snapshot_regex=snapshot_regex
-        ):
-            if snapshot_body['data'] is not None:
-                snapshots.append(snapshot_body)
-
-        snapshots.sort(key=lambda x: x['data']['utc_timestamp'], reverse=True)
-
-        chunks_references = {}
+        loop = asyncio.get_running_loop()
         executor = ThreadPoolExecutor(
             max_workers=self._concurrent * 5, thread_name_prefix='file-writer'
         )
+
         glock = threading.Lock()
         flocks = {}
         flocks_refcounts = {}
-        loop = asyncio.get_running_loop()
-        seen_files = set()
+
+        chunks_references = defaultdict(list)
+        files_digests = {}
+        files_metadata = {}
+
         total_bytes = 0
 
         def _write_chunk_ref(ref, contents):
+            file_path, chunk_size, stream_start, start = ref
+            restore_to, _ = files_metadata[file_path]
+
             with glock:
                 try:
-                    flock = flocks[ref.path]
+                    flock = flocks[restore_to]
                 except KeyError:
-                    flock = flocks[ref.path] = threading.Lock()
-                    flocks_refcounts[ref.path] = 1
+                    flock = flocks[restore_to] = threading.Lock()
+                    flocks_refcounts[restore_to] = 1
                 else:
-                    flocks_refcounts[ref.path] += 1
+                    flocks_refcounts[restore_to] += 1
 
             with flock:
                 logger.info(
-                    'Writing to %s R=%d...%d',
-                    ref.path,
-                    ref.stream_start,
-                    ref.stream_end,
+                    'Writing %d bytes to %s starting from %d',
+                    chunk_size,
+                    restore_to,
+                    stream_start,
                 )
                 try:
-                    file = ref.path.open('r+b')
+                    file = restore_to.open('r+b')
                 except FileNotFoundError:
-                    ref.path.parent.mkdir(parents=True, exist_ok=True)
-                    file = ref.path.open('wb')
+                    restore_to.parent.mkdir(parents=True, exist_ok=True)
+                    file = restore_to.open('wb')
 
                 with file:
                     file_end = file.seek(0, io.SEEK_END)
-                    file.truncate(max(file_end, ref.stream_end))
-                    file.seek(ref.stream_start)
-                    file.write(contents[ref.start : ref.end])
+                    file.truncate(max(file_end, stream_start + chunk_size))
+                    file.seek(stream_start)
+                    file.write(contents[start : start + chunk_size])
 
             with glock:
-                bytes_tracker.update(ref.end - ref.start)
-                flocks_refcounts[ref.path] -= 1
-                if not flocks_refcounts[ref.path]:
-                    del flocks_refcounts[ref.path], flocks[ref.path]
+                bytes_tracker.update(chunk_size)
+                flocks_refcounts[restore_to] -= 1
+                if not flocks_refcounts[restore_to]:
+                    del flocks_refcounts[restore_to], flocks[restore_to]
 
         async def _worker():
             while True:
@@ -1183,12 +1189,28 @@ class Repository:
                     )
                 )
 
+                for ref in refs:
+                    file_path = ref[0]
+                    digests = files_digests[file_path]
+                    digests.remove(digest)
+
+                    if not digests:
+                        logger.info('Finished writing file %s', file_path)
+                        restore_path, metadata = files_metadata[file_path]
+                        self.restore_metadata(restore_path, metadata)
+                        del files_metadata[file_path]
+
+        self.display_status('Loading snapshots')
+        snapshots_gen = self._load_snapshots(snapshot_regex=snapshot_regex)
+        snapshots = [x async for _, x in snapshots_gen if x['data'] is not None]
+        snapshots.sort(key=lambda x: x['data']['utc_timestamp'], reverse=True)
+
         for snapshot_body in snapshots:
             snapshot_chunks = snapshot_body['chunks']
             snapshot_data = snapshot_body['data']
 
             for file_data in snapshot_data['files']:
-                if (file_path := file_data['path']) in seen_files:
+                if (file_path := file_data['path']) in files_digests:
                     continue
 
                 if files_regex is not None:
@@ -1199,27 +1221,29 @@ class Repository:
                         continue
 
                 restore_to = Path(path, *Path(file_path).parts[1:]).resolve()
+                files_metadata[file_path] = (restore_to, file_data['metadata'])
+                digests = files_digests[file_path] = set()
+
                 ordered_chunks = sorted(file_data['chunks'], key=lambda x: x['counter'])
                 chunk_position = 0
 
                 for chunk_data in ordered_chunks:
-                    chunk_range = chunk_data['range']
-                    chunk_size = chunk_range[1] - chunk_range[0]
                     digest = snapshot_chunks[chunk_data['index']]
-                    refs = chunks_references.setdefault(digest, [])
-                    refs.append(
-                        utils.DefaultNamespace(
-                            path=restore_to,
-                            stream_start=chunk_position,
-                            stream_end=chunk_position + chunk_size,
-                            start=chunk_range[0],
-                            end=chunk_range[1],
+                    digests.add(digest)
+
+                    start, end = chunk_data['range']
+                    chunk_size = end - start
+                    chunks_references[digest].append(
+                        (
+                            file_path,
+                            chunk_size,
+                            chunk_position,
+                            start,
                         )
                     )
                     chunk_position += chunk_size
 
                 total_bytes += chunk_position
-                seen_files.add(file_path)
 
         bytes_tracker = tqdm(
             desc='Data processed',
@@ -1233,7 +1257,7 @@ class Repository:
         with bytes_tracker:
             await asyncio.gather(*(_worker() for _ in range(self._concurrent)))
 
-        return utils.DefaultNamespace(files=list(seen_files))
+        return utils.DefaultNamespace(files=list(files_digests))
 
     async def delete_snapshots(self, snapshots):
         # TODO: locking

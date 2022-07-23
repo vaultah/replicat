@@ -38,6 +38,67 @@ class TestHelperMethods:
         assert name == 'GHIJKLMNOPQR'
         assert tag == '0123456789ABCDEF'
 
+    def test_read_metadata(self, local_repo, tmpdir):
+        file = tmpdir / 'some_file'
+        with file.open('wb'):
+            pass
+
+        with patch.object(os, 'stat') as stat_mock:
+            metadata = local_repo.read_metadata(file)
+
+        stat_result = stat_mock.return_value
+        expected_metadata = {
+            'st_mode': stat_result.st_mode,
+            'st_uid': stat_result.st_uid,
+            'st_gid': stat_result.st_gid,
+            'st_size': stat_result.st_size,
+            'st_atime_ns': stat_result.st_atime_ns,
+            'st_mtime_ns': stat_result.st_mtime_ns,
+            'st_ctime_ns': stat_result.st_ctime_ns,
+        }
+        assert metadata == expected_metadata
+
+    def test_restore_metadata(self, local_repo, tmpdir):
+        file = tmpdir / 'some_file'
+        with file.open('wb'):
+            pass
+
+        metadata = {
+            'st_mode': 12345,
+            'st_uid': 67890,
+            'st_gid': 54321,
+            'st_size': 98765,
+            'st_atime_ns': 123,
+            'st_mtime_ns': 321,
+            'st_ctime_ns': 987,
+        }
+
+        # We don't know the timestamp resolution of this system and frankly we don't
+        # care. If os.utime gets called with correct arguments, it's enough
+        with patch.object(os, 'utime') as utime_mock:
+            local_repo.restore_metadata(file, metadata)
+
+        utime_mock.assert_called_once_with(file, ns=(123, 321))
+
+    def test_restore_metadata_legacy_timestamps(self, local_repo, tmpdir):
+        file = tmpdir / 'some_file'
+        with file.open('wb'):
+            pass
+
+        metadata = {
+            'st_mode': 12345,
+            'st_uid': 67890,
+            'st_gid': 54321,
+            'st_size': 98765,
+            'st_atime': 123,
+            'st_mtime': 321,
+            'st_ctime': 987,
+        }
+        with patch.object(os, 'utime') as utime_mock:
+            local_repo.restore_metadata(file, metadata)
+
+        utime_mock.assert_called_once_with(file, times=(123, 321))
+
 
 class TestInit:
     @pytest.mark.asyncio
@@ -595,10 +656,9 @@ class TestRestore:
         second_file.parent.mkdir(exist_ok=True, parents=True)
         second_file.write_bytes(second_data)
 
-        snapshot_params = await local_repo.snapshot(paths=[first_file, second_file])
-        result = await local_repo.restore(
-            snapshot_regex=snapshot_params.name, path=tmp_path
-        )
+        snapshot = await local_repo.snapshot(paths=[first_file, second_file])
+        result = await local_repo.restore(snapshot_regex=snapshot.name, path=tmp_path)
+
         assert set(result.files) == {str(first_file), str(second_file)}
         assert tmp_path.joinpath(*first_file.parts[1:]).read_bytes() == first_data
         assert tmp_path.joinpath(*second_file.parts[1:]).read_bytes() == second_data
@@ -658,7 +718,7 @@ class TestRestore:
         assert tmp_path.joinpath(*file.parts[1:]).read_bytes() == second_version
 
     @pytest.mark.asyncio
-    async def test_snapshot_version(self, local_repo, tmp_path):
+    async def test_specific_snapshot_version(self, local_repo, tmp_path):
         await local_repo.init(
             settings={
                 'encryption': None,
