@@ -279,7 +279,7 @@ class Repository:
         digest_mac = self.props.mac(digest) if self.props.encrypted else digest
         return LocationParts(name=digest.hex(), tag=digest_mac.hex())
 
-    def read_metadata(self, path):
+    def read_metadata(self, path, /):
         # TODO: Cache stat result?
         stat_result = os.stat(path)
         return {
@@ -292,7 +292,7 @@ class Repository:
             'st_ctime_ns': stat_result.st_ctime_ns,
         }
 
-    def restore_metadata(self, path, metadata):
+    def restore_metadata(self, path, metadata, /):
         # NOTE: fall back to non-nanosecond timestamps for compatibility with snapshots
         # that were created by older replicat versions (pre-1.3)
         try:
