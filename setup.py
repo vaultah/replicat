@@ -84,7 +84,7 @@ setup(
     url="https://github.com/vaultah/replicat",
     maintainer='vaultah',
     maintainer_email='flwaultah+replicat@gmail.com',
-    python_requires=">=3.9",
+    python_requires=">=3.8",
     description='Configurable and lightweight backup utility with '
     'deduplication and encryption.',
     long_description=get_long_description(),

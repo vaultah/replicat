@@ -2,7 +2,6 @@ import os
 import re
 import threading
 import time
-from random import Random
 from unittest.mock import ANY, patch
 
 import pytest
@@ -11,6 +10,7 @@ from replicat import exceptions
 from replicat.backends.local import Local
 from replicat.repository import Repository
 from replicat.utils import adapters
+from replicat.utils.compat import Random
 
 
 class TestHelperMethods:

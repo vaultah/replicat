@@ -1,6 +1,5 @@
 import asyncio
 import os
-import random
 import threading
 import time
 from base64 import standard_b64encode
@@ -10,6 +9,7 @@ import pytest
 
 from replicat import exceptions, utils
 from replicat.backends.base import Backend
+from replicat.utils.compat import Random
 
 # TODO: tests for make_main_parser
 
@@ -297,11 +297,12 @@ def test_parse_cli_settings():
 
 
 def test_stream_files(tmp_path):
+    rnd = Random()
     mapping = {
         tmp_path / 'a': b'',
-        tmp_path / 'b': random.randbytes(1_447),
-        tmp_path / 'c': random.randbytes(29),
-        tmp_path / 'd': random.randbytes(13),
+        tmp_path / 'b': rnd.randbytes(1_447),
+        tmp_path / 'c': rnd.randbytes(29),
+        tmp_path / 'd': rnd.randbytes(13),
     }
     for path, contents in mapping.items():
         path.write_bytes(contents)
