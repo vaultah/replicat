@@ -21,7 +21,7 @@ from typing import Optional
 from tqdm import tqdm
 
 from .. import __version__, exceptions
-from . import adapters, fs  # noqa
+from . import adapters, compat, fs  # noqa
 
 PREFIXES_TABLE = {
     'k': 1_000,

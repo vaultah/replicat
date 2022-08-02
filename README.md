@@ -12,7 +12,7 @@ Configurable and lightweight backup utility with deduplication and encryption.
 
 ## Compatibility
 
-Python 3.9 (or newer) running on Linux, MacOS, or Windows.
+Python 3.8 (or newer) running on Linux, MacOS, or Windows.
 
 ## Supported backup destinations
 
