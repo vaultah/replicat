@@ -3,6 +3,21 @@ on:
   workflow_dispatch:
 
 jobs:
+  build-38-windows:
+    uses: ./.github/workflows/build-windows.yml
+    with:
+      python-version: '3.8'
+
+  build-38-linux:
+    uses: ./.github/workflows/build-linux.yml
+    with:
+      python-version: '3.8'
+
+  build-38-macos:
+    uses: ./.github/workflows/build-macos.yml
+    with:
+      python-version: '3.8'
+
   build-39-windows:
     uses: ./.github/workflows/build-windows.yml
     with:
@@ -48,6 +63,9 @@ jobs:
 
   upload:
     needs:
+      - build-38-windows
+      - build-38-linux
+      - build-38-macos
       - build-39-windows
       - build-39-linux
       - build-39-macos

@@ -1,13 +1,13 @@
 import os
 from collections import Counter
 from hashlib import blake2b, scrypt
-from random import Random
 
 import pytest
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM, ChaCha20Poly1305
 
 from replicat import exceptions
 from replicat.utils import adapters
+from replicat.utils.compat import Random
 
 
 class TestAESGCM:
