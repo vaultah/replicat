@@ -607,70 +607,92 @@ class Repository:
         )
         return utils.DefaultNamespace(new_key=key)
 
-    async def _load_snapshots(self, *, snapshot_regex=None):
-        empty = object()
-        task_to_path = {}
+    def _download_snapshot(self, path, expected_digest, *, loop):
+        contents = None
+        if self._cache_directory is not None:
+            try:
+                contents = self._get_cached(path)
+            except FileNotFoundError:
+                pass
 
-        async def _download_snapshot(path, digest):
-            contents = empty
-            if self._cache_directory is not None:
-                try:
-                    contents = self._get_cached(path)
-                except FileNotFoundError:
-                    pass
-
-            if contents is empty:
-                contents = await self._download(path)
-                logger.info('Verifying %s', path)
-                if self.props.hash_digest(contents) != digest:
-                    raise exceptions.ReplicatError(f'Snapshot at {path!r} is corrupted')
-
-                if self._cache_directory is not None:
-                    logger.info('Caching %s', path)
-                    self._store_cached(path, contents)
-
-            body = self.deserialize(contents)
-
-            if self.props.encrypted:
-                logger.info('Decrypting %s', path)
-                body['chunks'] = self.deserialize(
-                    self.props.decrypt(
-                        body['chunks'],
-                        self.props.derive_shared_subkey(
-                            self.props.hash_digest(body['data'])
-                        ),
-                    )
-                )
-                try:
-                    data = self.props.decrypt(body['data'], self.props.userkey)
-                except exceptions.DecryptionError:
-                    logger.info(
-                        "Decryption of %s failed, but it's not corrupted (different key?)",
-                        path,
-                    )
-                    body['data'] = None
+        if contents is None:
+            slot = asyncio.run_coroutine_threadsafe(self._slots.get(), loop).result()
+            try:
+                if inspect.iscoroutinefunction(self.backend.download):
+                    contents = asyncio.run_coroutine_threadsafe(
+                        self.backend.download(path), loop
+                    ).result()
                 else:
-                    body['data'] = self.deserialize(data)
+                    contents = self.backend.download(path)
+            finally:
+                loop.call_soon_threadsafe(self._slots.put_nowait, slot)
 
-            return body
+            logger.info('Verifying %s', path)
+            if self.props.hash_digest(contents) != expected_digest:
+                raise exceptions.ReplicatError(f'Snapshot at {path!r} is corrupted')
 
-        async for path in self._aiter(self.backend.list_files, self.SNAPSHOT_PREFIX):
+            if self._cache_directory is not None:
+                logger.info('Caching %s', path)
+                self._store_cached(path, contents)
+
+        body = self.deserialize(contents)
+
+        if self.props.encrypted:
+            logger.info('Decrypting %s', path)
+            body['chunks'] = self.deserialize(
+                self.props.decrypt(
+                    body['chunks'],
+                    self.props.derive_shared_subkey(
+                        self.props.hash_digest(body['data'])
+                    ),
+                )
+            )
+            try:
+                data = self.props.decrypt(body['data'], self.props.userkey)
+            except exceptions.DecryptionError:
+                logger.info(
+                    "Decryption of %s failed, but it's not corrupted (different key?)",
+                    path,
+                )
+                body['data'] = None
+            else:
+                body['data'] = self.deserialize(data)
+
+        return body
+
+    async def _load_snapshots(self, *, snapshot_regex=None):
+        # In the most common case, we'll just load cached files and do some key
+        # derivation and decryption, all of which might benefit from use of multiple
+        # threads. In case we have to download some snapshots, we can run plain backend
+        # methods directly from the threads and submit coroutines to the current event
+        # loop. That said, we aren't using the standard backend executor for this, since
+        # the second case should be rare, and to avoid potentially blocking unrelated
+        # calls, but we still have to use slots to limit concurrent calls to the backend
+        worker_executor = ThreadPoolExecutor(max_workers=self._concurrent)
+        future_to_path = {}
+        loop = asyncio.get_running_loop()
+
+        def _download_snapshot(path):
             name, tag = self.parse_snapshot_location(path)
-            digest = bytes.fromhex(name)
-
-            if self.props.encrypted and self.props.mac(digest) != bytes.fromhex(tag):
-                logger.info('Skipping %s (invalid tag)', path)
-                continue
-
             if snapshot_regex is not None and re.search(snapshot_regex, name) is None:
                 logger.info('Skipping %s (does not match the filter)', path)
+                return
+
+            digest = bytes.fromhex(name)
+            if self.props.encrypted and self.props.mac(digest) != bytes.fromhex(tag):
+                logger.info('Skipping %s (invalid tag)', path)
+                return
+
+            return self._download_snapshot(path, digest, loop=loop)
+
+        async for path in self._aiter(self.backend.list_files, self.SNAPSHOT_PREFIX):
+            future = loop.run_in_executor(worker_executor, _download_snapshot, path)
+            future_to_path[future] = path
+
+        async for task in utils.as_completed(future_to_path):
+            if (body := await task) is None:
                 continue
-
-            task = asyncio.create_task(_download_snapshot(path, digest))
-            task_to_path[task] = path
-
-        async for task in utils.as_completed(task_to_path):
-            yield task_to_path[task], await task
+            yield future_to_path[task], body
 
     def _format_snapshot_name(self, *, path, chunks, data):
         return self.parse_snapshot_location(path).name
@@ -744,9 +766,12 @@ class Repository:
             width = columns_widths[column] = max(len(column), columns_widths[column])
             formatted_headers.append(column.upper().center(width))
 
-        print(*formatted_headers)
+        print(*formatted_headers, sep='\t')
         for _, row in snapshots:
-            print(*(value.ljust(columns_widths[col]) for col, value in row.items()))
+            print(
+                *(value.ljust(columns_widths[col]) for col, value in row.items()),
+                sep='\t',
+            )
 
     def _format_file_snapshot_date(
         self, *, snapshot_path, snapshot_chunks, snapshot_data, file_data
@@ -820,9 +845,12 @@ class Repository:
             width = columns_widths[column] = max(len(column), columns_widths[column])
             formatted_headers.append(column.upper().center(width))
 
-        print(*formatted_headers)
+        print(*formatted_headers, sep='\t')
         for _, row in files:
-            print(*(value.ljust(columns_widths[col]) for col, value in row.items()))
+            print(
+                *(value.ljust(columns_widths[col]) for col, value in row.items()),
+                sep='\t',
+            )
 
     def _flatten_paths(self, paths):
         return list(utils.fs.flatten_paths(path.resolve(strict=True) for path in paths))
