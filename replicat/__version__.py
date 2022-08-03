@@ -1,6 +1,6 @@
 import sys
 
-version_info = (1, 2, 2)
+version_info = (1, 2, 3)
 version = '.'.join(map(str, version_info))
 
 
