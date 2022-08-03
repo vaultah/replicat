@@ -20,7 +20,6 @@ from datetime import datetime
 from decimal import Decimal
 from functools import cached_property
 from pathlib import Path
-from random import Random
 from typing import Any, Dict, Optional
 
 from sty import ef
@@ -34,6 +33,7 @@ from .utils.adapters import (
     KDFAdapter,
     MACAdapter,
 )
+from .utils.compat import Random
 
 logger = logging.getLogger(__name__)
 LocationParts = namedtuple('LocationParts', ['name', 'tag'])

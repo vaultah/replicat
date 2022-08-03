@@ -1,14 +1,13 @@
-import random
-
 import pytest
 
 from replicat.backends import local
 from replicat.repository import Repository
+from replicat.utils.compat import Random
 
 
 @pytest.fixture
 def local_backend(tmpdir):
-    return local.Client(tmpdir / random.randbytes(4).hex())
+    return local.Client(tmpdir / Random().randbytes(4).hex())
 
 
 @pytest.fixture
