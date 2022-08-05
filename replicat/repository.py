@@ -140,6 +140,10 @@ class Repository:
         file.parent.mkdir(parents=True, exist_ok=True)
         file.write_bytes(data)
 
+    def _delete_cached(self, path):
+        assert self._cache_directory is not None
+        return Path(self._cache_directory, path).unlink(missing_ok=True)
+
     @property
     def _unlocked(self):
         return hasattr(self, 'props')
@@ -1327,6 +1331,8 @@ class Repository:
 
         async def _delete_snapshot(location):
             await self._delete(location)
+            if self._cache_directory is not None:
+                self._delete_cached(location)
             finished_snapshots_tracker.update()
 
         with finished_snapshots_tracker:
