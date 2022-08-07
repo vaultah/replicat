@@ -1,5 +1,6 @@
 import asyncio
 import collections.abc
+import concurrent.futures
 import dataclasses
 import inspect
 import io
@@ -149,16 +150,18 @@ class Repository:
         return hasattr(self, 'props')
 
     @cached_property
-    def executor(self):
+    def _backend_executor(self):
         """Executor for non-async methods of the backend instance"""
-        return ThreadPoolExecutor(max_workers=self._concurrent)
+        return ThreadPoolExecutor(
+            max_workers=self._concurrent, thread_name_prefix='backend-method-runner'
+        )
 
     def _awrap(self, func, *args, **kwargs):
         if inspect.iscoroutinefunction(func) or inspect.isasyncgenfunction(func):
             return func(*args, **kwargs)
         else:
             loop = asyncio.get_running_loop()
-            return loop.run_in_executor(self.executor, func, *args, **kwargs)
+            return loop.run_in_executor(self._backend_executor, func, *args, **kwargs)
 
     async def _aiter(self, func, *args, **kwargs):
         unknown = self._awrap(func, *args, **kwargs)
@@ -672,7 +675,9 @@ class Repository:
         # loop. That said, we aren't using the standard backend executor for this, since
         # the second case should be rare, and to avoid potentially blocking unrelated
         # calls, but we still have to use slots to limit concurrent calls to the backend
-        worker_executor = ThreadPoolExecutor(max_workers=self._concurrent)
+        loader = ThreadPoolExecutor(
+            max_workers=self._concurrent, thread_name_prefix='snapshot-loader'
+        )
         future_to_path = {}
         loop = asyncio.get_running_loop()
 
@@ -690,7 +695,7 @@ class Repository:
             return self._download_snapshot(path, digest, loop=loop)
 
         async for path in self._aiter(self.backend.list_files, self.SNAPSHOT_PREFIX):
-            future = loop.run_in_executor(worker_executor, _download_snapshot, path)
+            future = loop.run_in_executor(loader, _download_snapshot, path)
             future_to_path[future] = path
 
         async for task in utils.as_completed(future_to_path):
@@ -1133,8 +1138,13 @@ class Repository:
         logger.info("Will restore files to %s", path)
 
         loop = asyncio.get_running_loop()
-        executor = ThreadPoolExecutor(
-            max_workers=self._concurrent * 5, thread_name_prefix='file-writer'
+        # We'll submit plain backend methods to this executor instead of the standard
+        # one. We still need to use slots to limit concurrent calls to the backend
+        loader = ThreadPoolExecutor(
+            max_workers=self._concurrent, thread_name_prefix='chunk-loader'
+        )
+        writer = ThreadPoolExecutor(
+            max_workers=self._concurrent * 3, thread_name_prefix='file-writer'
         )
 
         glock = threading.Lock()
@@ -1185,52 +1195,51 @@ class Repository:
                 if not flocks_refcounts[restore_to]:
                     del flocks_refcounts[restore_to], flocks[restore_to]
 
-        async def _worker():
-            while True:
-                try:
-                    digest, refs = chunks_references.popitem()
-                except KeyError:
-                    break
-
-                location = self._chunk_digest_to_location(digest)
-                contents = await self._download(location)
-
-                logger.info('Decrypting %s', location)
-                if self.props.encrypted:
-                    decrypted_contents = self.props.decrypt(
-                        contents,
-                        self.props.derive_shared_subkey(digest),
-                    )
+        def _download_chunk(digest, refs):
+            location = self._chunk_digest_to_location(digest)
+            slot = asyncio.run_coroutine_threadsafe(self._slots.get(), loop).result()
+            try:
+                if inspect.iscoroutinefunction(self.backend.download):
+                    contents = asyncio.run_coroutine_threadsafe(
+                        self.backend.download(location), loop
+                    ).result()
                 else:
-                    decrypted_contents = contents
+                    contents = self.backend.download(location)
+            finally:
+                loop.call_soon_threadsafe(self._slots.put_nowait, slot)
 
-                logger.info('Verifying %s', location)
-                if self.props.hash_digest(decrypted_contents) != digest:
-                    raise exceptions.ReplicatError(
-                        f'Chunk at {location!r} is corrupted'
-                    )
-
-                logger.info('Chunk %s referenced %d time(s)', location, len(refs))
-                decrypted_view = memoryview(decrypted_contents)
-                await asyncio.gather(
-                    *(
-                        loop.run_in_executor(
-                            executor, _write_chunk_ref, ref, decrypted_view
-                        )
-                        for ref in refs
-                    )
+            logger.info('Decrypting %s', location)
+            if self.props.encrypted:
+                decrypted_contents = self.props.decrypt(
+                    contents,
+                    self.props.derive_shared_subkey(digest),
                 )
+            else:
+                decrypted_contents = contents
 
-                for ref in refs:
-                    file_path = ref[0]
+            logger.info('Verifying %s', location)
+            if self.props.hash_digest(decrypted_contents) != digest:
+                raise exceptions.ReplicatError(f'Chunk at {location!r} is corrupted')
+
+            logger.info('Chunk %s referenced %d time(s)', location, len(refs))
+            decrypted_view = memoryview(decrypted_contents)
+            writer_futures = (
+                writer.submit(_write_chunk_ref, ref, decrypted_view) for ref in refs
+            )
+            for future in concurrent.futures.as_completed(writer_futures):
+                future.result()
+
+            for ref in refs:
+                file_path = ref[0]
+                with glock:
                     digests = files_digests[file_path]
                     digests.remove(digest)
 
-                    if not digests:
-                        logger.info('Finished writing file %s', file_path)
-                        restore_path, metadata = files_metadata[file_path]
-                        self.restore_metadata(restore_path, metadata)
-                        del files_metadata[file_path]
+                if not digests:
+                    logger.info('Finished writing file %s', file_path)
+                    with glock:
+                        restore_path, metadata = files_metadata.pop(file_path)
+                    self.restore_metadata(restore_path, metadata)
 
         self.display_status('Loading snapshots')
         snapshots_gen = self._load_snapshots(snapshot_regex=snapshot_regex)
@@ -1287,7 +1296,12 @@ class Repository:
             leave=True,
         )
         with bytes_tracker:
-            await asyncio.gather(*(_worker() for _ in range(self._concurrent)))
+            await asyncio.gather(
+                *(
+                    loop.run_in_executor(loader, _download_chunk, *x)
+                    for x in chunks_references.items()
+                )
+            )
 
         return utils.DefaultNamespace(files=list(files_digests))
 
@@ -1440,12 +1454,13 @@ class Repository:
             f'{name}={value!r}' for name, value in adapter_args.items()
         )
         self.display_status(f'Benchmarking {name}({argument_string})')
+        benchmarker = ThreadPoolExecutor(
+            max_workers=1, thread_name_prefix='benchmarker'
+        )
 
         if isinstance(adapter, ChunkerAdapter):
             loop = asyncio.get_running_loop()
-            await loop.run_in_executor(
-                ThreadPoolExecutor(max_workers=1), self._benchmark_chunker, adapter
-            )
+            await loop.run_in_executor(benchmarker, self._benchmark_chunker, adapter)
         else:
             raise RuntimeError('Sorry, not yet')
 
