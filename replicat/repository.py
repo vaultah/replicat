@@ -16,7 +16,7 @@ import threading
 import time
 from collections import defaultdict, namedtuple
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, contextmanager
 from datetime import datetime
 from decimal import Decimal
 from functools import cached_property
@@ -156,15 +156,17 @@ class Repository:
             max_workers=self._concurrent, thread_name_prefix='backend-method-runner'
         )
 
-    def _awrap(self, func, *args, **kwargs):
+    def _abwrap(self, func, *args, **kwargs):
+        # Async backend wrapper, should only be used for backend methods
         if inspect.iscoroutinefunction(func) or inspect.isasyncgenfunction(func):
             return func(*args, **kwargs)
         else:
             loop = asyncio.get_running_loop()
             return loop.run_in_executor(self._backend_executor, func, *args, **kwargs)
 
-    async def _aiter(self, func, *args, **kwargs):
-        unknown = self._awrap(func, *args, **kwargs)
+    async def _abiter(self, func, *args, **kwargs):
+        # Async backend iterator, should only be used for backend methods
+        unknown = self._abwrap(func, *args, **kwargs)
         if inspect.isawaitable(unknown):
             result = await unknown
         else:
@@ -184,32 +186,40 @@ class Repository:
         finally:
             self._slots.put_nowait(slot)
 
+    @contextmanager
+    def _acquire_slot_threadsafe(self, *, loop):
+        slot = asyncio.run_coroutine_threadsafe(self._slots.get(), loop).result()
+        try:
+            yield slot
+        finally:
+            loop.call_soon_threadsafe(self._slots.put_nowait, slot)
+
     # Convenience wrappers for backend methods that do not need to know
     # the actual slot they are occupying (so most of them)
     async def _exists(self, location):
         async with self._acquire_slot():
             logger.info('Checking existence of %s', location)
-            return await self._awrap(self.backend.exists, location)
+            return await self._abwrap(self.backend.exists, location)
 
     async def _download(self, location):
         async with self._acquire_slot():
             logger.info('Downloading %s', location)
-            return await self._awrap(self.backend.download, location)
+            return await self._abwrap(self.backend.download, location)
 
     async def _upload_data(self, location, data):
         async with self._acquire_slot():
             logger.info('Uploading binary data to %s', location)
-            await self._awrap(self.backend.upload, location, data)
+            await self._abwrap(self.backend.upload, location, data)
 
     async def _delete(self, location):
         async with self._acquire_slot():
             logger.info('Deleting %s', location)
-            await self._awrap(self.backend.delete, location)
+            await self._abwrap(self.backend.delete, location)
 
     async def _clean(self):
         async with self._acquire_slot():
             logger.info('Running backend clean-up')
-            await self._awrap(self.backend.clean)
+            await self._abwrap(self.backend.clean)
 
     def default_serialization_hook(self, data, /):
         return utils.type_hint(data)
@@ -623,16 +633,14 @@ class Repository:
                 pass
 
         if contents is None:
-            slot = asyncio.run_coroutine_threadsafe(self._slots.get(), loop).result()
-            try:
+            with self._acquire_slot_threadsafe(loop=loop):
+                logger.info('Downloading %s', path)
                 if inspect.iscoroutinefunction(self.backend.download):
                     contents = asyncio.run_coroutine_threadsafe(
                         self.backend.download(path), loop
                     ).result()
                 else:
                     contents = self.backend.download(path)
-            finally:
-                loop.call_soon_threadsafe(self._slots.put_nowait, slot)
 
             logger.info('Verifying %s', path)
             if self.props.hash_digest(contents) != expected_digest:
@@ -694,7 +702,7 @@ class Repository:
 
             return self._download_snapshot(path, digest, loop=loop)
 
-        async for path in self._aiter(self.backend.list_files, self.SNAPSHOT_PREFIX):
+        async for path in self._abiter(self.backend.list_files, self.SNAPSHOT_PREFIX):
             future = loop.run_in_executor(loader, _download_snapshot, path)
             future_to_path[future] = path
 
@@ -1053,7 +1061,7 @@ class Repository:
                             rate_limiter=rate_limiter,
                         )
                         with stream, iowrapper:
-                            await self._awrap(
+                            await self._abwrap(
                                 self.backend.upload_stream,
                                 chunk.location,
                                 iowrapper,
@@ -1130,6 +1138,25 @@ class Repository:
             data=snapshot_body['data'],
         )
 
+    def _write_file_part(self, path, data, offset):
+        logger.info(
+            'Writing %d bytes to %s starting from %d',
+            len(data),
+            path,
+            offset,
+        )
+        try:
+            file = path.open('r+b')
+        except FileNotFoundError:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            file = path.open('wb')
+
+        with file:
+            file_end = file.seek(0, io.SEEK_END)
+            file.truncate(max(file_end, offset + len(data)))
+            file.seek(offset)
+            file.write(data)
+
     async def restore(self, *, snapshot_regex=None, files_regex=None, path=None):
         if path is None:
             path = Path()
@@ -1171,23 +1198,9 @@ class Repository:
                     flocks_refcounts[restore_to] += 1
 
             with flock:
-                logger.info(
-                    'Writing %d bytes to %s starting from %d',
-                    chunk_size,
-                    restore_to,
-                    stream_start,
+                self._write_file_part(
+                    restore_to, contents[start : start + chunk_size], stream_start
                 )
-                try:
-                    file = restore_to.open('r+b')
-                except FileNotFoundError:
-                    restore_to.parent.mkdir(parents=True, exist_ok=True)
-                    file = restore_to.open('wb')
-
-                with file:
-                    file_end = file.seek(0, io.SEEK_END)
-                    file.truncate(max(file_end, stream_start + chunk_size))
-                    file.seek(stream_start)
-                    file.write(contents[start : start + chunk_size])
 
             with glock:
                 bytes_tracker.update(chunk_size)
@@ -1197,16 +1210,15 @@ class Repository:
 
         def _download_chunk(digest, refs):
             location = self._chunk_digest_to_location(digest)
-            slot = asyncio.run_coroutine_threadsafe(self._slots.get(), loop).result()
-            try:
+
+            with self._acquire_slot_threadsafe(loop=loop):
+                logger.info('Downloading %s', location)
                 if inspect.iscoroutinefunction(self.backend.download):
                     contents = asyncio.run_coroutine_threadsafe(
                         self.backend.download(location), loop
                     ).result()
                 else:
                     contents = self.backend.download(location)
-            finally:
-                loop.call_soon_threadsafe(self._slots.put_nowait, slot)
 
             logger.info('Decrypting %s', location)
             if self.props.encrypted:
@@ -1381,7 +1393,7 @@ class Repository:
         to_delete = set()
 
         self.display_status('Fetching chunks list')
-        async for location in self._aiter(self.backend.list_files, self.CHUNK_PREFIX):
+        async for location in self._abiter(self.backend.list_files, self.CHUNK_PREFIX):
             if location in referenced_locations:
                 logger.info('Chunk %s is referenced, skipping', location)
                 continue
@@ -1513,7 +1525,7 @@ class Repository:
                         rate_limiter=rate_limiter,
                     )
                     with stream, iowrapper:
-                        await self._awrap(
+                        await self._abwrap(
                             self.backend.upload_stream, name, iowrapper, length
                         )
 
@@ -1529,4 +1541,4 @@ class Repository:
         except AttributeError:
             pass
 
-        await self._awrap(self.backend.close)
+        await self._abwrap(self.backend.close)
