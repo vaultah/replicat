@@ -38,8 +38,8 @@ class TestHelperMethods:
         assert name == 'GHIJKLMNOPQR'
         assert tag == '0123456789ABCDEF'
 
-    def test_read_metadata(self, local_repo, tmpdir):
-        file = tmpdir / 'some_file'
+    def test_read_metadata(self, local_repo, tmp_path):
+        file = tmp_path / 'some_file'
         with file.open('wb'):
             pass
 
@@ -58,8 +58,8 @@ class TestHelperMethods:
         }
         assert metadata == expected_metadata
 
-    def test_restore_metadata(self, local_repo, tmpdir):
-        file = tmpdir / 'some_file'
+    def test_restore_metadata(self, local_repo, tmp_path):
+        file = tmp_path / 'some_file'
         with file.open('wb'):
             pass
 
@@ -80,8 +80,8 @@ class TestHelperMethods:
 
         utime_mock.assert_called_once_with(file, ns=(123, 321))
 
-    def test_restore_metadata_legacy_timestamps(self, local_repo, tmpdir):
-        file = tmpdir / 'some_file'
+    def test_restore_metadata_legacy_timestamps(self, local_repo, tmp_path):
+        file = tmp_path / 'some_file'
         with file.open('wb'):
             pass
 
@@ -1181,7 +1181,7 @@ class TestUpload:
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_bytes(data)
 
-        await repository.upload(
+        await repository.upload_objects(
             [
                 files_base_path / 'file',
                 files_base_path / 'directory',
@@ -1204,7 +1204,7 @@ class TestUpload:
         )
 
     @pytest.mark.asyncio
-    async def test_overwrites(self, local_backend, tmp_path):
+    async def test_overwrites(self, tmp_path):
         backend = Local(tmp_path / 'backend')
         backend.upload('files/file', b'<old data>')
 
@@ -1214,12 +1214,12 @@ class TestUpload:
 
         repository = Repository(backend, concurrent=5)
 
-        await repository.upload([files_base_path / 'file'])
+        await repository.upload_objects([files_base_path / 'file'])
         assert set(backend.list_files()) == {'files/file'}
         assert backend.download('files/file') == b'<updated data>'
 
     @pytest.mark.asyncio
-    async def test_skip_existing(self, local_backend, tmp_path):
+    async def test_skip_existing(self, tmp_path):
         backend = Local(tmp_path / 'backend')
         backend.upload('files/file', b'<old data>')
 
@@ -1229,6 +1229,57 @@ class TestUpload:
 
         repository = Repository(backend, concurrent=5)
 
-        await repository.upload([files_base_path / 'file'], skip_existing=True)
+        await repository.upload_objects([files_base_path / 'file'], skip_existing=True)
         assert set(backend.list_files()) == {'files/file'}
         assert backend.download('files/file') == b'<old data>'
+
+
+class TestDownload:
+    @pytest.fixture(autouse=True)
+    def populate_backend(self, local_backend):
+        local_backend.upload('file', b'<backend data>')
+        local_backend.upload('nested/file', b'<nested backend data>')
+        local_backend.upload(
+            'very/very/nested/file', b'<very very nested backend data>'
+        )
+
+    @pytest.mark.asyncio
+    async def test_overwrite(self, local_backend, local_repo, tmp_path):
+        target_path = tmp_path / 'downloaded_files'
+        (target_path / 'very/very/nested').mkdir(parents=True)
+        (target_path / 'file').write_bytes(b'<local data>')
+        (target_path / 'very/very/nested/file').write_bytes(
+            b'<very very nested local data>'
+        )
+
+        await local_repo.download_objects(path=target_path)
+        assert (target_path / 'file').read_bytes() == b'<backend data>'
+        assert (target_path / 'nested/file').read_bytes() == b'<nested backend data>'
+        assert (
+            target_path / 'very/very/nested/file'
+        ).read_bytes() == b'<very very nested backend data>'
+
+    @pytest.mark.asyncio
+    async def test_skip_existing(self, local_backend, local_repo, tmp_path):
+        target_path = tmp_path / 'downloaded_files'
+        (target_path / 'very/very/nested').mkdir(parents=True)
+        (target_path / 'file').write_bytes(b'<local data>')
+        (target_path / 'very/very/nested/file').write_bytes(
+            b'<very very nested local data>'
+        )
+
+        await local_repo.download_objects(path=target_path, skip_existing=True)
+        assert (target_path / 'file').read_bytes() == b'<local data>'
+        assert (target_path / 'nested/file').read_bytes() == b'<nested backend data>'
+        assert (
+            target_path / 'very/very/nested/file'
+        ).read_bytes() == b'<very very nested local data>'
+
+    @pytest.mark.asyncio
+    async def test_regex_filter(self, local_backend, local_repo, tmp_path):
+        target_path = tmp_path / 'downloaded_files'
+        await local_repo.download_objects(path=target_path, object_regex='^very|^file')
+        assert {x for x in target_path.rglob('*') if x.is_file()} == {
+            target_path / 'file',
+            target_path / 'very/very/nested/file',
+        }

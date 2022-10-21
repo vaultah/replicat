@@ -33,6 +33,10 @@ class Backend(abc.ABC):
         return b''
 
     @abc.abstractmethod
+    async def download_stream(self, name, stream):
+        return None
+
+    @abc.abstractmethod
     async def list_files(self, prefix=''):
         """Get the list of files from the backend. Restricts the results to
         non-deleted files starting with this prefix. The return value can be a

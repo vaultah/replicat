@@ -67,6 +67,18 @@ class Local(Backend):
         return (self.path / name).read_bytes()
 
     @backoff_on_oserror
+    def download_stream(self, name, stream):
+        file = (self.path / name).open('rb')
+        length = os.fstat(file.fileno()).st_size
+        try:
+            stream.truncate(length)
+            with file:
+                shutil.copyfileobj(file, stream)
+        except:
+            stream.seek(0)
+            raise
+
+    @backoff_on_oserror
     def list_files(self, prefix=''):
         path_length = len(str(self.path))
         # pathlib strips the trailing slash from paths; we don't want that here

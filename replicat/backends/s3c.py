@@ -1,3 +1,4 @@
+import contextlib
 import hashlib
 import hmac
 import logging
@@ -122,7 +123,7 @@ class S3Compatible(Backend, short_name='S3C'):
             timeout=None, event_hooks={'response': [_raise_for_status_hook]}
         )
 
-    async def _make_request(
+    def _prepare_request(
         self,
         method,
         canonical_uri,
@@ -181,7 +182,42 @@ class S3Compatible(Backend, short_name='S3C'):
         headers['x-amz-content-sha256'] = payload_digest
         headers['x-amz-date'] = x_amz_date
         headers['authorization'] = authorization_header
-        return await self._client.request(method, url, headers=headers, **kwargs)
+        return self._client.build_request(method, url, headers=headers, **kwargs)
+
+    async def _make_request(
+        self,
+        method,
+        canonical_uri,
+        *,
+        query=None,
+        payload_digest,
+        headers=None,
+        **kwargs,
+    ):
+        request = self._prepare_request(
+            method, canonical_uri, query=query, payload_digest=payload_digest, **kwargs
+        )
+        return await self._client.send(request)
+
+    @contextlib.asynccontextmanager
+    async def _make_streaming_request(
+        self,
+        method,
+        canonical_uri,
+        *,
+        query=None,
+        payload_digest,
+        headers=None,
+        **kwargs,
+    ):
+        request = self._prepare_request(
+            method, canonical_uri, query=query, payload_digest=payload_digest, **kwargs
+        )
+        response = await self._client.send(request, stream=True)
+        try:
+            yield response
+        finally:
+            await response.aclose()
 
     @backoff_on_httperror
     async def exists(self, name):
@@ -238,6 +274,25 @@ class S3Compatible(Backend, short_name='S3C'):
             payload_digest=_empty_payload_digest,
         )
         return await response.aread()
+
+    @backoff_on_httperror
+    async def download_stream(self, name, stream):
+        async with self._make_streaming_request(
+            'GET',
+            f'/{self.bucket_name}/{name}',
+            payload_digest=_empty_payload_digest,
+        ) as response:
+            content_length = response.headers.get('content-length')
+            if content_length is not None:
+                content_length = int(content_length)
+
+            try:
+                stream.truncate(content_length)
+                async for chunk in response.aiter_bytes(128_000):
+                    stream.write(chunk)
+            except:
+                stream.seek(0)
+                raise
 
     @backoff_on_httperror
     async def _list_objects(self, *, continuation_token=None, prefix=''):

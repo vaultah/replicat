@@ -196,6 +196,26 @@ class B2(Backend):
 
     @utils.requires_auth
     @backoff_reauth
+    async def download_stream(self, name, stream):
+        bucket = await self._get_bucket()
+        url = f'{self._auth.downloadUrl}/file/{bucket.name}/{name}'
+        headers = {'authorization': self._auth.authorizationToken}
+
+        async with self._client.stream('GET', url, headers=headers) as response:
+            content_length = response.headers.get('content-length')
+            if content_length is not None:
+                content_length = int(content_length)
+
+            try:
+                stream.truncate(content_length)
+                async for chunk in response.aiter_bytes(128_000):
+                    stream.write(chunk)
+            except:
+                stream.seek(0)
+                raise
+
+    @utils.requires_auth
+    @backoff_reauth
     async def _list_file_names(self, *, start_file_name=None, prefix=''):
         bucket = await self._get_bucket()
         params = {
