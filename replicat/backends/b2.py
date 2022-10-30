@@ -2,9 +2,8 @@ import asyncio
 import functools
 import logging
 import sys
-from urllib.parse import quote
 from contextlib import suppress
-
+from urllib.parse import quote
 
 import backoff
 import httpx
