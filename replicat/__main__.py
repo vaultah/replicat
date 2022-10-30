@@ -53,9 +53,16 @@ async def _cmd_handler(args, unknown, error):
         )
     elif args.action == 'benchmark':
         await repository.benchmark(args.name, settings=settings)
-    elif args.action == 'upload':
-        await repository.upload(
+    elif args.action == 'upload-objects':
+        await repository.upload_objects(
             args.path, rate_limit=args.rate_limit, skip_existing=args.skip_existing
+        )
+    elif args.action == 'download-objects':
+        await repository.download_objects(
+            path=args.path,
+            object_regex=args.objects_regex,
+            rate_limit=args.rate_limit,
+            skip_existing=args.skip_existing,
         )
     elif args.action == 'add-key':
         if args.shared:

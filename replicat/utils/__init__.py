@@ -199,11 +199,11 @@ def make_main_parser(*parent_parsers):
     snapshot_parser.add_argument('path', nargs='+', type=Path)
     snapshot_parser.add_argument('-n', '--note')
     snapshot_parser.add_argument(
-        '--limit-rate', '-L', dest='rate_limit', type=human_to_bytes
+        '-L', '--limit-rate', dest='rate_limit', type=human_to_bytes
     )
 
     restore_parser = subparsers.add_parser('restore', parents=parent_parsers)
-    restore_parser.add_argument('path', nargs='?', type=Path)
+    restore_parser.add_argument('path', nargs='?', help='Output directory', type=Path)
     restore_parser.add_argument(
         '-S', '--snapshot-regex', help='Regex to filter snapshots'
     )
@@ -217,12 +217,28 @@ def make_main_parser(*parent_parsers):
     benchmark_parser = subparsers.add_parser('benchmark', parents=parent_parsers)
     benchmark_parser.add_argument('name')
 
-    upload_parser = subparsers.add_parser('upload', parents=parent_parsers)
-    upload_parser.add_argument('path', nargs='+', type=Path)
-    upload_parser.add_argument(
-        '--limit-rate', '-L', dest='rate_limit', type=human_to_bytes
+    upload_objects_parser = subparsers.add_parser(
+        'upload-objects', parents=parent_parsers
     )
-    upload_parser.add_argument('--skip-existing', '-S', action='store_true')
+    upload_objects_parser.add_argument('path', nargs='+', type=Path)
+    upload_objects_parser.add_argument(
+        '-L', '--limit-rate', dest='rate_limit', type=human_to_bytes
+    )
+    upload_objects_parser.add_argument('-S', '--skip-existing', action='store_true')
+
+    download_objects_parser = subparsers.add_parser(
+        'download-objects', parents=parent_parsers
+    )
+    download_objects_parser.add_argument(
+        'path', nargs='?', help='Output directory', type=Path
+    )
+    download_objects_parser.add_argument(
+        '-O', '--objects-regex', help='Regex to filter objects'
+    )
+    download_objects_parser.add_argument(
+        '-L', '--limit-rate', dest='rate_limit', type=human_to_bytes
+    )
+    download_objects_parser.add_argument('-S', '--skip-existing', action='store_true')
     return parser
 
 
@@ -501,7 +517,7 @@ class RateLimiter:
                 self.bytes_since_checkpoint += bytes_amount
 
 
-class tqdmio:
+class TQDMIOReader:
     def __init__(
         self,
         stream,
@@ -539,6 +555,52 @@ class tqdmio:
         pos = self._stream.seek(*args, **kwargs)
         self._tracker.reset()
         self._tracker.update(pos)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc_info):
+        self._tracker.close()
+
+
+class TQDMIOWriter:
+    def __init__(
+        self,
+        stream,
+        *,
+        desc,
+        total,
+        position,
+        disable,
+        rate_limiter: Optional[RateLimiter] = None,
+    ):
+        self._stream = stream
+        self._rate_limiter = rate_limiter
+        self._tracker = tqdm(
+            desc=desc,
+            unit='B',
+            total=total,
+            unit_scale=True,
+            position=position,
+            disable=disable,
+            leave=False,
+        )
+
+    def write(self, data):
+        # TODO: rate limiter
+        length = self._stream.write(data)
+        self._tracker.update(length)
+        return length
+
+    def seek(self, *args, **kwargs):
+        pos = self._stream.seek(*args, **kwargs)
+        self._tracker.reset()
+        self._tracker.update(pos)
+
+    def truncate(self, size=None):
+        new_size = self._stream.truncate(size)
+        self._tracker.reset(new_size)
+        return new_size
 
     def __enter__(self):
         return self

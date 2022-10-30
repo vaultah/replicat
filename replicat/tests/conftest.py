@@ -6,10 +6,10 @@ from replicat.utils.compat import Random
 
 
 @pytest.fixture
-def local_backend(tmpdir):
-    return local.Client(tmpdir / Random().randbytes(4).hex())
+def local_backend(tmp_path):
+    return local.Client(tmp_path / Random().randbytes(4).hex())
 
 
 @pytest.fixture
-def local_repo(local_backend, tmpdir):
-    return Repository(local_backend, concurrent=5, cache_directory=tmpdir / '.cache')
+def local_repo(local_backend, tmp_path):
+    return Repository(local_backend, concurrent=5, cache_directory=tmp_path / '.cache')

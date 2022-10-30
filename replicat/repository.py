@@ -25,6 +25,7 @@ from typing import Any, Dict, Optional
 
 from sty import ef
 from tqdm import tqdm
+from tqdm.utils import CallbackIOWrapper
 
 from . import exceptions, utils
 from .utils.adapters import (
@@ -150,33 +151,11 @@ class Repository:
         return hasattr(self, 'props')
 
     @cached_property
-    def _backend_executor(self):
-        """Executor for non-async methods of the backend instance"""
+    def _default_backend_executor(self):
+        """Default executor for non-async methods of the backend instance"""
         return ThreadPoolExecutor(
-            max_workers=self._concurrent, thread_name_prefix='backend-method-runner'
+            max_workers=self._concurrent, thread_name_prefix='default-backend-executor'
         )
-
-    def _abwrap(self, func, *args, **kwargs):
-        # Async backend wrapper, should only be used for backend methods
-        if inspect.iscoroutinefunction(func) or inspect.isasyncgenfunction(func):
-            return func(*args, **kwargs)
-        else:
-            loop = asyncio.get_running_loop()
-            return loop.run_in_executor(self._backend_executor, func, *args, **kwargs)
-
-    async def _abiter(self, func, *args, **kwargs):
-        # Async backend iterator, should only be used for backend methods
-        unknown = self._abwrap(func, *args, **kwargs)
-        if inspect.isawaitable(unknown):
-            result = await unknown
-        else:
-            result = unknown
-
-        if not isinstance(result, collections.abc.AsyncIterable):
-            result = utils.async_gen_wrapper(result)
-
-        async for value in result:
-            yield value
 
     @asynccontextmanager
     async def _acquire_slot(self):
@@ -194,32 +173,116 @@ class Repository:
         finally:
             loop.call_soon_threadsafe(self._slots.put_nowait, slot)
 
+    async def _maybe_run_in_executor(self, func, *args, executor=None, **kwargs):
+        if inspect.iscoroutinefunction(func):
+            return await func(*args, **kwargs)
+        else:
+            loop = asyncio.get_running_loop()
+            if executor is None:
+                executor = self._default_backend_executor
+            return await loop.run_in_executor(executor, func, *args, **kwargs)
+
+    def _maybe_run_coroutine_threadsafe(self, func, *args, loop, **kwargs):
+        if inspect.iscoroutinefunction(func):
+            return asyncio.run_coroutine_threadsafe(
+                func(*args, **kwargs), loop
+            ).result()
+        else:
+            return func(*args, **kwargs)
+
     # Convenience wrappers for backend methods that do not need to know
     # the actual slot they are occupying (so most of them)
-    async def _exists(self, location):
+    async def _exists(self, location, /, *, executor=None):
         async with self._acquire_slot():
             logger.info('Checking existence of %s', location)
-            return await self._abwrap(self.backend.exists, location)
+            return await self._maybe_run_in_executor(
+                self.backend.exists, location, executor=executor
+            )
 
-    async def _download(self, location):
+    def _exists_threadsafe(self, location, /, *, loop):
+        with self._acquire_slot_threadsafe(loop=loop):
+            logger.info('Checking existence of %s', location)
+            return self._maybe_run_coroutine_threadsafe(
+                self.backend.exists, location, loop=loop
+            )
+
+    async def _download(self, location, /, *, executor=None):
         async with self._acquire_slot():
             logger.info('Downloading %s', location)
-            return await self._abwrap(self.backend.download, location)
+            return await self._maybe_run_in_executor(
+                self.backend.download, location, executor=executor
+            )
 
-    async def _upload_data(self, location, data):
+    def _download_threadsafe(self, location, /, *, loop):
+        with self._acquire_slot_threadsafe(loop=loop):
+            logger.info('Downloading %s', location)
+            return self._maybe_run_coroutine_threadsafe(
+                self.backend.download, location, loop=loop
+            )
+
+    async def _upload_data(self, location, data, /, *, executor=None):
         async with self._acquire_slot():
-            logger.info('Uploading binary data to %s', location)
-            await self._abwrap(self.backend.upload, location, data)
+            logger.info('Uploading binary data (%d bytes) to %s', len(data), location)
+            return await self._maybe_run_in_executor(
+                self.backend.upload, location, data, executor=executor
+            )
 
-    async def _delete(self, location):
+    def _upload_data_threadsafe(self, location, data, /, *, loop):
+        with self._acquire_slot_threadsafe(loop=loop):
+            logger.info('Uploading binary data (%d bytes) to %s', len(data), location)
+            return self._maybe_run_coroutine_threadsafe(
+                self.backend.upload, location, data, loop=loop
+            )
+
+    async def _delete(self, location, /, *, executor=None):
         async with self._acquire_slot():
             logger.info('Deleting %s', location)
-            await self._abwrap(self.backend.delete, location)
+            return await self._maybe_run_in_executor(
+                self.backend.delete, location, executor=executor
+            )
 
-    async def _clean(self):
+    def _delete_threadsafe(self, location, /, *, loop):
+        with self._acquire_slot_threadsafe(loop=loop):
+            logger.info('Deleting %s', location)
+            return self._maybe_run_coroutine_threadsafe(
+                self.backend.delete, location, loop=loop
+            )
+
+    async def _clean(self, /, *, executor=None):
         async with self._acquire_slot():
             logger.info('Running backend clean-up')
-            await self._abwrap(self.backend.clean)
+            return await self._maybe_run_in_executor(
+                self.backend.clean, executor=executor
+            )
+
+    def _clean_threadsafe(self, /, *, loop):
+        with self._acquire_slot_threadsafe(loop=loop):
+            logger.info('Running backend clean-up')
+            return self._maybe_run_coroutine_threadsafe(self.backend.clean, loop=loop)
+
+    async def _close(self, /, *, executor=None):
+        async with self._acquire_slot():
+            logger.info('Closing backend instance')
+            return await self._maybe_run_in_executor(
+                self.backend.close, executor=executor
+            )
+
+    def _close_threadsafe(self, /, *, loop):
+        with self._acquire_slot_threadsafe(loop=loop):
+            logger.info('Closing backend instance')
+            return self._maybe_run_coroutine_threadsafe(self.backend.close, loop=loop)
+
+    async def _aiter(self, func, *args, **kwargs):
+        if inspect.isasyncgenfunction(func):
+            result = func(*args, **kwargs)
+        else:
+            result = await self._maybe_run_in_executor(func, *args, **kwargs)
+
+        if not isinstance(result, collections.abc.AsyncIterable):
+            result = utils.async_gen_wrapper(result)
+
+        async for value in result:
+            yield value
 
     def default_serialization_hook(self, data, /):
         return utils.type_hint(data)
@@ -525,13 +588,12 @@ class Repository:
         self.props = props
         return utils.DefaultNamespace(config=config, key=key)
 
-    async def _load_config(self):
-        data = await self._download('config')
-        return RepositoryProps(**self._instantiate_config(self.deserialize(data)))
+    def _parse_config(self, contents):
+        return RepositoryProps(**self._instantiate_config(self.deserialize(contents)))
 
     async def unlock(self, *, password=None, key=None):
         self.display_status('Loading config')
-        props = await self._load_config()
+        props = self._parse_config(await self._download('config'))
 
         if props.encrypted:
             self.display_status('Unlocking repository')
@@ -551,7 +613,7 @@ class Repository:
 
         self.props = props
 
-    async def _add_key(self, *, password, settings, props, private, key_output_path):
+    def _add_key(self, *, password, settings, props, private, key_output_path):
         self.display_status('Generating new key')
         key = self._make_key(
             cipher=props.cipher,
@@ -610,12 +672,12 @@ class Repository:
                 props = self.props
             else:
                 self.display_status('Loading config')
-                props = await self._load_config()
+                props = self._parse_config(await self._download('config'))
 
         if not props.encrypted:
             raise exceptions.ReplicatError('Repository is not encrypted')
 
-        key = await self._add_key(
+        key = self._add_key(
             password=password,
             settings=settings,
             props=props,
@@ -624,7 +686,7 @@ class Repository:
         )
         return utils.DefaultNamespace(new_key=key)
 
-    def _download_snapshot(self, path, expected_digest, *, loop):
+    def _download_snapshot_threadsafe(self, path, expected_digest, *, loop):
         contents = None
         if self._cache_directory is not None:
             try:
@@ -633,14 +695,7 @@ class Repository:
                 pass
 
         if contents is None:
-            with self._acquire_slot_threadsafe(loop=loop):
-                logger.info('Downloading %s', path)
-                if inspect.iscoroutinefunction(self.backend.download):
-                    contents = asyncio.run_coroutine_threadsafe(
-                        self.backend.download(path), loop
-                    ).result()
-                else:
-                    contents = self.backend.download(path)
+            contents = self._download_threadsafe(path, loop=loop)
 
             logger.info('Verifying %s', path)
             if self.props.hash_digest(contents) != expected_digest:
@@ -700,9 +755,9 @@ class Repository:
                 logger.info('Skipping %s (invalid tag)', path)
                 return
 
-            return self._download_snapshot(path, digest, loop=loop)
+            return self._download_snapshot_threadsafe(path, digest, loop=loop)
 
-        async for path in self._abiter(self.backend.list_files, self.SNAPSHOT_PREFIX):
+        async for path in self._aiter(self.backend.list_files, self.SNAPSHOT_PREFIX):
             future = loop.run_in_executor(loader, _download_snapshot, path)
             future_to_path[future] = path
 
@@ -911,6 +966,9 @@ class Repository:
         )
         loop = asyncio.get_running_loop()
         chunk_queue = queue.Queue(maxsize=self._concurrent * 10)
+        chunk_producer_executor = ThreadPoolExecutor(
+            max_workers=1, thread_name_prefix='chunk-producer'
+        )
         abort = threading.Event()
 
         if rate_limit is not None:
@@ -1052,7 +1110,7 @@ class Repository:
                     async with self._acquire_slot() as slot:
                         length = len(chunk.contents)
                         stream = io.BytesIO(chunk.contents)
-                        iowrapper = utils.tqdmio(
+                        iowrapper = utils.TQDMIOReader(
                             stream,
                             desc=f'Chunk #{chunk.counter:06}',
                             total=length,
@@ -1061,7 +1119,7 @@ class Repository:
                             rate_limiter=rate_limiter,
                         )
                         with stream, iowrapper:
-                            await self._abwrap(
+                            await self._maybe_run_in_executor(
                                 self.backend.upload_stream,
                                 chunk.location,
                                 iowrapper,
@@ -1070,10 +1128,7 @@ class Repository:
 
                     _chunk_done(chunk)
 
-        chunk_producer = loop.run_in_executor(
-            ThreadPoolExecutor(max_workers=1, thread_name_prefix='chunk-producer'),
-            _chunk_producer,
-        )
+        chunk_producer = loop.run_in_executor(chunk_producer_executor, _chunk_producer)
         with finished_tracker, bytes_tracker:
             try:
                 await asyncio.gather(*(_worker() for _ in range(self._concurrent)))
@@ -1210,15 +1265,7 @@ class Repository:
 
         def _download_chunk(digest, refs):
             location = self._chunk_digest_to_location(digest)
-
-            with self._acquire_slot_threadsafe(loop=loop):
-                logger.info('Downloading %s', location)
-                if inspect.iscoroutinefunction(self.backend.download):
-                    contents = asyncio.run_coroutine_threadsafe(
-                        self.backend.download(location), loop
-                    ).result()
-                else:
-                    contents = self.backend.download(location)
+            contents = self._download_threadsafe(location, loop=loop)
 
             logger.info('Decrypting %s', location)
             if self.props.encrypted:
@@ -1393,7 +1440,7 @@ class Repository:
         to_delete = set()
 
         self.display_status('Fetching chunks list')
-        async for location in self._abiter(self.backend.list_files, self.CHUNK_PREFIX):
+        async for location in self._aiter(self.backend.list_files, self.CHUNK_PREFIX):
             if location in referenced_locations:
                 logger.info('Chunk %s is referenced, skipping', location)
                 continue
@@ -1476,12 +1523,17 @@ class Repository:
         else:
             raise RuntimeError('Sorry, not yet')
 
-    async def upload(self, paths, *, rate_limit=None, skip_existing=False):
+    async def upload_objects(self, paths, *, rate_limit=None, skip_existing=False):
         self.display_status('Collecting files')
         files = self._flatten_paths(paths)
-        logger.info('Found %d files', len(files))
+        if not files:
+            logger.info('No files found, nothing to do')
+            return
+        else:
+            logger.info('Found %d files', len(files))
+
         bytes_tracker = tqdm(
-            desc='Data processed',
+            desc='Data uploaded',
             unit='B',
             unit_scale=True,
             total=None,
@@ -1498,42 +1550,133 @@ class Repository:
             leave=True,
         )
         base_directory = Path.cwd()
+        rate_limiter = utils.RateLimiter(rate_limit) if rate_limit is not None else None
 
-        if rate_limit is not None:
-            rate_limiter = utils.RateLimiter(rate_limit)
-        else:
-            rate_limiter = None
-
-        async def _upload_path(path):
+        async def _upload_file(path):
             name = path.relative_to(
                 os.path.commonpath([path, base_directory])
             ).as_posix()
-            length = path.stat().st_size
 
             if skip_existing and await self._exists(name):
                 logger.info('Skipping file %r (exists)', name)
             else:
                 async with self._acquire_slot() as slot:
                     logger.info('Uploading file %r', name)
-                    stream = path.open('rb')
-                    iowrapper = utils.tqdmio(
-                        stream,
-                        desc=name,
-                        total=length,
-                        position=slot,
-                        disable=self._quiet,
-                        rate_limiter=rate_limiter,
-                    )
-                    with stream, iowrapper:
-                        await self._abwrap(
-                            self.backend.upload_stream, name, iowrapper, length
+                    # TODO: async backend methods will naturally do the reading from the
+                    # same (main) thread. This is suboptimal, even if we're more likely
+                    # to be restricted by the bandwidth. Should we use async files/offload
+                    # file IO to a dedicated executor?
+                    with path.open('rb') as stream:
+                        length = os.fstat(stream.fileno()).st_size
+                        callback_wrapper = CallbackIOWrapper(
+                            bytes_tracker.update, stream, 'read'
                         )
+                        with utils.TQDMIOReader(
+                            callback_wrapper,
+                            desc=name,
+                            total=length,
+                            position=slot,
+                            disable=self._quiet,
+                            rate_limiter=rate_limiter,
+                        ) as iowrapper:
+                            await self._maybe_run_in_executor(
+                                self.backend.upload_stream,
+                                name,
+                                iowrapper,
+                                length,
+                            )
 
             finished_tracker.update()
-            bytes_tracker.update(length)
 
-        await asyncio.gather(*map(_upload_path, files))
+        with finished_tracker, bytes_tracker:
+            await asyncio.gather(*map(_upload_file, files))
+
         return utils.DefaultNamespace(files=files)
+
+    async def download_objects(
+        self,
+        *,
+        path=None,
+        object_prefix='',
+        object_regex=None,
+        rate_limit=None,
+        skip_existing=False,
+    ):
+        base_directory = path if path is not None else Path.cwd()
+        object_re = re.compile(object_regex) if object_regex is not None else None
+        rate_limiter = utils.RateLimiter(rate_limit) if rate_limit is not None else None
+        write_mode = 'xb' if skip_existing else 'wb'
+        objects = []
+
+        self.display_status('Loading objects')
+        async for object_path in self._aiter(self.backend.list_files, object_prefix):
+            if object_re is not None and object_re.search(object_path) is None:
+                logger.info('Skipping %s (does not match the filter)', object_path)
+                continue
+
+            objects.append(object_path)
+
+        if not objects:
+            logger.info('No objects selected, nothing to do')
+            return
+        else:
+            logger.info('Found %d objects', len(objects))
+
+        bytes_tracker = tqdm(
+            desc='Data downloaded',
+            unit='B',
+            unit_scale=True,
+            total=None,
+            position=0,
+            disable=self._quiet,
+            leave=True,
+        )
+        finished_tracker = tqdm(
+            desc='Objects processed',
+            unit='',
+            total=len(objects),
+            position=1,
+            disable=self._quiet,
+            leave=True,
+        )
+
+        async def _download_object(object_path):
+            output_path = base_directory / object_path
+
+            async with self._acquire_slot() as slot:
+                output_path.parent.mkdir(parents=True, exist_ok=True)
+                try:
+                    write_stream = output_path.open(write_mode)
+                except FileExistsError:
+                    logger.info('Skipping object %r (file exists)', output_path)
+                else:
+                    logger.info('Downloading object %r', object_path)
+                    # TODO: async backend methods will naturally do the writing from the
+                    # same (main) thread. This is suboptimal, even if we're more likely
+                    # to be restricted by the bandwidth. Should we use async files/offload
+                    # file IO to a dedicated executor?
+                    with write_stream:
+                        callback_wrapper = CallbackIOWrapper(
+                            bytes_tracker.update, write_stream, 'write'
+                        )
+                        with utils.TQDMIOWriter(
+                            callback_wrapper,
+                            desc=object_path[:25],  # TODO: something even smarter?
+                            total=None,
+                            position=slot,
+                            disable=self._quiet,
+                            rate_limiter=rate_limiter,
+                        ) as iowrapper:
+                            await self._maybe_run_in_executor(
+                                self.backend.download_stream, object_path, iowrapper
+                            )
+
+            finished_tracker.update()
+
+        with finished_tracker, bytes_tracker:
+            await asyncio.gather(*map(_download_object, objects))
+
+        return utils.DefaultNamespace(objects=objects)
 
     async def close(self):
         try:
@@ -1541,4 +1684,4 @@ class Repository:
         except AttributeError:
             pass
 
-        await self._abwrap(self.backend.close)
+        await self._close()

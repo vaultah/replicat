@@ -149,7 +149,8 @@ There are several available subcommands:
  - `add-key` -- creates a new key for the encrypted repository
  - `delete` -- deletes snapshots by their names
  - `clean` -- performs garbage collection
- - `upload` -- uploads files to the backend (no chunking, no encryption, keeping original names)
+ - `upload-objects` -- uploads objects to the backend (a low-level method)
+ - `download-objects` -- downloads objects from the backend (a low-level method)
 
 > ⚠️ **WARNING**: actions that read from or upload to the repository can safely be run
 > concurrently; however, there are presently no guards in place that would make it safe
@@ -189,13 +190,13 @@ Encrypted repositories require a key and a matching password for every operation
 ## `init` examples
 
 ```bash
-# Unencrypted repository in some/directory. The --encryption none flag disables encryption
+# Unencrypted repository in 'some/directory'. The --encryption none flag disables encryption
 $ replicat init -r some/directory --encryption none
 # Encrypted repository with initial password taken from string.
 # The new key will be printed to stdout
 $ replicat init -r some/directory -p 'password string'
 # Encrypted repository with initial password taken from a file.
-# The new key will be written to path/to/key/file
+# The new key will be written to 'path/to/key/file'
 $ replicat init -r some/directory -P path/to/password/file -o path/to/key/file
 # Specifies the cipher
 $ replicat init -r some/directory -p '...' --encryption.cipher.name chacha20_poly1305
@@ -243,7 +244,6 @@ $ replicat list-snapshots -r some/directory -P path/to/password/file -K path/to/
 $ replicat ls -r some/directory -P path/to/password/file -K path/to/key/file
 ```
 
-
 ## `list-files`/`lf` examples
 
 ```bash
@@ -261,7 +261,7 @@ $ replicat lf -r some/directory \
 ## `restore` examples
 
 ```bash
-# Unlocks the repository and restores the latest versions of all files to target-directory
+# Unlocks the repository and restores the latest versions of all files to 'target-directory'
 $ replicat restore -r some/directory \
     -P path/to/password/file \
     -K path/to/key/file \
@@ -276,7 +276,6 @@ $ replicat restore -r some/directory \
     target-directory
 
 ```
-
 
 ## `add-key` examples
 
@@ -318,23 +317,38 @@ $ replicat delete -r some/directory \
 $ replicat clean -r some/directory -P path/to/password/file -K path/to/key/file
 ```
 
-## `upload` examples
+## `upload-objects` examples
 
 ```bash
-# Uploads files directly to the backend without any additional processing.
+# Uploads local files directly to the repository without any additional processing.
 # File path -> resulting name:
-#   /working/directory/some/file -> some/file
-#   /working/directory/another/file -> another/file
-#   /working/directory/another/directory/another-file -> another/directory/another-file
-#   /absolute/directory/path/with-file -> absolute/directory/path/with-file
-#   /absolute/file -> absolute/file
-/working/directory$ replicat upload -r some:repository \
+#   '/working/directory/some/file' -> 'some/file'
+#   '/working/directory/another/file' -> 'another/file'
+#   '/working/directory/another/directory/another-file' -> 'another/directory/another-file'
+#   '/absolute/directory/path/with-file' -> 'absolute/directory/path/with-file'
+#   '/absolute/file' -> 'absolute/file'
+/working/directory$ replicat upload-objects -r some:repository \
                         some/file \
                         /working/directory/another/directory \
                         /absolute/directory/path \
                         /absolute/file
-# Uploads files that do not yet exist in the repository (only checks the file names)
-$ replicat upload -r some:repository --skip-existing some/file some/directory
+# Uploads local files that do not yet exist in the repository (only checks the file names)
+$ replicat upload-objects -r some:repository --skip-existing some/file some/directory
+```
+
+## `download-objects` examples
+
+```bash
+# Downloads all objects from the repository directly to the current working directory without
+# any additional processing
+$ replicat download-objects -r some:repository
+# Same, but it downloads objects to 'different/directory' instead
+$ replicat download-objects -r some:repository different/directory
+# Same, but it skips objects that already exist locally (only checks the file names)
+$ replicat download-objects -r some:repository --skip-existing different/directory
+# Downloads objects whose names match the -O regex (e.g. all objects below the 'data'
+# directory on the repository) to the current working directory, skipping existing objects
+$ replicat download-objects -r some:repository -O '^data/' -S
 ```
 
 ## Check version
