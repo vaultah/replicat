@@ -359,9 +359,12 @@ class Repository:
         digest_mac = self.props.mac(digest) if self.props.encrypted else digest
         return LocationParts(name=digest.hex(), tag=digest_mac.hex())
 
-    def read_metadata(self, path, /):
-        # TODO: Cache stat result?
-        stat_result = os.stat(path)
+    def read_metadata(self, file):
+        if isinstance(file, int):
+            stat_result = os.fstat(file)
+        else:
+            stat_result = os.stat(file)
+
         return {
             'st_mode': stat_result.st_mode,
             'st_uid': stat_result.st_uid,
@@ -927,6 +930,23 @@ class Repository:
     def _flatten_paths(self, paths):
         return list(utils.fs.flatten_paths(path.resolve(strict=True) for path in paths))
 
+    def _encrypt_snapshot_body(self, snapshot_body):
+        if self.props.encrypted:
+            encrypted_private_data = self.props.encrypt(
+                self.serialize(snapshot_body['data']), self.props.userkey
+            )
+            return {
+                'chunks': self.props.encrypt(
+                    self.serialize(snapshot_body['chunks']),
+                    self.props.derive_shared_subkey(
+                        self.props.hash_digest(encrypted_private_data)
+                    ),
+                ),
+                'data': encrypted_private_data,
+            }
+        else:
+            return snapshot_body
+
     async def snapshot(self, *, paths, note=None, rate_limit=None):
         self.display_status('Collecting files')
         files = self._flatten_paths(paths)
@@ -947,6 +967,7 @@ class Repository:
         )
         chunks_table = {}
         snapshot_files = {}
+        files_metadata = {}
         bytes_tracker = tqdm(
             desc='Data processed',
             unit='B',
@@ -969,12 +990,8 @@ class Repository:
         chunk_producer_executor = ThreadPoolExecutor(
             max_workers=1, thread_name_prefix='chunk-producer'
         )
+        rate_limiter = utils.RateLimiter(rate_limit) if rate_limit is not None else None
         abort = threading.Event()
-
-        if rate_limit is not None:
-            rate_limiter = utils.RateLimiter(rate_limit)
-        else:
-            rate_limiter = None
 
         def _chunk_done(chunk: _SnapshotChunk):
             for file, ranges in state.file_ranges.items():
@@ -992,7 +1009,7 @@ class Repository:
                     snapshot_files[file] = {
                         'path': str(file.resolve()),
                         'chunks': [],
-                        'metadata': self.read_metadata(file),
+                        'metadata': files_metadata[file],
                     }
 
                 snapshot_files[file]['chunks'].append(
@@ -1010,8 +1027,19 @@ class Repository:
 
             bytes_tracker.update(chunk.stream_end - chunk.stream_start)
 
+        def _stream_chunks(files, chunk_size=16_777_216):
+            for path in files:
+                with path.open('rb') as file:
+                    while True:
+                        chunk = file.read(chunk_size)
+                        yield path, chunk
+                        if len(chunk) < chunk_size:
+                            break
+
+                    files_metadata[path] = self.read_metadata(file.fileno())
+
         def _stream_files():
-            for file, source_chunk in utils.fs.stream_files(files):
+            for file, source_chunk in _stream_chunks(files):
                 file_range = state.file_ranges[file]
                 if file_range is not None:
                     start = file_range[0]
@@ -1156,24 +1184,7 @@ class Repository:
                 default=self.default_serialization_hook,
             ),
         )
-
-        if self.props.encrypted:
-            encrypted_private_data = self.props.encrypt(
-                self.serialize(snapshot_body['data']), self.props.userkey
-            )
-            encrypted_snapshot_body = {
-                'chunks': self.props.encrypt(
-                    self.serialize(snapshot_body['chunks']),
-                    self.props.derive_shared_subkey(
-                        self.props.hash_digest(encrypted_private_data)
-                    ),
-                ),
-                'data': encrypted_private_data,
-            }
-        else:
-            encrypted_snapshot_body = snapshot_body
-
-        serialized_snapshot = self.serialize(encrypted_snapshot_body)
+        serialized_snapshot = self.serialize(self._encrypt_snapshot_body(snapshot_body))
         digest = self.props.hash_digest(serialized_snapshot)
         name, tag = self._snapshot_digest_to_location_parts(digest)
         location = self.get_snapshot_location(name=name, tag=tag)

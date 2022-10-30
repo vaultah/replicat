@@ -9,7 +9,6 @@ import pytest
 
 from replicat import exceptions, utils
 from replicat.backends.base import Backend
-from replicat.utils.compat import Random
 
 # TODO: tests for make_main_parser
 
@@ -294,24 +293,6 @@ def test_parse_cli_settings():
         'def',
         '--seventh-trailing',
     ]
-
-
-def test_stream_files(tmp_path):
-    rnd = Random()
-    mapping = {
-        tmp_path / 'a': b'',
-        tmp_path / 'b': rnd.randbytes(1_447),
-        tmp_path / 'c': rnd.randbytes(29),
-        tmp_path / 'd': rnd.randbytes(13),
-    }
-    for path, contents in mapping.items():
-        path.write_bytes(contents)
-
-    pairs = list(utils.fs.stream_files(list(mapping), chunk_size=2_048))
-    assert len(pairs) == 4
-
-    stream_mapping = dict(pairs)
-    assert stream_mapping == mapping
 
 
 def test_iterative_scandir(tmp_path):
