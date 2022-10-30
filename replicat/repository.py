@@ -689,6 +689,46 @@ class Repository:
         )
         return utils.DefaultNamespace(new_key=key)
 
+    def _encrypt_snapshot_body(self, snapshot_body):
+        if self.props.encrypted:
+            encrypted_private_data = self.props.encrypt(
+                self.serialize(snapshot_body['data']), self.props.userkey
+            )
+            encrypted_body = {
+                'chunks': self.props.encrypt(
+                    self.serialize(snapshot_body['chunks']),
+                    self.props.derive_shared_subkey(
+                        self.props.hash_digest(encrypted_private_data)
+                    ),
+                ),
+                'data': encrypted_private_data,
+            }
+        else:
+            encrypted_body = snapshot_body
+
+        return self.serialize(encrypted_body)
+
+    def _decrypt_snapshot_body(self, contents):
+        body = self.deserialize(contents)
+
+        if self.props.encrypted:
+            body['chunks'] = self.deserialize(
+                self.props.decrypt(
+                    body['chunks'],
+                    self.props.derive_shared_subkey(
+                        self.props.hash_digest(body['data'])
+                    ),
+                )
+            )
+            try:
+                data = self.props.decrypt(body['data'], self.props.userkey)
+            except exceptions.DecryptionError:
+                body['data'] = None
+            else:
+                body['data'] = self.deserialize(data)
+
+        return body
+
     def _download_snapshot_threadsafe(self, path, expected_digest, *, loop):
         contents = None
         if self._cache_directory is not None:
@@ -708,28 +748,14 @@ class Repository:
                 logger.info('Caching %s', path)
                 self._store_cached(path, contents)
 
-        body = self.deserialize(contents)
+        logger.info('Decrypting %s', path)
+        body = self._decrypt_snapshot_body(contents)
 
-        if self.props.encrypted:
-            logger.info('Decrypting %s', path)
-            body['chunks'] = self.deserialize(
-                self.props.decrypt(
-                    body['chunks'],
-                    self.props.derive_shared_subkey(
-                        self.props.hash_digest(body['data'])
-                    ),
-                )
+        if body['data'] is None:
+            logger.info(
+                "Decryption of %s failed, but it's not corrupted (different key?)",
+                path,
             )
-            try:
-                data = self.props.decrypt(body['data'], self.props.userkey)
-            except exceptions.DecryptionError:
-                logger.info(
-                    "Decryption of %s failed, but it's not corrupted (different key?)",
-                    path,
-                )
-                body['data'] = None
-            else:
-                body['data'] = self.deserialize(data)
 
         return body
 
@@ -929,23 +955,6 @@ class Repository:
 
     def _flatten_paths(self, paths):
         return list(utils.fs.flatten_paths(path.resolve(strict=True) for path in paths))
-
-    def _encrypt_snapshot_body(self, snapshot_body):
-        if self.props.encrypted:
-            encrypted_private_data = self.props.encrypt(
-                self.serialize(snapshot_body['data']), self.props.userkey
-            )
-            return {
-                'chunks': self.props.encrypt(
-                    self.serialize(snapshot_body['chunks']),
-                    self.props.derive_shared_subkey(
-                        self.props.hash_digest(encrypted_private_data)
-                    ),
-                ),
-                'data': encrypted_private_data,
-            }
-        else:
-            return snapshot_body
 
     async def snapshot(self, *, paths, note=None, rate_limit=None):
         self.display_status('Collecting files')
@@ -1184,7 +1193,7 @@ class Repository:
                 default=self.default_serialization_hook,
             ),
         )
-        serialized_snapshot = self.serialize(self._encrypt_snapshot_body(snapshot_body))
+        serialized_snapshot = self._encrypt_snapshot_body(snapshot_body)
         digest = self.props.hash_digest(serialized_snapshot)
         name, tag = self._snapshot_digest_to_location_parts(digest)
         location = self.get_snapshot_location(name=name, tag=tag)
