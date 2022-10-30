@@ -5,7 +5,6 @@ from pathlib import Path
 from appdirs import user_cache_dir
 
 DEFAULT_CACHE_DIRECTORY = user_cache_dir('replicat', 'replicat')
-DEFAULT_STREAM_CHUNK_SIZE = 16_777_216
 
 
 def iterative_scandir(path, *, follow_symlinks=False):
@@ -29,13 +28,3 @@ def flatten_paths(paths):
             yield from map(Path, iterative_scandir(path, follow_symlinks=True))
         elif path.is_file():
             yield path
-
-
-def stream_files(files, *, chunk_size=DEFAULT_STREAM_CHUNK_SIZE):
-    for path in files:
-        with path.open('rb') as file:
-            while True:
-                chunk = file.read(chunk_size)
-                yield path, chunk
-                if len(chunk) < chunk_size:
-                    break

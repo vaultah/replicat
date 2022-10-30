@@ -38,7 +38,7 @@ class TestHelperMethods:
         assert name == 'GHIJKLMNOPQR'
         assert tag == '0123456789ABCDEF'
 
-    def test_read_metadata(self, local_repo, tmp_path):
+    def test_read_metadata_path(self, local_repo, tmp_path):
         file = tmp_path / 'some_file'
         with file.open('wb'):
             pass
@@ -47,6 +47,23 @@ class TestHelperMethods:
             metadata = local_repo.read_metadata(file)
 
         stat_result = stat_mock.return_value
+        expected_metadata = {
+            'st_mode': stat_result.st_mode,
+            'st_uid': stat_result.st_uid,
+            'st_gid': stat_result.st_gid,
+            'st_size': stat_result.st_size,
+            'st_atime_ns': stat_result.st_atime_ns,
+            'st_mtime_ns': stat_result.st_mtime_ns,
+            'st_ctime_ns': stat_result.st_ctime_ns,
+        }
+        assert metadata == expected_metadata
+
+    def test_read_metadata_fd(self, local_repo, tmp_path):
+        path = tmp_path / 'some_file'
+        with path.open('wb') as file, patch.object(os, 'fstat') as fstat_mock:
+            metadata = local_repo.read_metadata(file.fileno())
+
+        stat_result = fstat_mock.return_value
         expected_metadata = {
             'st_mode': stat_result.st_mode,
             'st_uid': stat_result.st_uid,
