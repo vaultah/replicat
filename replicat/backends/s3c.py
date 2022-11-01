@@ -195,7 +195,12 @@ class S3Compatible(Backend, short_name='S3C'):
         **kwargs,
     ):
         request = self._prepare_request(
-            method, canonical_uri, query=query, payload_digest=payload_digest, **kwargs
+            method,
+            canonical_uri,
+            query=query,
+            payload_digest=payload_digest,
+            headers=headers,
+            **kwargs,
         )
         return await self._client.send(request)
 
@@ -211,7 +216,12 @@ class S3Compatible(Backend, short_name='S3C'):
         **kwargs,
     ):
         request = self._prepare_request(
-            method, canonical_uri, query=query, payload_digest=payload_digest, **kwargs
+            method,
+            canonical_uri,
+            query=query,
+            payload_digest=payload_digest,
+            headers=headers,
+            **kwargs,
         )
         response = await self._client.send(request, stream=True)
         try:
