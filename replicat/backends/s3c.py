@@ -3,7 +3,7 @@ import hashlib
 import hmac
 import logging
 from datetime import datetime
-from urllib.parse import urlencode
+from urllib.parse import quote, urlencode
 from xml.etree.ElementTree import XMLPullParser
 
 import backoff
@@ -133,7 +133,10 @@ class S3Compatible(Backend, short_name='S3C'):
         headers=None,
         **kwargs,
     ):
-        url = self.url + canonical_uri
+        # HTTPX encodes strings before the request, but we need to know
+        # the actual value for signature computation
+        encoded_canonical_uri = quote(canonical_uri)
+        url = self.url + encoded_canonical_uri
         if query:
             query_string = urlencode(sorted(query.items()))
             url += f'?{query_string}'
@@ -155,7 +158,7 @@ class S3Compatible(Backend, short_name='S3C'):
         signed_headers = ";".join(canonical_headers)
         canonical_request = _make_canonical_request(
             method=method,
-            canonical_uri=canonical_uri,
+            canonical_uri=encoded_canonical_uri,
             canonical_query=query_string,
             canonical_headers=_make_canonical_headers(canonical_headers),
             signed_headers=signed_headers,
@@ -195,7 +198,12 @@ class S3Compatible(Backend, short_name='S3C'):
         **kwargs,
     ):
         request = self._prepare_request(
-            method, canonical_uri, query=query, payload_digest=payload_digest, **kwargs
+            method,
+            canonical_uri,
+            query=query,
+            payload_digest=payload_digest,
+            headers=headers,
+            **kwargs,
         )
         return await self._client.send(request)
 
@@ -211,7 +219,12 @@ class S3Compatible(Backend, short_name='S3C'):
         **kwargs,
     ):
         request = self._prepare_request(
-            method, canonical_uri, query=query, payload_digest=payload_digest, **kwargs
+            method,
+            canonical_uri,
+            query=query,
+            payload_digest=payload_digest,
+            headers=headers,
+            **kwargs,
         )
         response = await self._client.send(request, stream=True)
         try:

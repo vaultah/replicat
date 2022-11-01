@@ -3,6 +3,7 @@ import functools
 import logging
 import sys
 from contextlib import suppress
+from urllib.parse import quote
 
 import backoff
 import httpx
@@ -159,7 +160,7 @@ class B2(Backend):
         upload_url, upload_token = await self._get_upload_url_token()
         upload_headers = {
             'authorization': upload_token,
-            'x-bz-file-name': name,
+            'x-bz-file-name': quote(name),
             'content-type': 'application/octet-stream',
             'content-length': str(len(data)),
             'x-bz-content-sha1': 'do_not_verify',  # TODO
@@ -172,7 +173,7 @@ class B2(Backend):
         upload_url, upload_token = await self._get_upload_url_token()
         upload_headers = {
             'authorization': upload_token,
-            'x-bz-file-name': name,
+            'x-bz-file-name': quote(name),
             'content-type': 'application/octet-stream',
             'content-length': str(length),
             'x-bz-content-sha1': 'do_not_verify',  # TODO
