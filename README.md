@@ -310,6 +310,12 @@ $ replicat delete -r some:repository \
     -P path/to/password/file \
     -K path/to/key/file \
     NAME1 NAME2 NAME3 ...
+# Same, but doesn't ask for confirmation
+$ replicat delete -r some:repository \
+    -P path/to/password/file \
+    -K path/to/key/file \
+    NAME1 NAME2 NAME3 ... \
+    --yes
 ```
 
 ## `clean` examples
@@ -368,6 +374,8 @@ $ replicat list-objects -r some:repository -O '^data/'
 ```bash
 # Delete objects by their full paths as returned by list-objects
 $ replicat delete-objects -r some:repository object/path/1 object/path/2 ...
+# Same, but doesn't ask for confirmation
+$ replicat delete-objects -r some:repository object/path/1 object/path/2 ... -y
 ```
 
 ## Check version
