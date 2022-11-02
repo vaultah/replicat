@@ -23,7 +23,7 @@ from functools import cached_property
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from sty import ef
+from sty import ef, fg
 from tqdm import tqdm
 from tqdm.utils import CallbackIOWrapper
 
@@ -131,6 +131,9 @@ class Repository:
 
     def display_status(self, message):
         print(ef.bold + message + ef.rs, file=sys.stderr)
+
+    def display_danger(self, message):
+        print(fg(255, 10, 10) + ef.bold + message + ef.rs + fg.rs, file=sys.stderr)
 
     def _get_cached(self, path):
         assert self._cache_directory is not None
@@ -1376,7 +1379,7 @@ class Repository:
 
         return utils.DefaultNamespace(files=list(files_digests))
 
-    async def delete_snapshots(self, snapshots):
+    async def delete_snapshots(self, snapshots, /, *, confirm=True):
         # TODO: locking
         self.display_status('Loading snapshots')
         to_delete = set()
@@ -1402,6 +1405,14 @@ class Repository:
             raise exceptions.ReplicatError(
                 f'Snapshots {", ".join(remaining_names)} are not available'
             )
+
+        if confirm:
+            parts = ['The following snapshots will be deleted:']
+            parts.extend(f'    {x}' for x in remaining_names)
+            self.display_danger('\n'.join(parts))
+            if input('Proceed? [y/n] ').lower() != 'y':
+                logger.info('Aborting')
+                return
 
         to_delete.difference_update(to_keep)
 
@@ -1709,6 +1720,33 @@ class Repository:
             print(object_path)
 
         return utils.DefaultNamespace(paths=paths)
+
+    async def delete_objects(self, objects_paths, /, *, confirm=True):
+        if confirm:
+            parts = ['The following objects will be deleted:']
+            parts.extend(f'    {x}' for x in objects_paths)
+            self.display_danger('\n'.join(parts))
+            if input('Proceed? [y/n] ').lower() != 'y':
+                logger.info('Aborting')
+                return
+
+        deleted_objects_tracker = tqdm(
+            desc='Objects deleted',
+            unit='',
+            total=len(objects_paths),
+            position=0,
+            disable=self._quiet,
+            leave=True,
+        )
+
+        async def _delete_object(location):
+            await self._delete(location)
+            if self._cache_directory is not None:
+                self._delete_cached(location)
+            deleted_objects_tracker.update()
+
+        with deleted_objects_tracker:
+            await asyncio.gather(*map(_delete_object, objects_paths))
 
     async def close(self):
         try:

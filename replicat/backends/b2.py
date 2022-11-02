@@ -257,7 +257,21 @@ class B2(Backend):
         bucket = await self._get_bucket()
         params = {'bucketId': bucket.id, 'fileName': name}
         headers = {'authorization': self._auth.authorizationToken}
-        await self._client.post(url, json=params, headers=headers)
+
+        try:
+            await self._client.post(url, json=params, headers=headers)
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == httpx.codes.BAD_REQUEST:
+                # NOTE: b2_hide_file documentation lies about the response code.
+                # Also, those codes are not documented
+                try:
+                    decoded_error = e.response.json()
+                except ValueError:
+                    pass
+                else:
+                    if decoded_error.get('code') in ('already_hidden', 'no_such_file'):
+                        return
+            raise
 
     async def close(self):
         with suppress(AttributeError):

@@ -152,6 +152,7 @@ There are several available subcommands:
  - `upload-objects` -- uploads objects to the backend (a low-level method)
  - `download-objects` -- downloads objects from the backend (a low-level method)
  - `list-objects` -- lists objects at the backend (a low-level method)
+ - `delete-objects` -- deletes objects from the backend (a low-level method)
 
 > ⚠️ **WARNING**: actions that read from or upload to the repository can safely be run
 > concurrently; however, there are presently no guards in place that would make it safe
@@ -191,33 +192,33 @@ Encrypted repositories require a key and a matching password for every operation
 ## `init` examples
 
 ```bash
-# Unencrypted repository in 'some/directory'. The --encryption none flag disables encryption
-$ replicat init -r some/directory --encryption none
+# Unencrypted repository 'some:repository'. The --encryption none flag disables encryption
+$ replicat init -r some:repository --encryption none
 # Encrypted repository with initial password taken from string.
 # The new key will be printed to stdout
-$ replicat init -r some/directory -p 'password string'
+$ replicat init -r some:repository -p 'password string'
 # Encrypted repository with initial password taken from a file.
 # The new key will be written to 'path/to/key/file'
-$ replicat init -r some/directory -P path/to/password/file -o path/to/key/file
+$ replicat init -r some:repository -P path/to/password/file -o path/to/key/file
 # Specifies the cipher
-$ replicat init -r some/directory -p '...' --encryption.cipher.name chacha20_poly1305
+$ replicat init -r some:repository -p '...' --encryption.cipher.name chacha20_poly1305
 # Specifies the cipher name and parameters
-$ replicat init -r some/directory \
+$ replicat init -r some:repository \
     -p '...' \
     --encryption.cipher.name aes_gcm \
     --encryption.cipher.key_bits 128
 # Specifies the KDF name and parameters (for the key)
-$ replicat init -r some/directory \
+$ replicat init -r some:repository \
     -p '...' \
     --encryption.kdf.name scrypt \
     --encryption.kdf.n 1048576
 # Specifies the chunking parameters
-$ replicat init -r some/directory \
+$ replicat init -r some:repository \
     -p '...' \
     --chunking.min-length 128_000 \
     --chunking.max-length 2_048_000
 # Equivalent (dashes in argument names are converted to underscores)
-$ replicat init -r some/directory \
+$ replicat init -r some:repository \
     -p '...' \
     --chunking.min_length 128_000 \
     --chunking.max_length 2_048_000
@@ -228,7 +229,7 @@ $ replicat init -r some/directory \
 ```bash
 # Unlocks the repository, uploads provided files in encrypted chunks,
 # using no more than 10 concurrent connections, creating a snapshot
-$ replicat snapshot -r some/directory \
+$ replicat snapshot -r some:repository \
     -P path/to/password/file \
     -K path/to/key/file \
     -c 10 \
@@ -240,20 +241,20 @@ $ replicat snapshot -r some/directory \
 
 ```bash
 # Unlocks the repository and lists all of the snapshots
-$ replicat list-snapshots -r some/directory -P path/to/password/file -K path/to/key/file
+$ replicat list-snapshots -r some:repository -P path/to/password/file -K path/to/key/file
 # Equivalent
-$ replicat ls -r some/directory -P path/to/password/file -K path/to/key/file
+$ replicat ls -r some:repository -P path/to/password/file -K path/to/key/file
 ```
 
 ## `list-files`/`lf` examples
 
 ```bash
 # Unlocks the repository and lists all versions of all the files
-$ replicat list-files -r some/directory -P path/to/password/file -K path/to/key/file
+$ replicat list-files -r some:repository -P path/to/password/file -K path/to/key/file
 # Equivalent
-$ replicat lf -r some/directory -P path/to/password/file -K path/to/key/file
+$ replicat lf -r some:repository -P path/to/password/file -K path/to/key/file
 # Only lists files with paths matching the -F regex
-$ replicat lf -r some/directory \
+$ replicat lf -r some:repository \
     -P path/to/password/file \
     -K path/to/key/file \
     -F '\.(jpg|text)$'
@@ -263,13 +264,13 @@ $ replicat lf -r some/directory \
 
 ```bash
 # Unlocks the repository and restores the latest versions of all files to 'target-directory'
-$ replicat restore -r some/directory \
+$ replicat restore -r some:repository \
     -P path/to/password/file \
     -K path/to/key/file \
     target-directory
 # Unlocks the repository and restores the latest versions of files with paths matching the
 # -F regex in snapshots matching the -S regex to 'target-directory'
-$ replicat restore -r some/directory \
+$ replicat restore -r some:repository \
     -P path/to/password/file \
     -K path/to/key/file \
     -F '\.(jpg|text)$' \
@@ -282,18 +283,18 @@ $ replicat restore -r some/directory \
 
 ```bash
 # Unlocks the repository and creates an independent key, which will be printed to stdout
-$ replicat add-key -r some/directory -P path/to/password/file -K path/to/key/file
+$ replicat add-key -r some:repository -P path/to/password/file -K path/to/key/file
 # Unlocks the repository and creates a shared key (i.e. with shared secrets)
-$ replicat add-key -r some/directory -P path/to/password/file -K path/to/key/file --shared
+$ replicat add-key -r some:repository -P path/to/password/file -K path/to/key/file --shared
 # Unlocks the repository and creates an independent key, which will be written
 # to path/to/new/key/file
-$ replicat add-key -r some/directory \
+$ replicat add-key -r some:repository \
     -P path/to/password/file \
     -K path/to/key/file \
     -o path/to/new/key/file
 # Unlocks the repository and creates an independent key with some custom settings
 # (cipher params as well as chunking and hashing settings are repository-wide)
-$ replicat add-key -r some/directory \
+$ replicat add-key -r some:repository \
     -P path/to/password/file \
     -K path/to/key/file \
     --encryption.kdf.name scrypt \
@@ -305,7 +306,7 @@ $ replicat add-key -r some/directory \
 ```bash
 # Unlocks the repository and deletes snapshots by name (as returned by ls/list-snapshots).
 # Chunks that aren't referenced by any other snapshot will be deleted automatically
-$ replicat delete -r some/directory \
+$ replicat delete -r some:repository \
     -P path/to/password/file \
     -K path/to/key/file \
     NAME1 NAME2 NAME3 ...
@@ -315,7 +316,7 @@ $ replicat delete -r some/directory \
 
 ```bash
 # Unlocks the repository and deletes all chunks that are not referenced by any snapshot
-$ replicat clean -r some/directory -P path/to/password/file -K path/to/key/file
+$ replicat clean -r some:repository -P path/to/password/file -K path/to/key/file
 ```
 
 ## `upload-objects` examples
@@ -348,7 +349,7 @@ $ replicat download-objects -r some:repository different/directory
 # Same, but it skips objects that already exist locally (only checks the file names)
 $ replicat download-objects -r some:repository --skip-existing different/directory
 # Downloads objects whose names match the -O regex (e.g. all objects below the 'data'
-# directory on the repository) to the current working directory, skipping existing objects
+# directory in the repository) to the current working directory, skipping existing objects
 $ replicat download-objects -r some:repository -O '^data/' -S
 ```
 
@@ -357,8 +358,16 @@ $ replicat download-objects -r some:repository -O '^data/' -S
 ```bash
 # List all objects currently in the repository
 $ replicat list-objects -r some:repository
-# Only list objects whose names match the -O regex (e.g. all objects below the 'data' directory)
+# Only list objects whose names match the -O regex (e.g. all objects below the 'data'
+# directory in the repository)
 $ replicat list-objects -r some:repository -O '^data/'
+```
+
+## `delete-objects` examples
+
+```bash
+# Delete objects by their full paths as returned by list-objects
+$ replicat delete-objects -r some:repository object/path/1 object/path/2 ...
 ```
 
 ## Check version

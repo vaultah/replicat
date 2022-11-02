@@ -796,7 +796,7 @@ class TestDeleteSnapshots:
         second_snapshot_paths = [
             local_repo._chunk_digest_to_location(x) for x in second_snapshot.chunks
         ]
-        await local_repo.delete_snapshots([second_snapshot.name])
+        await local_repo.delete_snapshots([second_snapshot.name], confirm=False)
 
         assert all(map(local_backend.exists, first_snapshot_paths))
         assert not any(map(local_backend.exists, second_snapshot_paths))
@@ -838,7 +838,7 @@ class TestDeleteSnapshots:
         second_snapshot_paths = [
             local_repo._chunk_digest_to_location(x) for x in second_snapshot.chunks
         ]
-        await local_repo.delete_snapshots([second_snapshot.name])
+        await local_repo.delete_snapshots([second_snapshot.name], confirm=False)
 
         assert all(map(local_backend.exists, first_snapshot_paths))
         assert not any(map(local_backend.exists, second_snapshot_paths))
@@ -879,7 +879,7 @@ class TestDeleteSnapshots:
         second_snapshot_paths = [
             local_repo._chunk_digest_to_location(x) for x in second_snapshot.chunks
         ]
-        await local_repo.delete_snapshots([second_snapshot.name])
+        await local_repo.delete_snapshots([second_snapshot.name], confirm=False)
 
         assert all(map(local_backend.exists, first_snapshot_paths))
         assert all(map(local_backend.exists, second_snapshot_paths))
@@ -923,7 +923,7 @@ class TestDeleteSnapshots:
             local_repo._chunk_digest_to_location(x) for x in second_snapshot.chunks
         ]
 
-        await local_repo.delete_snapshots([second_snapshot.name])
+        await local_repo.delete_snapshots([second_snapshot.name], confirm=False)
 
         assert not any(map(local_backend.exists, first_snapshot_paths))
         assert not any(map(local_backend.exists, second_snapshot_paths))
@@ -948,7 +948,7 @@ class TestDeleteSnapshots:
             local_repo._chunk_digest_to_location(x) for x in snapshot.chunks
         ]
         await local_repo.snapshot(paths=[file])
-        await local_repo.delete_snapshots([snapshot.name])
+        await local_repo.delete_snapshots([snapshot.name], confirm=False)
         assert all(map(local_backend.exists, snapshot_paths))
         assert not local_backend.exists(snapshot.location)
 
@@ -971,7 +971,7 @@ class TestDeleteSnapshots:
             local_repo._chunk_digest_to_location(x) for x in snapshot.chunks
         ]
 
-        await local_repo.delete_snapshots([snapshot.name])
+        await local_repo.delete_snapshots([snapshot.name], confirm=False)
 
         assert not any(map(local_backend.exists, snapshot_paths))
         assert not local_backend.exists(snapshot.location)
@@ -1312,7 +1312,7 @@ class TestListObjects:
         )
 
     @pytest.mark.asyncio
-    async def test_all(self, local_backend, local_repo, tmp_path):
+    async def test_all(self, local_repo):
         result = await local_repo.list_objects()
         assert set(result.paths) == {
             'file',
@@ -1321,9 +1321,28 @@ class TestListObjects:
         }
 
     @pytest.mark.asyncio
-    async def test_regex_filter(self, local_backend, local_repo, tmp_path):
+    async def test_regex_filter(self, local_repo):
         result = await local_repo.list_objects(object_regex='^very|^file')
         assert set(result.paths) == {
             'file',
             'very/very/nested/file',
         }
+
+
+class TestDeleteObjects:
+    @pytest.fixture(autouse=True)
+    def populate_backend(self, local_backend):
+        local_backend.upload('file', b'<backend data>')
+        local_backend.upload('nested/file', b'<nested backend data>')
+        local_backend.upload(
+            'very/very/nested/file', b'<very very nested backend data>'
+        )
+
+    @pytest.mark.asyncio
+    async def test_ok(self, local_backend, local_repo):
+        await local_repo.delete_objects(
+            ['file', 'very/very/nested/file'], confirm=False
+        )
+        assert not local_backend.exists('file')
+        assert not local_backend.exists('very/very/nested/file')
+        assert local_backend.exists('nested/file')

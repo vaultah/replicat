@@ -211,6 +211,7 @@ def make_main_parser(*parent_parsers):
 
     delete_parser = subparsers.add_parser('delete', parents=parent_parsers)
     delete_parser.add_argument('snapshot', nargs='+')
+    delete_parser.add_argument('-y', '--yes', action='store_true')
 
     subparsers.add_parser('clean', parents=parent_parsers)
 
@@ -247,6 +248,12 @@ def make_main_parser(*parent_parsers):
     list_objects_parser.add_argument(
         '-O', '--objects-regex', help='Regex to filter objects'
     )
+
+    delete_objects_parser = subparsers.add_parser(
+        'delete-objects', parents=parent_parsers
+    )
+    delete_objects_parser.add_argument('object', nargs='+')
+    delete_objects_parser.add_argument('-y', '--yes', action='store_true')
     return parser
 
 
