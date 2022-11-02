@@ -66,11 +66,8 @@ async def _cmd_handler(args, unknown, error):
         )
     elif args.action == 'list-objects':
         await repository.list_objects(object_regex=args.objects_regex)
-<<<<<<< HEAD
     elif args.action == 'delete-objects':
         await repository.delete_objects(args.object, confirm=not args.yes)
-=======
->>>>>>> main
     elif args.action == 'add-key':
         if args.shared:
             await repository.unlock(password=args.password, key=args.key)
