@@ -64,6 +64,8 @@ async def _cmd_handler(args, unknown, error):
             rate_limit=args.rate_limit,
             skip_existing=args.skip_existing,
         )
+    elif args.action == 'list-objects':
+        await repository.list_objects(object_regex=args.objects_regex)
     elif args.action == 'add-key':
         if args.shared:
             await repository.unlock(password=args.password, key=args.key)

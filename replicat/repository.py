@@ -772,10 +772,11 @@ class Repository:
         )
         future_to_path = {}
         loop = asyncio.get_running_loop()
+        snapshot_re = re.compile(snapshot_regex) if snapshot_regex is not None else None
 
         def _download_snapshot(path):
             name, tag = self.parse_snapshot_location(path)
-            if snapshot_regex is not None and re.search(snapshot_regex, name) is None:
+            if snapshot_re is not None and snapshot_re.search(name) is None:
                 logger.info('Skipping %s (does not match the filter)', path)
                 return
 
@@ -905,6 +906,7 @@ class Repository:
         }
         columns_widths = {}
         files = []
+        files_re = re.compile(files_regex) if files_regex is not None else None
 
         self.display_status('Loading snapshots')
         async for snapshot_path, snapshot_body in self._load_snapshots(
@@ -916,9 +918,8 @@ class Repository:
                 continue
 
             for file_data in snapshot_data['files']:
-                if files_regex is not None:
-                    if re.search(files_regex, file_data['path']) is None:
-                        continue
+                if files_re is not None and files_re.search(file_data['path']) is None:
+                    continue
 
                 row = {}
                 for column, getter in columns_getters.items():
@@ -1245,6 +1246,7 @@ class Repository:
         glock = threading.Lock()
         flocks = {}
         flocks_refcounts = {}
+        files_re = re.compile(files_regex) if files_regex is not None else None
 
         chunks_references = defaultdict(list)
         files_digests = {}
@@ -1326,12 +1328,9 @@ class Repository:
                 if (file_path := file_data['path']) in files_digests:
                     continue
 
-                if files_regex is not None:
-                    if re.search(files_regex, file_path) is None:
-                        logger.info(
-                            'Skipping %s (does not match the filter)', file_path
-                        )
-                        continue
+                if files_re is not None and files_re.search(file_path) is None:
+                    logger.info('Skipping %s (does not match the filter)', file_path)
+                    continue
 
                 restore_to = Path(path, *Path(file_path).parts[1:]).resolve()
                 files_metadata[file_path] = (restore_to, file_data['metadata'])
@@ -1621,7 +1620,7 @@ class Repository:
         write_mode = 'xb' if skip_existing else 'wb'
         objects = []
 
-        self.display_status('Loading objects')
+        self.display_status('Loading object list')
         async for object_path in self._aiter(self.backend.list_files, object_prefix):
             if object_re is not None and object_re.search(object_path) is None:
                 logger.info('Skipping %s (does not match the filter)', object_path)
@@ -1690,6 +1689,26 @@ class Repository:
             await asyncio.gather(*map(_download_object, objects))
 
         return utils.DefaultNamespace(objects=objects)
+
+    async def list_objects(
+        self,
+        *,
+        object_prefix='',
+        object_regex=None,
+    ):
+        object_re = re.compile(object_regex) if object_regex is not None else None
+        paths = []
+
+        self.display_status('Loading object list')
+        async for object_path in self._aiter(self.backend.list_files, object_prefix):
+            if object_re is not None and object_re.search(object_path) is None:
+                logger.info('Skipping %s (does not match the filter)', object_path)
+                continue
+
+            paths.append(object_path)
+            print(object_path)
+
+        return utils.DefaultNamespace(paths=paths)
 
     async def close(self):
         try:
