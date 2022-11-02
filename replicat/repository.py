@@ -971,12 +971,11 @@ class Repository:
             chunk_counter=0,
             # Preallocate this dictionary to avoid concurrent insertions
             file_ranges=dict.fromkeys(files),
-            files_finished=set(),
             current_file=None,
         )
         chunks_table = {}
         snapshot_files = {}
-        files_metadata = {}
+        finished_files_metadata = {}
         bytes_tracker = tqdm(
             desc='Data processed',
             unit='B',
@@ -1003,6 +1002,8 @@ class Repository:
         abort = threading.Event()
 
         def _chunk_done(chunk: _SnapshotChunk):
+            finished_files_count = 0
+
             for file, ranges in state.file_ranges.items():
                 if ranges is None:
                     continue
@@ -1011,17 +1012,18 @@ class Repository:
                 if file_start > chunk.stream_end or file_end < chunk.stream_start:
                     continue
 
-                part_start = max(file_start - chunk.stream_start, 0)
-                part_end = min(file_end, chunk.stream_end) - chunk.stream_start
-
-                if file not in snapshot_files:
-                    snapshot_files[file] = {
+                try:
+                    file_data = snapshot_files[file]
+                except KeyError:
+                    file_data = snapshot_files[file] = {
                         'path': str(file.resolve()),
                         'chunks': [],
-                        'metadata': files_metadata[file],
+                        'metadata': None,
                     }
 
-                snapshot_files[file]['chunks'].append(
+                part_start = max(file_start - chunk.stream_start, 0)
+                part_end = min(file_end, chunk.stream_end) - chunk.stream_start
+                file_data['chunks'].append(
                     {
                         'range': [part_start, part_end],
                         'index': chunk.index,
@@ -1029,58 +1031,49 @@ class Repository:
                     }
                 )
 
-                if chunk.stream_end >= file_end and file in state.files_finished:
-                    # File completed
-                    logger.info('File %r fully processed', str(file))
-                    finished_tracker.update()
+                if chunk.stream_end >= file_end:
+                    if (metadata := finished_files_metadata.get(file)) is not None:
+                        # File completed
+                        file_data['metadata'] = metadata
+                        logger.info('File %r fully processed', str(file))
+                        finished_files_count += 1
 
+            finished_tracker.update(finished_files_count)
             bytes_tracker.update(chunk.stream_end - chunk.stream_start)
 
-        def _stream_chunks(files, chunk_size=16_777_216):
+        def _stream_files(chunk_size=16_777_216):
             for path in files:
+                # First chunk from this file
+                if state.current_file is not None:
+                    # Produce padding for the previous file
+                    # TODO: let the chunker generate the padding?
+                    if alignment := self.props.chunker.alignment:
+                        cstart, cend = state.file_ranges[state.current_file]
+                        if padding_length := -(cend - cstart) % alignment:
+                            state.bytes_with_padding += padding_length
+                            yield bytes(padding_length)
+
+                    logger.info('Finished streaming file %r', str(state.current_file))
+
+                logger.info('Started streaming file %r', str(path))
+                state.current_file = path
+                start = state.bytes_with_padding
+
                 with path.open('rb') as file:
                     while True:
                         chunk = file.read(chunk_size)
-                        yield path, chunk
+                        state.bytes_with_padding += len(chunk)
+                        state.file_ranges[path] = (start, state.bytes_with_padding)
+                        yield chunk
                         if len(chunk) < chunk_size:
                             break
 
-                    files_metadata[path] = self.read_metadata(file.fileno())
-
-        def _stream_files():
-            for file, source_chunk in _stream_chunks(files):
-                file_range = state.file_ranges[file]
-                if file_range is not None:
-                    start = file_range[0]
-                else:
-                    # First chunk from this file
-                    if state.current_file is not None:
-                        # Produce padding for the previous file
-                        # TODO: let the chunker generate the padding?
-                        if alignment := self.props.chunker.alignment:
-                            cstart, cend = state.file_ranges[state.current_file]
-                            if padding_length := -(cend - cstart) % alignment:
-                                state.bytes_with_padding += padding_length
-                                yield bytes(padding_length)
-
-                        logger.info(
-                            'Finished streaming file %r', str(state.current_file)
-                        )
-                        state.files_finished.add(state.current_file)
-
-                    logger.info('Started streaming file %r', str(file))
-                    state.current_file = file
-                    start = state.bytes_with_padding
-
-                state.bytes_with_padding += len(source_chunk)
-                state.file_ranges[file] = (start, state.bytes_with_padding)
-                yield source_chunk
+                    finished_files_metadata[path] = self.read_metadata(file.fileno())
 
             if state.current_file is not None:
                 logger.info(
                     'Finished streaming file %r, stopping', str(state.current_file)
                 )
-                state.files_finished.add(state.current_file)
 
         def _chunk_producer(queue_timeout=0.025):
             # Will run in a different thread, because most of these actions release GIL
