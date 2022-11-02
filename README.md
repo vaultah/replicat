@@ -149,12 +149,12 @@ There are several available subcommands:
  - `add-key` -- creates a new key for the encrypted repository
  - `delete` -- deletes snapshots by their names
  - `clean` -- performs garbage collection
- - `upload-objects` -- uploads objects to the backend (a low-level method)
- - `download-objects` -- downloads objects from the backend (a low-level method)
- - `list-objects` -- lists objects at the backend (a low-level method)
- - `delete-objects` -- deletes objects from the backend (a low-level method)
+ - `upload-objects` -- uploads objects to the backend (a low-level command)
+ - `download-objects` -- downloads objects from the backend (a low-level command)
+ - `list-objects` -- lists objects at the backend (a low-level command)
+ - `delete-objects` -- deletes objects from the backend (a low-level command)
 
-> ⚠️ **WARNING**: actions that read from or upload to the repository can safely be run
+> ⚠️ **WARNING**: commands that read from or upload to the repository can safely be run
 > concurrently; however, there are presently no guards in place that would make it safe
 > for you to run destructive actions (`delete`, `clean`) concurrently with those actions
 > *unless* you use independent keys (see the explanation above). I do plan to implement them
@@ -263,7 +263,7 @@ $ replicat lf -r some:repository \
 ## `restore` examples
 
 ```bash
-# Unlocks the repository and restores the latest versions of all files to 'target-directory'
+# Unlocks the repository and restores the latest versions of all files to target directory
 $ replicat restore -r some:repository \
     -P path/to/password/file \
     -K path/to/key/file \
@@ -347,14 +347,14 @@ $ replicat upload-objects -r some:repository --skip-existing some/file some/dire
 ## `download-objects` examples
 
 ```bash
-# Downloads all objects from the repository directly to the current working directory without
-# any additional processing
+# Downloads all objects from the repository directly to the current working directory
+# without any additional processing
 $ replicat download-objects -r some:repository
 # Same, but it downloads objects to 'different/directory' instead
 $ replicat download-objects -r some:repository different/directory
 # Same, but it skips objects that already exist locally (only checks the file names)
 $ replicat download-objects -r some:repository --skip-existing different/directory
-# Downloads objects whose names match the -O regex (e.g. all objects below the 'data'
+# Downloads objects whose paths match the -O regex (e.g. all objects inside of the 'data'
 # directory in the repository) to the current working directory, skipping existing objects
 $ replicat download-objects -r some:repository -O '^data/' -S
 ```
@@ -362,9 +362,9 @@ $ replicat download-objects -r some:repository -O '^data/' -S
 ## `list-objects` examples
 
 ```bash
-# List all objects currently in the repository
+# Lists all objects currently in the repository
 $ replicat list-objects -r some:repository
-# Only list objects whose names match the -O regex (e.g. all objects below the 'data'
+# Only lists objects whose paths match the -O regex (e.g. all objects inside of the 'data'
 # directory in the repository)
 $ replicat list-objects -r some:repository -O '^data/'
 ```
@@ -372,7 +372,7 @@ $ replicat list-objects -r some:repository -O '^data/'
 ## `delete-objects` examples
 
 ```bash
-# Delete objects by their full paths as returned by list-objects
+# Deletes objects by their full paths as returned by list-objects
 $ replicat delete-objects -r some:repository object/path/1 object/path/2 ...
 # Same, but doesn't ask for confirmation
 $ replicat delete-objects -r some:repository object/path/1 object/path/2 ... -y
