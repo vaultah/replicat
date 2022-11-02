@@ -1407,9 +1407,9 @@ class Repository:
             )
 
         if confirm:
-            parts = ['The following snapshots will be deleted:']
-            parts.extend(f'    {x}' for x in remaining_names)
-            self.display_danger('\n'.join(parts))
+            message_parts = ['The following snapshots will be deleted:']
+            message_parts.extend(f'    {x}' for x in remaining_names)
+            self.display_danger('\n'.join(message_parts))
             if input('Proceed? [y/n] ').lower() != 'y':
                 logger.info('Aborting')
                 return
@@ -1723,9 +1723,9 @@ class Repository:
 
     async def delete_objects(self, objects_paths, /, *, confirm=True):
         if confirm:
-            parts = ['The following objects will be deleted:']
-            parts.extend(f'    {x}' for x in objects_paths)
-            self.display_danger('\n'.join(parts))
+            message_parts = ['The following objects will be deleted:']
+            message_parts.extend(f'    {x}' for x in objects_paths)
+            self.display_danger('\n'.join(message_parts))
             if input('Proceed? [y/n] ').lower() != 'y':
                 logger.info('Aborting')
                 return
