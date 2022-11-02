@@ -151,6 +151,7 @@ There are several available subcommands:
  - `clean` -- performs garbage collection
  - `upload-objects` -- uploads objects to the backend (a low-level method)
  - `download-objects` -- downloads objects from the backend (a low-level method)
+ - `list-objects` -- lists objects at the backend (a low-level method)
 
 > ⚠️ **WARNING**: actions that read from or upload to the repository can safely be run
 > concurrently; however, there are presently no guards in place that would make it safe
@@ -349,6 +350,15 @@ $ replicat download-objects -r some:repository --skip-existing different/directo
 # Downloads objects whose names match the -O regex (e.g. all objects below the 'data'
 # directory on the repository) to the current working directory, skipping existing objects
 $ replicat download-objects -r some:repository -O '^data/' -S
+```
+
+## `list-objects` examples
+
+```bash
+# List all objects currently in the repository
+$ replicat download-objects -r some:repository
+# Only list objects whose names match the -O regex (e.g. all objects below the 'data' directory)
+$ replicat download-objects -r some:repository -O '^data/'
 ```
 
 ## Check version

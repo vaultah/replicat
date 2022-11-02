@@ -1175,7 +1175,7 @@ class TestClean:
         assert all(map(local_backend.exists, chunks_paths))
 
 
-class TestUpload:
+class TestUploadObjects:
     @pytest.fixture(autouse=True)
     def change_cwd(self, tmp_path):
         before = os.getcwd()
@@ -1251,7 +1251,7 @@ class TestUpload:
         assert backend.download('files/file') == b'<old data>'
 
 
-class TestDownload:
+class TestDownloadObjects:
     @pytest.fixture(autouse=True)
     def populate_backend(self, local_backend):
         local_backend.upload('file', b'<backend data>')
@@ -1299,4 +1299,31 @@ class TestDownload:
         assert {x for x in target_path.rglob('*') if x.is_file()} == {
             target_path / 'file',
             target_path / 'very/very/nested/file',
+        }
+
+
+class TestListObjects:
+    @pytest.fixture(autouse=True)
+    def populate_backend(self, local_backend):
+        local_backend.upload('file', b'<backend data>')
+        local_backend.upload('nested/file', b'<nested backend data>')
+        local_backend.upload(
+            'very/very/nested/file', b'<very very nested backend data>'
+        )
+
+    @pytest.mark.asyncio
+    async def test_all(self, local_backend, local_repo, tmp_path):
+        result = await local_repo.list_objects()
+        assert set(result.paths) == {
+            'file',
+            'nested/file',
+            'very/very/nested/file',
+        }
+
+    @pytest.mark.asyncio
+    async def test_regex_filter(self, local_backend, local_repo, tmp_path):
+        result = await local_repo.list_objects(object_regex='^very|^file')
+        assert set(result.paths) == {
+            'file',
+            'very/very/nested/file',
         }
