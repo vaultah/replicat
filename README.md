@@ -356,9 +356,9 @@ $ replicat download-objects -r some:repository -O '^data/' -S
 
 ```bash
 # List all objects currently in the repository
-$ replicat download-objects -r some:repository
+$ replicat list-objects -r some:repository
 # Only list objects whose names match the -O regex (e.g. all objects below the 'data' directory)
-$ replicat download-objects -r some:repository -O '^data/'
+$ replicat list-objects -r some:repository -O '^data/'
 ```
 
 ## Check version
