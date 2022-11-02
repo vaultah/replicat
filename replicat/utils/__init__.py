@@ -236,9 +236,6 @@ def make_main_parser(*parent_parsers):
     download_objects_parser.add_argument(
         '-O', '--objects-regex', help='Regex to filter objects'
     )
-    download_objects_parser.add_argument(
-        '-L', '--limit-rate', dest='rate_limit', type=human_to_bytes
-    )
     download_objects_parser.add_argument('-S', '--skip-existing', action='store_true')
 
     list_objects_parser = subparsers.add_parser('list-objects', parents=parent_parsers)

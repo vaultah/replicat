@@ -61,7 +61,6 @@ async def _cmd_handler(args, unknown, error):
         await repository.download_objects(
             path=args.path,
             object_regex=args.objects_regex,
-            rate_limit=args.rate_limit,
             skip_existing=args.skip_existing,
         )
     elif args.action == 'list-objects':
