@@ -3,6 +3,7 @@ on:
   workflow_dispatch:
 
 jobs:
+  # 3.8 builds
   build-38-windows:
     uses: ./.github/workflows/build-windows.yml
     with:
@@ -18,6 +19,7 @@ jobs:
     with:
       python-version: '3.8'
 
+  # 3.9 builds
   build-39-windows:
     uses: ./.github/workflows/build-windows.yml
     with:
@@ -33,6 +35,7 @@ jobs:
     with:
       python-version: '3.9'
 
+  # 3.10 builds
   build-310-windows:
     uses: ./.github/workflows/build-windows.yml
     with:
@@ -47,6 +50,22 @@ jobs:
     uses: ./.github/workflows/build-macos.yml
     with:
       python-version: '3.10'
+
+  # 3.11 builds
+  build-311-windows:
+    uses: ./.github/workflows/build-windows.yml
+    with:
+      python-version: '3.11'
+
+  build-311-linux:
+    uses: ./.github/workflows/build-linux.yml
+    with:
+      python-version: '3.11'
+
+  build-311-macos:
+    uses: ./.github/workflows/build-macos.yml
+    with:
+      python-version: '3.11'
 
   build-sdist:
     runs-on: ubuntu-latest
@@ -72,6 +91,9 @@ jobs:
       - build-310-windows
       - build-310-linux
       - build-310-macos
+      - build-311-windows
+      - build-311-linux
+      - build-311-macos
       - build-sdist
     runs-on: ubuntu-latest
     steps:
