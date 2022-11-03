@@ -17,7 +17,6 @@ jobs:
       - run: ./scripts/lint --check-only --install
 
   # 3.8 builds
-
   build-38-windows:
     needs: lint
     uses: ./.github/workflows/build-windows.yml
@@ -37,7 +36,6 @@ jobs:
       python-version: '3.8'
 
   # 3.8 tests
-
   test-38-windows:
     needs: build-38-windows
     runs-on: windows-latest
@@ -84,7 +82,6 @@ jobs:
       - run: python -m pytest --pyargs replicat.tests
 
   # 3.9 builds
-
   build-39-windows:
     needs: lint
     uses: ./.github/workflows/build-windows.yml
@@ -104,7 +101,6 @@ jobs:
       python-version: '3.9'
 
   # 3.9 tests
-
   test-39-windows:
     needs: build-39-windows
     runs-on: windows-latest
@@ -151,7 +147,6 @@ jobs:
       - run: python -m pytest --pyargs replicat.tests
 
   # 3.10 builds
-
   build-310-windows:
     needs: lint
     uses: ./.github/workflows/build-windows.yml
@@ -171,7 +166,6 @@ jobs:
       python-version: '3.10'
 
   # 3.10 tests
-
   test-310-windows:
     needs: build-310-windows
     runs-on: windows-latest
@@ -218,7 +212,6 @@ jobs:
       - run: python -m pytest --pyargs replicat.tests
 
   # 3.11 builds
-
   build-311-windows:
     needs: lint
     uses: ./.github/workflows/build-windows.yml
@@ -238,7 +231,6 @@ jobs:
       python-version: '3.11'
 
   # 3.11 tests
-
   test-311-windows:
     needs: build-311-windows
     runs-on: windows-latest
