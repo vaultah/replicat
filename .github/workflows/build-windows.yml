@@ -14,7 +14,7 @@ jobs:
   build-wheel:
     runs-on: windows-latest
     outputs:
-      name: ${{ steps.whl_name.outputs.whl_name }}
+      name: ${{ steps.output-wheel-name.outputs.wheel_name }}
     steps:
       - name: Checkout
         uses: actions/checkout@v2
@@ -30,8 +30,8 @@ jobs:
       - run: python -m build --wheel
       - run: echo "WHEEL_NAME=$(basename $(ls dist/*.whl))" >> $GITHUB_ENV
         shell: bash
-      - id: whl_name
-        run: echo "::set-output name=whl_name::${{ env.WHEEL_NAME }}"
+      - id: output-wheel-name
+        run: echo "wheel_name=${{ env.WHEEL_NAME }}" >> $GITHUB_OUTPUT
         shell: bash
       - uses: actions/upload-artifact@v2
         with:
