@@ -799,31 +799,38 @@ class Repository:
                 continue
             yield future_to_path[task], body
 
+    def _extract_snapshot_size(self, snapshot_data):
+        files = snapshot_data['files']
+        ranges_it = (chunk['range'] for file in files for chunk in file['chunks'])
+        return sum(r[1] - r[0] for r in ranges_it)
+
+    def _extract_snapshot_note(self, snapshot_data):
+        return snapshot_data.get('note')
+
+    def _extract_snapshot_files_count(self, snapshot_data):
+        return len(snapshot_data['files'])
+
+    def _extract_snapshot_utc_timestamp(self, snapshot_data):
+        return datetime.fromisoformat(snapshot_data['utc_timestamp'])
+
     def _format_snapshot_name(self, *, path, chunks, data):
         return self.parse_snapshot_location(path).name
 
     def _format_snapshot_note(self, *, path, chunks, data):
-        return data and data.get('note')
+        return data and self._extract_snapshot_note(data)
 
     def _format_snapshot_utc_timestamp(self, *, path, chunks, data):
-        if data is None or (value := data.get('utc_timestamp')) is None:
+        if data is None:
             return None
 
-        dt = datetime.fromisoformat(value)
+        dt = self._extract_snapshot_utc_timestamp(data)
         return dt.isoformat(sep=' ', timespec='seconds')
 
     def _format_snapshot_files_count(self, *, path, chunks, data):
-        if data is None or (files := data.get('files')) is None:
-            return None
-
-        return len(files)
+        return data and self._extract_snapshot_files_count(data)
 
     def _format_snaphot_size(self, *, path, chunks, data):
-        if data is None or (files := data.get('files')) is None:
-            return None
-
-        ranges_it = (chunk['range'] for file in files for chunk in file['chunks'])
-        return utils.bytes_to_human(sum(r[1] - r[0] for r in ranges_it))
+        return data and utils.bytes_to_human(self._extract_snapshot_size(data))
 
     async def list_snapshots(self, *, snapshot_regex=None):
         columns_getters = {
@@ -1379,27 +1386,48 @@ class Repository:
 
         return utils.DefaultNamespace(files=list(files_digests))
 
+    def _format_snapshot_info_brief(self, snapshot_data):
+        parts = []
+        if (note := self._extract_snapshot_note(snapshot_data)) is not None:
+            parts.append(note)
+
+        dt = self._extract_snapshot_utc_timestamp(snapshot_data)
+        files_count = self._extract_snapshot_files_count(snapshot_data)
+        size = self._extract_snapshot_size(snapshot_data)
+        parts.append('from ' + dt.isoformat(sep=' ', timespec='seconds'))
+        parts.append(
+            'with {} {}'.format(files_count, 'file' if files_count == 1 else 'files')
+        )
+        parts.append(utils.bytes_to_human(size))
+        return ', '.join(parts)
+
     async def delete_snapshots(self, snapshots, /, *, confirm=True):
         # TODO: locking
         self.display_status('Loading snapshots')
-        to_delete = set()
-        to_keep = set()
+        chunks_to_delete = set()
+        chunks_to_keep = set()
         snapshots_locations = set()
         remaining_names = set(snapshots)
+        danger_message_parts = ['The following snapshots will be deleted:']
 
         async for path, body in self._load_snapshots():
             name = self.parse_snapshot_location(path).name
             if name in remaining_names:
-                if body['data'] is None:
+                if (snapshot_data := body['data']) is None:
                     raise exceptions.ReplicatError(
                         f'Cannot delete snapshot {name} (different key)'
                     )
 
-                to_delete.update(body['chunks'])
+                chunks_to_delete.update(body['chunks'])
                 snapshots_locations.add(path)
                 remaining_names.discard(name)
+                danger_message_parts.append(
+                    '    {} ({})'.format(
+                        name, self._format_snapshot_info_brief(snapshot_data)
+                    )
+                )
             else:
-                to_keep.update(body['chunks'])
+                chunks_to_keep.update(body['chunks'])
 
         if remaining_names:
             raise exceptions.ReplicatError(
@@ -1407,14 +1435,12 @@ class Repository:
             )
 
         if confirm:
-            message_parts = ['The following snapshots will be deleted:']
-            message_parts.extend(f'    {x}' for x in remaining_names)
-            self.display_danger('\n'.join(message_parts))
+            self.display_danger('\n'.join(danger_message_parts))
             if input('Proceed? [y/n] ').lower() != 'y':
                 logger.info('Aborting')
                 return
 
-        to_delete.difference_update(to_keep)
+        chunks_to_delete.difference_update(chunks_to_keep)
 
         finished_snapshots_tracker = tqdm(
             desc='Snapshots deleted',
@@ -1437,7 +1463,7 @@ class Repository:
         finished_chunks_tracker = tqdm(
             desc='Unreferenced chunks deleted',
             unit='',
-            total=len(to_delete),
+            total=len(chunks_to_delete),
             position=0,
             disable=self._quiet,
             leave=True,
@@ -1449,7 +1475,7 @@ class Repository:
             finished_chunks_tracker.update()
 
         with finished_chunks_tracker:
-            await asyncio.gather(*map(_delete_chunk, to_delete))
+            await asyncio.gather(*map(_delete_chunk, chunks_to_delete))
 
     async def clean(self):
         # TODO: locking
@@ -1462,7 +1488,7 @@ class Repository:
         )
         to_delete = set()
 
-        self.display_status('Fetching chunks list')
+        self.display_status('Fetching chunk list')
         async for location in self._aiter(self.backend.list_files, self.CHUNK_PREFIX):
             if location in referenced_locations:
                 logger.info('Chunk %s is referenced, skipping', location)
