@@ -402,21 +402,39 @@ The format is `-r local:some/local/path` or simply `-r some/local/path`.
 
 ## B2
 
-The format is `-r b2:bucket-id` or `-r b2:bucket-name`. This backend uses B2 native API.
-The required arguments are `--key-id` (keyId) and `--application-key` (applicationKey).
-Sign into your Backblaze B2 account to generate them. You can use master application key
-or a normal application key (which can also be restricted to a single bucket).
+The format is `-r b2:bucket-id` or `-r b2:bucket-name`. This backend uses B2 native API and
+requires
+
+ - key ID (`--key-id` argument or `B2_KEY_ID` environment variable)
+ - application key (`--application-key` argument or `B2_APPLICATION_KEY` environment variable)
+
+Sign into your Backblaze B2 account to generate them. Note that you can use the master application
+key or a normal (non-master) application key (which can also be restricted to a single bucket).
+Refer to [official B2 docs](https://www.backblaze.com/b2/docs/application_keys.html) for more
+information.
 
 ## S3
 
-The format is `-r s3:bucket-name`. Requires arguments `--key-id`, `--access-key`, and
-`--region`.
+The format is `-r s3:bucket-name`. Requires
+
+ - AWS key ID (`--key-id` argument or `S3_KEY_ID` environment variable)
+ - AWS access key (`--access-key` argument or `S3_ACCESS_KEY` environment variable)
+ - region (`--region` argument or `S3_REGION` environment variable)
 
 ## S3-compatible
 
-The format is `-r s3c:bucket-name`. Requires arguments `--key-id`, `--access-key`,
-`--region`, and `--host`. `--host` must *not* include the scheme. The default scheme is
-`https`, but can be changed via the `--scheme` argument.
+The format is `-r s3c:bucket-name`. Requires
+
+ - key ID (`--key-id` argument or `S3C_KEY_ID` environment variable)
+ - access key (`--access-key` argument or `S3C_ACCESS_KEY` environment variable)
+ - host (`--host` argument or `S3C_HOST` environment variable)
+ - region (`--region` argument or `S3C_REGION` environment variable)
+
+Host must *not* include the scheme. The default scheme is `https`, but can be changed via the
+`--scheme` argument (or, equivalently, the `S3C_SCHEME` environment variable).
+
+You can use S3-compatible backend to connect to [B2](https://www.backblaze.com/b2/docs/s3_compatible_api.html),
+S3, and many other cloud storage providers that offer S3-compatible API.
 
 # Custom backends
 
