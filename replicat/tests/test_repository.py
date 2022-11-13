@@ -2,7 +2,7 @@ import os
 import re
 import threading
 import time
-from unittest.mock import ANY, patch
+from unittest.mock import ANY, call, patch
 
 import pytest
 
@@ -673,12 +673,36 @@ class TestRestore:
         second_file.parent.mkdir(exist_ok=True, parents=True)
         second_file.write_bytes(second_data)
 
-        snapshot = await local_repo.snapshot(paths=[first_file, second_file])
-        result = await local_repo.restore(snapshot_regex=snapshot.name, path=tmp_path)
+        # GH-36
+        third_data = rnd.randbytes(256) * 16
+        third_file = tmp_path / 'directory/third_file'
+        third_file.parent.mkdir(exist_ok=True, parents=True)
+        third_file.write_bytes(third_data)
 
-        assert set(result.files) == {str(first_file), str(second_file)}
-        assert tmp_path.joinpath(*first_file.parts[1:]).read_bytes() == first_data
-        assert tmp_path.joinpath(*second_file.parts[1:]).read_bytes() == second_data
+        snapshot = await local_repo.snapshot(
+            paths=[first_file, second_file, third_file]
+        )
+        with patch.object(local_repo, 'restore_metadata') as restore_metadata_mock:
+            result = await local_repo.restore(
+                snapshot_regex=snapshot.name, path=tmp_path
+            )
+
+        assert set(result.files) == {str(first_file), str(second_file), str(third_file)}
+        first_restore_path = tmp_path.joinpath(*first_file.parts[1:])
+        assert first_restore_path.read_bytes() == first_data
+        second_restore_path = tmp_path.joinpath(*second_file.parts[1:])
+        assert second_restore_path.read_bytes() == second_data
+        third_restore_path = tmp_path.joinpath(*third_file.parts[1:])
+        assert third_restore_path.read_bytes() == third_data
+
+        restore_metadata_mock.assert_has_calls(
+            [
+                call(first_restore_path, ANY),
+                call(second_restore_path, ANY),
+                call(third_restore_path, ANY),
+            ],
+            any_order=True,
+        )
 
     @pytest.mark.asyncio
     async def test_unencrypted_data(self, local_repo, tmp_path):
@@ -702,11 +726,32 @@ class TestRestore:
         second_file.parent.mkdir(exist_ok=True, parents=True)
         second_file.write_bytes(second_data)
 
-        await local_repo.snapshot(paths=[first_file, second_file])
-        result = await local_repo.restore(path=tmp_path)
-        assert set(result.files) == {str(first_file), str(second_file)}
-        assert tmp_path.joinpath(*first_file.parts[1:]).read_bytes() == first_data
-        assert tmp_path.joinpath(*second_file.parts[1:]).read_bytes() == second_data
+        # GH-36
+        third_data = rnd.randbytes(256) * 16
+        third_file = tmp_path / 'directory/third_file'
+        third_file.parent.mkdir(exist_ok=True, parents=True)
+        third_file.write_bytes(third_data)
+
+        await local_repo.snapshot(paths=[first_file, second_file, third_file])
+        with patch.object(local_repo, 'restore_metadata') as restore_metadata_mock:
+            result = await local_repo.restore(path=tmp_path)
+
+        assert set(result.files) == {str(first_file), str(second_file), str(third_file)}
+        first_restore_path = tmp_path.joinpath(*first_file.parts[1:])
+        assert first_restore_path.read_bytes() == first_data
+        second_restore_path = tmp_path.joinpath(*second_file.parts[1:])
+        assert second_restore_path.read_bytes() == second_data
+        third_restore_path = tmp_path.joinpath(*third_file.parts[1:])
+        assert third_restore_path.read_bytes() == third_data
+
+        restore_metadata_mock.assert_has_calls(
+            [
+                call(first_restore_path, ANY),
+                call(second_restore_path, ANY),
+                call(third_restore_path, ANY),
+            ],
+            any_order=True,
+        )
 
     @pytest.mark.asyncio
     async def test_defaults_to_latest_file_version(self, local_repo, tmp_path):
