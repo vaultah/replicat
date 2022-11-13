@@ -1307,14 +1307,19 @@ class Repository:
 
             logger.info('Chunk %s referenced %d time(s)', location, len(refs))
             decrypted_view = memoryview(decrypted_contents)
-            writer_futures = (
-                writer.submit(_write_chunk_ref, ref, decrypted_view) for ref in refs
-            )
+            writer_futures = []
+            referenced_paths = set()
+
+            for ref in refs:
+                writer_futures.append(
+                    writer.submit(_write_chunk_ref, ref, decrypted_view)
+                )
+                referenced_paths.add(ref[0])
+
             for future in concurrent.futures.as_completed(writer_futures):
                 future.result()
 
-            for ref in refs:
-                file_path = ref[0]
+            for file_path in referenced_paths:
                 with glock:
                     digests = files_digests[file_path]
                     digests.remove(digest)
