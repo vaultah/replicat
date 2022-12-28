@@ -1,6 +1,6 @@
+import hashlib
 import os
 from collections import Counter
-from hashlib import blake2b, scrypt
 
 import pytest
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM, ChaCha20Poly1305
@@ -104,7 +104,9 @@ class TestScrypt:
         adapter = adapters.scrypt(length=17, n=4, r=8, p=1)
         params = adapter.generate_derivation_params()
         key = adapter.derive(b'<password>', params=params)
-        assert key == scrypt(b'<password>', n=4, r=8, p=1, dklen=17, salt=params)
+        assert key == hashlib.scrypt(
+            b'<password>', n=4, r=8, p=1, dklen=17, salt=params
+        )
 
     def test_derive_with_context(self):
         adapter = adapters.scrypt(length=17, n=4, r=8, p=1)
@@ -112,7 +114,7 @@ class TestScrypt:
         key = adapter.derive(
             b'<password>', context=b'<additional context>', params=params
         )
-        assert key == scrypt(
+        assert key == hashlib.scrypt(
             b'<password>',
             n=4,
             r=8,
@@ -127,14 +129,17 @@ class TestBlake2B:
         adapter = adapters.blake2b(length=17)
         params = adapter.generate_derivation_params()
         assert isinstance(params, bytes)
-        assert len(params) == blake2b.SALT_SIZE
+        assert len(params) == hashlib.blake2b.SALT_SIZE
 
     def test_derive_without_context(self):
         adapter = adapters.blake2b(length=17)
         params = adapter.generate_derivation_params()
         key = adapter.derive(b'<key material>', params=params)
         assert (
-            key == blake2b(key=b'<key material>', salt=params, digest_size=17).digest()
+            key
+            == hashlib.blake2b(
+                key=b'<key material>', salt=params, digest_size=17
+            ).digest()
         )
 
     def test_derive_with_context(self):
@@ -145,7 +150,7 @@ class TestBlake2B:
         )
         assert (
             key
-            == blake2b(
+            == hashlib.blake2b(
                 b'<additional context>',
                 key=b'<key material>',
                 salt=params,
@@ -157,18 +162,112 @@ class TestBlake2B:
         adapter = adapters.blake2b(length=17)
         params = adapter.generate_mac_params()
         assert isinstance(params, bytes)
-        assert len(params) == blake2b.MAX_KEY_SIZE
+        assert len(params) == hashlib.blake2b.MAX_KEY_SIZE
 
     def test_mac(self):
         adapter = adapters.blake2b(length=17)
         params = adapter.generate_mac_params()
         mac = adapter.mac(b'<data>', params=params)
-        assert mac == blake2b(b'<data>', digest_size=17, key=params).digest()
+        assert mac == hashlib.blake2b(b'<data>', digest_size=17, key=params).digest()
 
     def test_digest(self):
         adapter = adapters.blake2b(length=17)
         digest = adapter.digest(b'<data>')
-        assert digest == blake2b(b'<data>', digest_size=17).digest()
+        assert digest == hashlib.blake2b(b'<data>', digest_size=17).digest()
+
+    def test_incremental_hasher(self):
+        adapter = adapters.blake2b(length=17)
+        incremental = adapter.incremental_hasher()
+        incremental.feed(b'>:')
+        incremental.feed(b'^')
+        incremental.feed(b']')
+        assert incremental.digest() == hashlib.blake2b(b'>:^]', digest_size=17).digest()
+
+
+class TestSha2:
+    @pytest.mark.parametrize(
+        'bits, hasher_class',
+        [
+            (224, hashlib.sha224),
+            (256, hashlib.sha256),
+            (384, hashlib.sha384),
+            (512, hashlib.sha512),
+        ],
+    )
+    def test_digest(self, bits, hasher_class):
+        adapter = adapters.sha2(bits=bits)
+        digest = adapter.digest(b'<data>')
+        assert digest == hasher_class(b'<data>').digest()
+
+    @pytest.mark.parametrize('bits', [255, 513, None])
+    def test_unsupported_bits(self, bits):
+        with pytest.raises(ValueError):
+            adapters.sha2(bits=bits)
+
+    def test_default(self):
+        adapter = adapters.sha2()
+        digest = adapter.digest(b'<data>')
+        assert digest == hashlib.sha256(b'<data>').digest()
+
+    @pytest.mark.parametrize(
+        'bits, hasher_class',
+        [
+            (224, hashlib.sha224),
+            (256, hashlib.sha256),
+            (384, hashlib.sha384),
+            (512, hashlib.sha512),
+        ],
+    )
+    def test_incremental_hasher(self, bits, hasher_class):
+        adapter = adapters.sha2(bits=bits)
+        incremental = adapter.incremental_hasher()
+        incremental.feed(b'>:')
+        incremental.feed(b'^')
+        incremental.feed(b'|')
+        assert incremental.digest() == hasher_class(b'>:^|').digest()
+
+
+class TestSha3:
+    @pytest.mark.parametrize(
+        'bits, hasher_class',
+        [
+            (224, hashlib.sha3_224),
+            (256, hashlib.sha3_256),
+            (384, hashlib.sha3_384),
+            (512, hashlib.sha3_512),
+        ],
+    )
+    def test_digest(self, bits, hasher_class):
+        adapter = adapters.sha3(bits=bits)
+        digest = adapter.digest(b'<data>')
+        assert digest == hasher_class(b'<data>').digest()
+
+    @pytest.mark.parametrize('bits', [255, 513, None])
+    def test_unsupported_bits(self, bits):
+        with pytest.raises(ValueError):
+            adapters.sha3(bits=bits)
+
+    def test_default(self):
+        adapter = adapters.sha3()
+        digest = adapter.digest(b'<data>')
+        assert digest == hashlib.sha3_256(b'<data>').digest()
+
+    @pytest.mark.parametrize(
+        'bits, hasher_class',
+        [
+            (224, hashlib.sha3_224),
+            (256, hashlib.sha3_256),
+            (384, hashlib.sha3_384),
+            (512, hashlib.sha3_512),
+        ],
+    )
+    def test_incremental_hasher(self, bits, hasher_class):
+        adapter = adapters.sha3(bits=bits)
+        incremental = adapter.incremental_hasher()
+        incremental.feed(b'[;')
+        incremental.feed(b'_')
+        incremental.feed(b';]')
+        assert incremental.digest() == hasher_class(b'[;_;]').digest()
 
 
 class TestGCLMULChunker:

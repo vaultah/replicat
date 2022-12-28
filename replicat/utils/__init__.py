@@ -321,7 +321,15 @@ def parse_cli_settings(args_list):
 
 def adapter_from_config(name, **kwargs):
     adapter_type = getattr(adapters, name)
-    bound_args = inspect.signature(adapter_type).bind(**kwargs)
+    signature = inspect.signature(adapter_type)
+
+    try:
+        bound_args = signature.bind(**kwargs)
+    except TypeError as e:
+        raise exceptions.ReplicatError(
+            f'Invalid configuration for adapter {name}'
+        ) from e
+
     bound_args.apply_defaults()
     adapter_args = bound_args.arguments
     return adapter_type, adapter_args

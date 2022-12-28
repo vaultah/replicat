@@ -1,4 +1,5 @@
 import asyncio
+import bisect
 import collections.abc
 import concurrent.futures
 import dataclasses
@@ -14,14 +15,14 @@ import re
 import sys
 import threading
 import time
-from collections import defaultdict, namedtuple
+from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager, contextmanager
 from datetime import datetime
 from decimal import Decimal
 from functools import cached_property
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, ByteString, Dict, Iterator, List, NamedTuple, Optional
 
 from sty import ef, fg
 from tqdm import tqdm
@@ -32,23 +33,48 @@ from .utils.adapters import (
     ChunkerAdapter,
     CipherAdapter,
     HashAdapter,
+    IncrementalHasher,
     KDFAdapter,
     MACAdapter,
 )
 from .utils.compat import Random
 
 logger = logging.getLogger(__name__)
-LocationParts = namedtuple('LocationParts', ['name', 'tag'])
 
 
-@dataclasses.dataclass(frozen=True)
-class _SnapshotChunk:
+class LocationParts(NamedTuple):
+    name: str
+    tag: str
+
+
+# dataclasses are hilariously slow when all you need is an
+# immutable typed thing with __init__ and attribute access
+class _SnapshotChunk(NamedTuple):
     contents: bytes
     index: int
     location: str
     stream_start: int
     stream_end: int
     counter: int
+
+
+@dataclasses.dataclass
+class _SnapshotFile:
+    path: str
+    stream_start: int
+    stream_end: int
+    metadata: Optional[Dict[str, Any]] = None
+    digest: Optional[bytes] = None
+
+
+@dataclasses.dataclass
+class _SnapshotState:
+    bytes_with_padding: int = 0
+    bytes_chunked: int = 0
+    bytes_reused: int = 0
+    chunk_counter: int = 0
+    current_file: Optional[_SnapshotFile] = None
+    files: List[_SnapshotFile] = dataclasses.field(default_factory=list)
 
 
 @dataclasses.dataclass(repr=False, frozen=True)
@@ -62,25 +88,28 @@ class RepositoryProps:
     private: Optional[Dict[str, Any]] = None
 
     @cached_property
-    def encrypted(self):
+    def encrypted(self) -> bool:
         return self.cipher is not None
 
-    def hash_digest(self, data):
+    def hash_digest(self, data: bytes) -> bytes:
         return self.hasher.digest(data)
 
-    def encrypt(self, data, key):
+    def incremental_hasher(self) -> IncrementalHasher:
+        return self.hasher.incremental_hasher()
+
+    def encrypt(self, data: bytes, key: bytes) -> bytes:
         assert self.encrypted
         return self.cipher.encrypt(data, key)
 
-    def decrypt(self, data, key):
+    def decrypt(self, data: bytes, key: bytes) -> bytes:
         assert self.encrypted
         return self.cipher.decrypt(data, key)
 
-    def mac(self, data):
+    def mac(self, data: bytes) -> bytes:
         assert self.encrypted
         return self.authenticator.mac(data, params=self.private['mac_params'])
 
-    def derive_shared_subkey(self, ctx):
+    def derive_shared_subkey(self, ctx: bytes) -> bytes:
         assert self.encrypted
         return self.shared_kdf.derive(
             self.private['shared_key'],
@@ -88,7 +117,7 @@ class RepositoryProps:
             params=self.private['shared_kdf_params'],
         )
 
-    def chunkify(self, it):
+    def chunkify(self, it: Iterator[ByteString]) -> Iterator[bytes]:
         params = self.private['chunker_params'] if self.encrypted else None
         return self.chunker(it, params=params)
 
@@ -964,29 +993,21 @@ class Repository:
                 sep='\t',
             )
 
-    def _flatten_paths(self, paths):
+    def _flatten_resolve_paths(self, paths):
         return list(utils.fs.flatten_paths(path.resolve(strict=True) for path in paths))
 
     async def snapshot(self, *, paths, note=None, rate_limit=None):
         self.display_status('Collecting files')
-        files = self._flatten_paths(paths)
+        files = self._flatten_resolve_paths(paths)
         logger.info('Found %d files', len(files))
         # Small files are more likely to change than big files, read them quickly
         # and bundle them together
         files.sort(key=lambda file: (file.stat().st_size, str(file)))
 
-        state = utils.DefaultNamespace(
-            bytes_with_padding=0,
-            bytes_chunked=0,
-            bytes_reused=0,
-            chunk_counter=0,
-            # Preallocate this dictionary to avoid concurrent insertions
-            file_ranges=dict.fromkeys(files),
-            current_file=None,
-        )
+        state = _SnapshotState()
         chunks_table = {}
         snapshot_files = {}
-        finished_files_metadata = {}
+
         bytes_tracker = tqdm(
             desc='Data processed',
             unit='B',
@@ -1014,26 +1035,25 @@ class Repository:
 
         def _chunk_done(chunk: _SnapshotChunk):
             finished_files_count = 0
+            bisect_point = bisect.bisect_left(state.files, (chunk.stream_end + 1,))
 
-            for file, ranges in state.file_ranges.items():
-                if ranges is None:
-                    continue
-
-                file_start, file_end = ranges
-                if file_start > chunk.stream_end or file_end < chunk.stream_start:
-                    continue
+            for index in range(bisect_point - 1, -1, -1):
+                _, file = state.files[index]
+                if file.stream_end < chunk.stream_start:
+                    break
 
                 try:
-                    file_data = snapshot_files[file]
+                    file_data = snapshot_files[file.path]
                 except KeyError:
-                    file_data = snapshot_files[file] = {
-                        'path': str(file.resolve()),
+                    file_data = snapshot_files[file.path] = {
+                        'path': file.path,
                         'chunks': [],
+                        'digest': None,
                         'metadata': None,
                     }
 
-                part_start = max(file_start - chunk.stream_start, 0)
-                part_end = min(file_end, chunk.stream_end) - chunk.stream_start
+                part_start = max(file.stream_start - chunk.stream_start, 0)
+                part_end = min(file.stream_end, chunk.stream_end) - chunk.stream_start
                 file_data['chunks'].append(
                     {
                         'range': [part_start, part_end],
@@ -1042,48 +1062,59 @@ class Repository:
                     }
                 )
 
-                if chunk.stream_end >= file_end:
-                    if (metadata := finished_files_metadata.get(file)) is not None:
-                        # File completed
-                        file_data['metadata'] = metadata
-                        logger.info('File %r fully processed', str(file))
-                        finished_files_count += 1
+                if chunk.stream_end >= file.stream_end and file.digest is not None:
+                    # File completed
+                    file_data['digest'] = file.digest
+                    file_data['metadata'] = file.metadata
+                    logger.info('File %r fully processed', file.path)
+                    finished_files_count += 1
 
             finished_tracker.update(finished_files_count)
             bytes_tracker.update(chunk.stream_end - chunk.stream_start)
 
         def _stream_files(chunk_size=16_777_216):
             for path in files:
-                # First chunk from this file
-                if state.current_file is not None:
+                if (prev_file := state.current_file) is not None:
                     # Produce padding for the previous file
                     # TODO: let the chunker generate the padding?
                     if alignment := self.props.chunker.alignment:
-                        cstart, cend = state.file_ranges[state.current_file]
-                        if padding_length := -(cend - cstart) % alignment:
+                        padding_length = (
+                            -(prev_file.stream_end - prev_file.stream_start) % alignment
+                        )
+                        if padding_length:
                             state.bytes_with_padding += padding_length
                             yield bytes(padding_length)
 
-                    logger.info('Finished streaming file %r', str(state.current_file))
+                    logger.info('Finished streaming file %r', prev_file.path)
 
                 logger.info('Started streaming file %r', str(path))
-                state.current_file = path
-                start = state.bytes_with_padding
 
-                with path.open('rb') as file:
+                file = _SnapshotFile(
+                    path=str(path),
+                    stream_start=state.bytes_with_padding,
+                    stream_end=state.bytes_with_padding,
+                )
+                state.current_file = file
+                state.files.append((file.stream_start, file))
+                hasher = self.props.incremental_hasher()
+
+                with path.open('rb') as source_file:
                     while True:
-                        chunk = file.read(chunk_size)
+                        chunk = source_file.read(chunk_size)
                         state.bytes_with_padding += len(chunk)
-                        state.file_ranges[path] = (start, state.bytes_with_padding)
+                        file.stream_end = state.bytes_with_padding
+                        hasher.feed(chunk)
                         yield chunk
+
                         if len(chunk) < chunk_size:
                             break
 
-                    finished_files_metadata[path] = self.read_metadata(file.fileno())
+                    file.digest = hasher.digest()
+                    file.metadata = self.read_metadata(source_file.fileno())
 
             if state.current_file is not None:
                 logger.info(
-                    'Finished streaming file %r, stopping', str(state.current_file)
+                    'Finished streaming file %r, stopping', state.current_file.path
                 )
 
         def _chunk_producer(queue_timeout=0.025):

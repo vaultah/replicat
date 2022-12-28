@@ -390,9 +390,11 @@ class TestSnapshot:
             note='<associated note>',
         )
 
+        # Check that it was successfully uploaded
         snapshots = list(local_backend.list_files('snapshots'))
         assert snapshots == [result.location]
 
+        # Check that it was correctly encrypted and serialized
         encrypted_body = local_repo.deserialize(local_backend.download(result.location))
         assert encrypted_body.keys() == {'chunks', 'data'}
         assert result.chunks == local_repo.deserialize(
@@ -407,45 +409,52 @@ class TestSnapshot:
             local_repo.props.decrypt(encrypted_body['data'], local_repo.props.userkey)
         )
 
+        # Check the table of (padded) chunks, both order and digests
         expected_order = sorted(
             file_contents.items(), key=lambda x: (len(x[1]), x[0].name)
         )
-        # Add padding
-        stream = []
-        for _, data in expected_order[:-1]:
-            stream.append(data + bytes(-len(data) % 4))
+        stream = [data + bytes(-len(data) % 4) for _, data in expected_order[:-1]]
         stream.append(expected_order[-1][1])
 
-        expected_digests_it = map(
+        expected_chunk_digests_it = map(
             local_repo.props.hash_digest, local_repo.props.chunkify(stream)
         )
-        # Check the insertion order
-        assert result.chunks == list(dict.fromkeys(expected_digests_it))
+        assert result.chunks == list(dict.fromkeys(expected_chunk_digests_it))
 
-        assert result.data['note'] == '<associated note>'
-
+        # Check that the files were added correctly
         snapshot_files = result.data['files']
         assert len(file_contents) == len(snapshot_files)
-
         snapshot_files.sort(key=lambda x: x['path'])
-        restored_files = []
+        original_digests = [
+            local_repo.props.hash_digest(x) for x in file_contents.values()
+        ]
+        snapshot_digests = [x['digest'] for x in snapshot_files]
+        assert snapshot_digests == original_digests
+
+        # Check that the original files can be reconstructed from the snapshot
+        reconstructed_files = []
 
         for file_data in snapshot_files:
             contents = b''
             file_chunks = sorted(file_data['chunks'], key=lambda x: x['counter'])
 
             for chunk_data in file_chunks:
-                digest = result.chunks[chunk_data['index']]
-                chunk_location = local_repo._chunk_digest_to_location(digest)
+                chunk_digest = result.chunks[chunk_data['index']]
+                chunk_location = local_repo._chunk_digest_to_location(chunk_digest)
                 chunk_bytes = local_repo.props.decrypt(
                     local_backend.download(chunk_location),
-                    local_repo.props.derive_shared_subkey(digest),
+                    local_repo.props.derive_shared_subkey(chunk_digest),
                 )
                 contents += chunk_bytes[chunk_data['range'][0] : chunk_data['range'][1]]
 
-            restored_files.append(contents)
+            reconstructed_files.append(contents)
 
-        assert restored_files == [data for _, data in sorted(file_contents.items())]
+        assert reconstructed_files == [
+            data for _, data in sorted(file_contents.items())
+        ]
+
+        # Check the associated information
+        assert result.data['note'] == '<associated note>'
 
     @pytest.mark.asyncio
     async def test_unencrypted_data(self, local_backend, local_repo, tmp_path):
@@ -486,12 +495,14 @@ class TestSnapshot:
             note='<associated note>',
         )
 
+        # Check that it was successfully uploaded
         snapshots = list(local_backend.list_files('snapshots'))
         snapshot_location = local_repo.get_snapshot_location(
             name=result.name, tag=result.tag
         )
         assert snapshots == [snapshot_location]
 
+        # Check that it was correctly serialized
         snapshot_body = local_repo.deserialize(
             local_backend.download(snapshot_location)
         )
@@ -499,13 +510,11 @@ class TestSnapshot:
         assert result.chunks == snapshot_body['chunks']
         assert result.data == snapshot_body['data']
 
+        # Check the table of (padded) chunks, both order and digests
         expected_order = sorted(
             file_contents.items(), key=lambda x: (len(x[1]), x[0].name)
         )
-        # Add padding
-        stream = []
-        for _, data in expected_order[:-1]:
-            stream.append(data + bytes(-len(data) % 4))
+        stream = [data + bytes(-len(data) % 4) for _, data in expected_order[:-1]]
         stream.append(expected_order[-1][1])
 
         expected_digests_it = map(
@@ -514,13 +523,18 @@ class TestSnapshot:
         # Check the insertion order
         assert result.chunks == list(dict.fromkeys(expected_digests_it))
 
-        assert result.data['note'] == '<associated note>'
-
+        # Check that the files were added correctly
         snapshot_files = result.data['files']
         assert len(file_contents) == len(snapshot_files)
-
         snapshot_files.sort(key=lambda x: x['path'])
-        restored_files = []
+        original_digests = [
+            local_repo.props.hash_digest(x) for x in file_contents.values()
+        ]
+        snapshot_digests = [x['digest'] for x in snapshot_files]
+        assert snapshot_digests == original_digests
+
+        # Check that the original files can be reconstructed from the snapshot
+        reconstructed_files = []
 
         for snapshot_data in snapshot_files:
             contents = b''
@@ -532,9 +546,14 @@ class TestSnapshot:
                 chunk_bytes = local_backend.download(chunk_location)
                 contents += chunk_bytes[chunk_data['range'][0] : chunk_data['range'][1]]
 
-            restored_files.append(contents)
+            reconstructed_files.append(contents)
 
-        assert restored_files == [data for _, data in sorted(file_contents.items())]
+        assert reconstructed_files == [
+            data for _, data in sorted(file_contents.items())
+        ]
+
+        # Check the associated information
+        assert result.data['note'] == '<associated note>'
 
     @pytest.mark.asyncio
     async def test_encrypted_deduplicated_references(self, local_repo, tmp_path):
