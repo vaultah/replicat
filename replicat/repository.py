@@ -1610,7 +1610,7 @@ class Repository:
 
     async def upload_objects(self, paths, *, rate_limit=None, skip_existing=False):
         self.display_status('Collecting files')
-        files = self._flatten_paths(paths)
+        files = self._flatten_resolve_paths(paths)
         if not files:
             logger.info('No files found, nothing to do')
             return
