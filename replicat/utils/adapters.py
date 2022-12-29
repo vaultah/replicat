@@ -63,9 +63,11 @@ class MACAdapter(ABC):
 
 
 class IncrementalHasher(ABC):
+    @abstractmethod
     def feed(self, data: bytes) -> None:
         return None
 
+    @abstractmethod
     def digest(self) -> bytes:
         return b''
 
