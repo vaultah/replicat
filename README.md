@@ -244,6 +244,13 @@ $ replicat snapshot -r some:repository \
 $ replicat list-snapshots -r some:repository -P path/to/password/file -K path/to/key/file
 # Equivalent
 $ replicat ls -r some:repository -P path/to/password/file -K path/to/key/file
+# List snapshots with ids that match any of the regexes passed via the -S/--snapshot-regex flag.
+# In this example, we'll only list snapshots that start with 123456 OR include substring abcdef
+$ replicat ls -r some:repository \
+    -P path/to/password/file \
+    -K path/to/key/file \
+    -S '^123456' \
+    -S 'abcdef'
 ```
 
 ## `list-files`/`lf` examples
@@ -253,11 +260,15 @@ $ replicat ls -r some:repository -P path/to/password/file -K path/to/key/file
 $ replicat list-files -r some:repository -P path/to/password/file -K path/to/key/file
 # Equivalent
 $ replicat lf -r some:repository -P path/to/password/file -K path/to/key/file
-# Only lists files with paths matching the -F regex
+# Only list files with paths that match any of the regexes passed via the -F/--file-regex flag
+# (in this example, PNGs and text files) IF they are included in snapshots that match the
+# -S regex(es) (i.e., snapshots that start with '1234beef')
 $ replicat lf -r some:repository \
     -P path/to/password/file \
     -K path/to/key/file \
-    -F '\.(jpg|text)$'
+    -F '\.t[e]?xt$' \
+    -F '\.png$' \
+    -S '^1234beef'
 ```
 
 ## `restore` examples
@@ -268,13 +279,15 @@ $ replicat restore -r some:repository \
     -P path/to/password/file \
     -K path/to/key/file \
     target-directory
-# Unlocks the repository and restores the latest versions of files with paths matching the
-# -F regex in snapshots matching the -S regex to 'target-directory'
+# Unlocks the repository and restores the latest versions of files that match any of the
+# -F regex(es) from snapshots that match any of the -S regex(es)
 $ replicat restore -r some:repository \
     -P path/to/password/file \
     -K path/to/key/file \
-    -F '\.(jpg|text)$' \
+    -F '\.jpg$' \
+    -F '^/root' \
     -S 'abcdef' \
+    -S '12345' \
     target-directory
 
 ```

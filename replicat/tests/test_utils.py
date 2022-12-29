@@ -295,6 +295,18 @@ def test_parse_cli_settings():
     ]
 
 
+@pytest.mark.parametrize(
+    'patterns, expected_combined',
+    [
+        ([], ''),
+        (['a'], 'a'),
+        (['^a', '^b', 'c$'], '^a|^b|c$'),
+    ],
+)
+def test_combine_regexes(patterns, expected_combined):
+    assert utils.combine_regexes(patterns) == expected_combined
+
+
 def test_iterative_scandir(tmp_path):
     (tmp_path / 'A/B/C/D').mkdir(parents=True)
     (tmp_path / 'A/B/C/D/somefile').touch()
