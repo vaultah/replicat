@@ -247,7 +247,7 @@ def make_main_parser(*parent_parsers):
     )
     list_files_parser.add_argument(
         '-F',
-        '--files-regex',
+        '--file-regex',
         help='Regex to filter files (can be specified more than once '
         'to include files matching ANY of the given regexes)',
         action='append',
@@ -282,7 +282,7 @@ def make_main_parser(*parent_parsers):
     )
     restore_parser.add_argument(
         '-F',
-        '--files-regex',
+        '--file-regex',
         help='Regex to filter files (can be specified more than once '
         'to include files matching ANY of the given regexes)',
         action='append',
@@ -314,7 +314,7 @@ def make_main_parser(*parent_parsers):
     )
     download_objects_parser.add_argument(
         '-O',
-        '--objects-regex',
+        '--object-regex',
         help='Regex to filter objects (can be specified more than once '
         'to include objects matching ANY of the given regexes)',
         action='append',
@@ -327,7 +327,7 @@ def make_main_parser(*parent_parsers):
     )
     list_objects_parser.add_argument(
         '-O',
-        '--objects-regex',
+        '--object-regex',
         help='Regex to filter objects (can be specified more than once '
         'to include objects matching ANY of the given regexes)',
         action='append',

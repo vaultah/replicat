@@ -793,7 +793,7 @@ class TestRestore:
         await local_repo.snapshot(paths=[file])
 
         result = await local_repo.restore(
-            files_regex=re.escape(str(file)), path=tmp_path
+            file_regex=re.escape(str(file)), path=tmp_path
         )
         assert result.files == [str(file)]
         assert tmp_path.joinpath(*file.parts[1:]).read_bytes() == second_version

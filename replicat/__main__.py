@@ -92,7 +92,7 @@ async def _cmd_handler(args, unknown, error):
         elif args.action == 'restore':
             await repository.restore(
                 snapshot_regex=_combine_optional_regexes(args.snapshot_regex),
-                files_regex=_combine_optional_regexes(args.files_regex),
+                file_regex=_combine_optional_regexes(args.file_regex),
                 path=args.path,
             )
         elif args.action == 'delete':
@@ -102,7 +102,7 @@ async def _cmd_handler(args, unknown, error):
         elif args.action in {'lf', 'list-files'}:
             await repository.list_files(
                 snapshot_regex=_combine_optional_regexes(args.snapshot_regex),
-                files_regex=_combine_optional_regexes(args.files_regex),
+                file_regex=_combine_optional_regexes(args.file_regex),
                 header=not args.no_header,
                 columns=args.columns,
             )
