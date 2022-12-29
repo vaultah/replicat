@@ -56,7 +56,7 @@ class AutoLowerStrEnum(str, Enum):
 class ColumnMixin:
     @classmethod
     def parse_list(cls, string):
-        return [cls(x) for x in map(str.strip, string.split(','))]
+        return [cls(x.strip()) for x in string.split(',')]
 
 
 class SnapshotListColumn(ColumnMixin, AutoLowerStrEnum):
