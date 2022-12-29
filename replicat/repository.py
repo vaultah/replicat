@@ -18,7 +18,7 @@ import time
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager, contextmanager
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import Decimal
 from functools import cached_property
 from pathlib import Path
@@ -29,6 +29,7 @@ from tqdm import tqdm
 from tqdm.utils import CallbackIOWrapper
 
 from . import exceptions, utils
+from .utils import FileListColumn, SnapshotListColumn
 from .utils.adapters import (
     ChunkerAdapter,
     CipherAdapter,
@@ -136,6 +137,24 @@ class Repository:
     DEFAULT_SHARED_KDF_NAME = 'blake2b'
     EMPTY_TABLE_VALUE = '--'
     DEFAULT_CACHE_DIRECTORY = utils.fs.DEFAULT_CACHE_DIRECTORY
+    SNAPSHOT_LIST_COLUMN_LABELS = {
+        SnapshotListColumn.NAME: 'name',
+        SnapshotListColumn.NOTE: 'note',
+        SnapshotListColumn.TIMESTAMP: 'timestamp (utc)',
+        SnapshotListColumn.FILE_COUNT: 'files',
+        SnapshotListColumn.SIZE: 'size',
+    }
+    FILE_LIST_COLUMN_LABELS = {
+        FileListColumn.SNAPSHOT_NAME: 'snapshot name',
+        FileListColumn.SNAPSHOT_DATE: 'snapshot date',
+        FileListColumn.PATH: 'path',
+        FileListColumn.CHUNK_COUNT: 'chunk count',
+        FileListColumn.SIZE: 'size',
+        FileListColumn.DIGEST: 'digest',
+        FileListColumn.ATIME: 'accessed at',
+        FileListColumn.MTIME: 'modified at',
+        FileListColumn.CTIME: 'created at',
+    }
 
     def __init__(
         self,
@@ -864,13 +883,22 @@ class Repository:
     def _format_snaphot_size(self, *, path, chunks, data):
         return data and utils.bytes_to_human(self._extract_snapshot_size(data))
 
-    async def list_snapshots(self, *, snapshot_regex=None):
+    async def list_snapshots(self, *, snapshot_regex=None, header=True, columns=None):
+        if columns is None:
+            columns = [
+                SnapshotListColumn.NAME,
+                SnapshotListColumn.NOTE,
+                SnapshotListColumn.TIMESTAMP,
+                SnapshotListColumn.FILE_COUNT,
+                SnapshotListColumn.SIZE,
+            ]
+
         columns_getters = {
-            'snapshot': self._format_snapshot_name,
-            'note': self._format_snapshot_note,
-            'timestamp (utc)': self._format_snapshot_utc_timestamp,
-            'files': self._format_snapshot_files_count,
-            'size': self._format_snaphot_size,
+            SnapshotListColumn.NAME: self._format_snapshot_name,
+            SnapshotListColumn.NOTE: self._format_snapshot_note,
+            SnapshotListColumn.TIMESTAMP: self._format_snapshot_utc_timestamp,
+            SnapshotListColumn.FILE_COUNT: self._format_snapshot_files_count,
+            SnapshotListColumn.SIZE: self._format_snaphot_size,
         }
         columns_widths = {}
         snapshots = []
@@ -883,7 +911,8 @@ class Repository:
             snapshot_chunks = snapshot_body['chunks']
             snapshot_data = snapshot_body['data']
 
-            for column, getter in columns_getters.items():
+            for column in columns:
+                getter = columns_getters[column]
                 value = getter(
                     path=snapshot_path,
                     chunks=snapshot_chunks,
@@ -905,17 +934,25 @@ class Repository:
 
         snapshots.sort(key=lambda x: x[0] or '', reverse=True)
 
-        formatted_headers = []
-        for column in columns_widths:
-            width = columns_widths[column] = max(len(column), columns_widths[column])
-            formatted_headers.append(column.upper().center(width))
+        if header:
+            formatted_headers = []
+            for column, width in columns_widths.items():
+                label = self.SNAPSHOT_LIST_COLUMN_LABELS[column]
+                width = columns_widths[column] = max(len(label), columns_widths[column])
+                formatted_headers.append(label.upper().center(width))
 
-        print(*formatted_headers, sep='\t')
+            print(*formatted_headers, sep='\t')
+
         for _, row in snapshots:
             print(
                 *(value.ljust(columns_widths[col]) for col, value in row.items()),
                 sep='\t',
             )
+
+    def _format_file_snapshot_name(
+        self, *, snapshot_path, snapshot_chunks, snapshot_data, file_data
+    ):
+        return self.parse_snapshot_location(snapshot_path).name
 
     def _format_file_snapshot_date(
         self, *, snapshot_path, snapshot_chunks, snapshot_data, file_data
@@ -939,12 +976,62 @@ class Repository:
         ranges_it = (cd['range'] for cd in file_data['chunks'])
         return utils.bytes_to_human(sum(r[1] - r[0] for r in ranges_it))
 
-    async def list_files(self, *, snapshot_regex=None, files_regex=None):
+    def _format_file_digest(
+        self, *, snapshot_path, snapshot_chunks, snapshot_data, file_data
+    ):
+        return (digest := file_data.get('digest')) and digest.hex()
+
+    def _metadata_ts_to_dt(self, metadata, key):
+        try:
+            ts = metadata[key] / 1e9
+        except KeyError:
+            # NOTE: fall back to non-nanosecond timestamps for compatibility with
+            # snapshots that were created by older replicat versions (pre-1.3)
+            assert key.endswith('_ns'), key
+            ts = metadata[key[:-3]]
+
+        return datetime.fromtimestamp(ts, tz=timezone.utc).replace(tzinfo=None)
+
+    def _format_file_mtime(
+        self, *, snapshot_path, snapshot_chunks, snapshot_data, file_data
+    ):
+        dt = self._metadata_ts_to_dt(file_data['metadata'], 'st_mtime_ns')
+        return dt.isoformat(sep=' ', timespec='seconds')
+
+    def _format_file_ctime(
+        self, *, snapshot_path, snapshot_chunks, snapshot_data, file_data
+    ):
+        dt = self._metadata_ts_to_dt(file_data['metadata'], 'st_ctime_ns')
+        return dt.isoformat(sep=' ', timespec='seconds')
+
+    def _format_file_atime(
+        self, *, snapshot_path, snapshot_chunks, snapshot_data, file_data
+    ):
+        dt = self._metadata_ts_to_dt(file_data['metadata'], 'st_atime_ns')
+        return dt.isoformat(sep=' ', timespec='seconds')
+
+    async def list_files(
+        self, *, snapshot_regex=None, files_regex=None, header=True, columns=None
+    ):
+        if columns is None:
+            columns = [
+                FileListColumn.SNAPSHOT_DATE,
+                FileListColumn.PATH,
+                FileListColumn.CHUNK_COUNT,
+                FileListColumn.SIZE,
+                FileListColumn.MTIME,
+            ]
+
         columns_getters = {
-            'snapshot date': self._format_file_snapshot_date,
-            'path': self._format_file_path,
-            'chunks count': self._format_file_chunks_count,
-            'size': self._format_file_size,
+            FileListColumn.SNAPSHOT_NAME: self._format_file_snapshot_name,
+            FileListColumn.SNAPSHOT_DATE: self._format_file_snapshot_date,
+            FileListColumn.PATH: self._format_file_path,
+            FileListColumn.CHUNK_COUNT: self._format_file_chunks_count,
+            FileListColumn.SIZE: self._format_file_size,
+            FileListColumn.DIGEST: self._format_file_digest,
+            FileListColumn.ATIME: self._format_file_atime,
+            FileListColumn.MTIME: self._format_file_mtime,
+            FileListColumn.CTIME: self._format_file_ctime,
         }
         columns_widths = {}
         files = []
@@ -964,7 +1051,8 @@ class Repository:
                     continue
 
                 row = {}
-                for column, getter in columns_getters.items():
+                for column in columns:
+                    getter = columns_getters[column]
                     value = getter(
                         snapshot_path=snapshot_path,
                         snapshot_chunks=snapshot_chunks,
@@ -984,12 +1072,15 @@ class Repository:
 
         files.sort(key=lambda x: x[0], reverse=True)
 
-        formatted_headers = []
-        for column in columns_widths:
-            width = columns_widths[column] = max(len(column), columns_widths[column])
-            formatted_headers.append(column.upper().center(width))
+        if header:
+            formatted_headers = []
+            for column, width in columns_widths.items():
+                label = self.FILE_LIST_COLUMN_LABELS[column]
+                width = columns_widths[column] = max(len(label), columns_widths[column])
+                formatted_headers.append(label.upper().center(width))
 
-        print(*formatted_headers, sep='\t')
+            print(*formatted_headers, sep='\t')
+
         for _, row in files:
             print(
                 *(value.ljust(columns_widths[col]) for col, value in row.items()),

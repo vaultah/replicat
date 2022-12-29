@@ -14,6 +14,7 @@ import threading
 import time
 import weakref
 from decimal import Decimal
+from enum import Enum, auto
 from pathlib import Path
 from types import SimpleNamespace
 from typing import List, Optional
@@ -44,6 +45,38 @@ HUMAN_SIZE_REGEX = (
 )
 
 logger = logging.getLogger(__name__)
+
+
+class AutoLowerStrEnum(str, Enum):
+    @staticmethod
+    def _generate_next_value_(name, start, count, last_values):
+        return name.lower()
+
+
+class ColumnMixin:
+    @classmethod
+    def parse_list(cls, string):
+        return [cls(x) for x in map(str.strip, string.split(','))]
+
+
+class SnapshotListColumn(ColumnMixin, AutoLowerStrEnum):
+    NAME = auto()
+    NOTE = auto()
+    TIMESTAMP = auto()
+    FILE_COUNT = auto()
+    SIZE = auto()
+
+
+class FileListColumn(ColumnMixin, AutoLowerStrEnum):
+    SNAPSHOT_NAME = auto()
+    SNAPSHOT_DATE = auto()
+    PATH = auto()
+    CHUNK_COUNT = auto()
+    SIZE = auto()
+    DIGEST = auto()
+    ATIME = auto()
+    MTIME = auto()
+    CTIME = auto()
 
 
 def _backend_tuple(uri):
@@ -180,6 +213,28 @@ def make_main_parser(*parent_parsers):
         type=Path,
     )
 
+    list_snapshots_parser = subparsers.add_parser(
+        'list-snapshots', parents=parent_parsers, aliases=['ls']
+    )
+    list_snapshots_parser.add_argument(
+        '-S',
+        '--snapshot-regex',
+        help='Regex to filter snapshots (can be specified more than once '
+        'to include snapshots matching ANY of the given regexes)',
+        action='append',
+    )
+    list_snapshots_parser.add_argument(
+        '--no-header',
+        help='Do not include table header in the output',
+        action='store_true',
+    )
+    list_snapshots_parser.add_argument(
+        '--columns',
+        help='Comma-separated list of columns to include in the output '
+        '(choices are {})'.format(', '.join(SnapshotListColumn)),
+        type=SnapshotListColumn.parse_list,
+    )
+
     list_files_parser = subparsers.add_parser(
         'list-files', parents=parent_parsers, aliases=['lf']
     )
@@ -197,16 +252,16 @@ def make_main_parser(*parent_parsers):
         'to include files matching ANY of the given regexes)',
         action='append',
     )
-
-    list_snapshots_parser = subparsers.add_parser(
-        'list-snapshots', parents=parent_parsers, aliases=['ls']
+    list_files_parser.add_argument(
+        '--no-header',
+        help='Do not include table header in the output',
+        action='store_true',
     )
-    list_snapshots_parser.add_argument(
-        '-S',
-        '--snapshot-regex',
-        help='Regex to filter snapshots (can be specified more than once '
-        'to include snapshots matching ANY of the given regexes)',
-        action='append',
+    list_files_parser.add_argument(
+        '--columns',
+        help='Comma-separated list of columns to include in the output '
+        '(choices are {})'.format(', '.join(FileListColumn)),
+        type=FileListColumn.parse_list,
     )
 
     snapshot_parser = subparsers.add_parser('snapshot', parents=parent_parsers)
