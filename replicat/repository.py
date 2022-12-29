@@ -858,7 +858,7 @@ class Repository:
     def _extract_snapshot_note(self, snapshot_data):
         return snapshot_data.get('note')
 
-    def _extract_snapshot_files_count(self, snapshot_data):
+    def _extract_snapshot_file_count(self, snapshot_data):
         return len(snapshot_data['files'])
 
     def _extract_snapshot_utc_timestamp(self, snapshot_data):
@@ -877,8 +877,8 @@ class Repository:
         dt = self._extract_snapshot_utc_timestamp(data)
         return dt.isoformat(sep=' ', timespec='seconds')
 
-    def _format_snapshot_files_count(self, *, path, chunks, data):
-        return data and self._extract_snapshot_files_count(data)
+    def _format_snapshot_file_count(self, *, path, chunks, data):
+        return data and self._extract_snapshot_file_count(data)
 
     def _format_snaphot_size(self, *, path, chunks, data):
         return data and utils.bytes_to_human(self._extract_snapshot_size(data))
@@ -897,7 +897,7 @@ class Repository:
             SnapshotListColumn.NAME: self._format_snapshot_name,
             SnapshotListColumn.NOTE: self._format_snapshot_note,
             SnapshotListColumn.TIMESTAMP: self._format_snapshot_utc_timestamp,
-            SnapshotListColumn.FILE_COUNT: self._format_snapshot_files_count,
+            SnapshotListColumn.FILE_COUNT: self._format_snapshot_file_count,
             SnapshotListColumn.SIZE: self._format_snaphot_size,
         }
         columns_widths = {}
@@ -965,7 +965,7 @@ class Repository:
     ):
         return file_data['path']
 
-    def _format_file_chunks_count(
+    def _format_file_chunk_count(
         self, *, snapshot_path, snapshot_chunks, snapshot_data, file_data
     ):
         return len(file_data['chunks'])
@@ -1011,7 +1011,7 @@ class Repository:
         return dt.isoformat(sep=' ', timespec='seconds')
 
     async def list_files(
-        self, *, snapshot_regex=None, files_regex=None, header=True, columns=None
+        self, *, snapshot_regex=None, file_regex=None, header=True, columns=None
     ):
         if columns is None:
             columns = [
@@ -1026,7 +1026,7 @@ class Repository:
             FileListColumn.SNAPSHOT_NAME: self._format_file_snapshot_name,
             FileListColumn.SNAPSHOT_DATE: self._format_file_snapshot_date,
             FileListColumn.PATH: self._format_file_path,
-            FileListColumn.CHUNK_COUNT: self._format_file_chunks_count,
+            FileListColumn.CHUNK_COUNT: self._format_file_chunk_count,
             FileListColumn.SIZE: self._format_file_size,
             FileListColumn.DIGEST: self._format_file_digest,
             FileListColumn.ATIME: self._format_file_atime,
@@ -1035,7 +1035,7 @@ class Repository:
         }
         columns_widths = {}
         files = []
-        files_re = self._compile_or_none(files_regex)
+        file_re = self._compile_or_none(file_regex)
 
         self.display_status('Loading snapshots')
         async for snapshot_path, snapshot_body in self._load_snapshots(
@@ -1047,7 +1047,7 @@ class Repository:
                 continue
 
             for file_data in snapshot_data['files']:
-                if files_re is not None and files_re.search(file_data['path']) is None:
+                if file_re is not None and file_re.search(file_data['path']) is None:
                     continue
 
                 row = {}
@@ -1361,7 +1361,7 @@ class Repository:
             file.seek(offset)
             file.write(data)
 
-    async def restore(self, *, snapshot_regex=None, files_regex=None, path=None):
+    async def restore(self, *, snapshot_regex=None, file_regex=None, path=None):
         if path is None:
             path = Path()
 
@@ -1381,7 +1381,7 @@ class Repository:
         glock = threading.Lock()
         flocks = {}
         flocks_refcounts = {}
-        files_re = self._compile_or_none(files_regex)
+        file_re = self._compile_or_none(file_regex)
 
         chunks_references = defaultdict(list)
         files_digests = {}
@@ -1468,7 +1468,7 @@ class Repository:
                 if (file_path := file_data['path']) in files_digests:
                     continue
 
-                if files_re is not None and files_re.search(file_path) is None:
+                if file_re is not None and file_re.search(file_path) is None:
                     logger.info('Skipping %s (does not match the filter)', file_path)
                     continue
 
@@ -1522,11 +1522,11 @@ class Repository:
             parts.append(note)
 
         dt = self._extract_snapshot_utc_timestamp(snapshot_data)
-        files_count = self._extract_snapshot_files_count(snapshot_data)
+        file_count = self._extract_snapshot_file_count(snapshot_data)
         size = self._extract_snapshot_size(snapshot_data)
         parts.append('from ' + dt.isoformat(sep=' ', timespec='seconds'))
         parts.append(
-            'with {} {}'.format(files_count, 'file' if files_count == 1 else 'files')
+            'with {} {}'.format(file_count, 'file' if file_count == 1 else 'files')
         )
         parts.append(utils.bytes_to_human(size))
         return ', '.join(parts)
@@ -1877,10 +1877,10 @@ class Repository:
 
         return utils.DefaultNamespace(paths=paths)
 
-    async def delete_objects(self, objects_paths, /, *, confirm=True):
+    async def delete_objects(self, object_paths, /, *, confirm=True):
         if confirm:
             message_parts = ['The following objects will be deleted:']
-            message_parts.extend(f'    {x}' for x in objects_paths)
+            message_parts.extend(f'    {x}' for x in object_paths)
             self.display_danger('\n'.join(message_parts))
             if input('Proceed? [y/n] ').lower() != 'y':
                 logger.info('Aborting')
@@ -1889,7 +1889,7 @@ class Repository:
         deleted_objects_tracker = tqdm(
             desc='Objects deleted',
             unit='',
-            total=len(objects_paths),
+            total=len(object_paths),
             position=0,
             disable=self._quiet,
             leave=True,
@@ -1902,7 +1902,7 @@ class Repository:
             deleted_objects_tracker.update()
 
         with deleted_objects_tracker:
-            await asyncio.gather(*map(_delete_object, objects_paths))
+            await asyncio.gather(*map(_delete_object, object_paths))
 
     async def close(self):
         try:

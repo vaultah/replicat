@@ -393,8 +393,8 @@ $ replicat download-objects -r some:repository -O '^data/' -O '^snapshots/' -S
 ```bash
 # Lists all objects currently in the repository
 $ replicat list-objects -r some:repository
-# Only lists objects whose paths match the -O regex(es) (i.e., all objects inside of
-# 'data' OR 'snapshots' top-level directories in the repository)
+# Only lists objects whose paths match any of the regexes passed to the -O/--object-regex flag
+# (i.e., all objects inside of 'data' OR 'snapshots' top-level directories in the repository)
 $ replicat list-objects -r some:repository -O '^data/' -O '^snapshots/'
 ```
 
