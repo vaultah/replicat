@@ -62,11 +62,25 @@ class MACAdapter(ABC):
         return b''
 
 
+class IncrementalHasher(ABC):
+    @abstractmethod
+    def feed(self, data: bytes) -> None:
+        return None
+
+    @abstractmethod
+    def digest(self) -> bytes:
+        return b''
+
+
 class HashAdapter(ABC):
     @abstractmethod
     def digest(self, data: bytes) -> bytes:
         """Compute the hash digest from data"""
         return b''
+
+    @abstractmethod
+    def incremental_hasher(self) -> IncrementalHasher:
+        raise NotImplementedError
 
 
 class ChunkerAdapter(ABC):
@@ -87,9 +101,20 @@ class ChunkerAdapter(ABC):
         chunk_iterator: Iterator[ByteString],
         *,
         params: Optional[ByteString] = None,
-    ):
+    ) -> Iterator[bytes]:
         """Re-chunk the incoming stream of bytes using the provided params"""
         yield b''
+
+
+class HashlibIncrementalHasher(IncrementalHasher):
+    def __init__(self, hash_instance):
+        self.instance = hash_instance
+
+    def feed(self, data: bytes) -> None:
+        self.instance.update(data)
+
+    def digest(self) -> bytes:
+        return self.instance.digest()
 
 
 class AEADCipherAdapterMixin(CipherAdapter):
@@ -181,6 +206,35 @@ class blake2b(KDFAdapter, MACAdapter, HashAdapter):
 
     def digest(self, data):
         return hashlib.blake2b(data, digest_size=self.digest_size).digest()
+
+    def incremental_hasher(self):
+        return HashlibIncrementalHasher(hashlib.blake2b(digest_size=self.digest_size))
+
+
+class sha2(HashAdapter):
+    def __init__(self, *, bits=256):
+        if bits not in (224, 256, 384, 512):
+            raise ValueError('Invalid digest size')
+        self._hasher_class = getattr(hashlib, f'sha{bits}')
+
+    def digest(self, data):
+        return self._hasher_class(data).digest()
+
+    def incremental_hasher(self):
+        return HashlibIncrementalHasher(self._hasher_class())
+
+
+class sha3(HashAdapter):
+    def __init__(self, *, bits=256):
+        if bits not in (224, 256, 384, 512):
+            raise ValueError('Invalid digest size')
+        self._hasher_class = getattr(hashlib, f'sha3_{bits}')
+
+    def digest(self, data):
+        return self._hasher_class(data).digest()
+
+    def incremental_hasher(self):
+        return HashlibIncrementalHasher(self._hasher_class())
 
 
 class gclmulchunker(ChunkerAdapter):
