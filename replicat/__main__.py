@@ -103,10 +103,14 @@ async def _cmd_handler(args, unknown, error):
             await repository.list_files(
                 snapshot_regex=_combine_optional_regexes(args.snapshot_regex),
                 files_regex=_combine_optional_regexes(args.files_regex),
+                header=not args.no_header,
+                columns=args.columns,
             )
         elif args.action in {'ls', 'list-snapshots'}:
             await repository.list_snapshots(
-                snapshot_regex=_combine_optional_regexes(args.snapshot_regex)
+                snapshot_regex=_combine_optional_regexes(args.snapshot_regex),
+                header=not args.no_header,
+                columns=args.columns,
             )
 
     await repository.close()

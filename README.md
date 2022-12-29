@@ -242,15 +242,23 @@ $ replicat snapshot -r some:repository \
 ```bash
 # Unlocks the repository and lists all of the snapshots
 $ replicat list-snapshots -r some:repository -P path/to/password/file -K path/to/key/file
-# Equivalent
-$ replicat ls -r some:repository -P path/to/password/file -K path/to/key/file
-# Lists snapshots with ids that match any of the regexes passed via the -S/--snapshot-regex flag.
+# Same, but without the table header
+$ replicat ls -r some:repository -P path/to/password/file -K path/to/key/file --no-header
+# Lists snapshots with names that match any of the regexes passed via the -S/--snapshot-regex flag
 # In this example, we'll only list snapshots that start with 123456 OR include substring abcdef
 $ replicat ls -r some:repository \
     -P path/to/password/file \
     -K path/to/key/file \
     -S '^123456' \
     -S 'abcdef'
+# Lists the snapshots, but instead of the default set of columns, displays just the snapshot name,
+# the number of files in the snapshot, and the total size of the snapshot (in that order).
+# Oh, there's also --no-header
+$ replicat ls -r some:repository \
+    -P path/to/password/file \
+    -K path/to/key/file \
+    --no-header \
+    --columns name,file_count,size
 ```
 
 ## `list-files`/`lf` examples
@@ -258,8 +266,8 @@ $ replicat ls -r some:repository \
 ```bash
 # Unlocks the repository and lists all versions of all the files
 $ replicat list-files -r some:repository -P path/to/password/file -K path/to/key/file
-# Equivalent
-$ replicat lf -r some:repository -P path/to/password/file -K path/to/key/file
+# Same, but without the table header
+$ replicat lf -r some:repository -P path/to/password/file -K path/to/key/file --no-header
 # Only lists files with paths that match any of the regexes passed via the -F/--file-regex flag
 # (in this example, PNGs and text files) IF they are included in snapshots that match the
 # -S regex(es) (i.e., snapshots that start with '1234beef')
@@ -269,6 +277,13 @@ $ replicat lf -r some:repository \
     -F '\.t[e]?xt$' \
     -F '\.png$' \
     -S '^1234beef'
+# Lists all versions of all the files, but instead of the default set of columns, displays
+# the original path of the file first, then the snapshot name, the hash digest of the file,
+# and the file access time (as of the snapshot creation date)
+$ replicat lf -r some:repository \
+    -P path/to/password/file \
+    -K path/to/key/file \
+    --columns snapshot_name,path,digest,atime
 ```
 
 ## `restore` examples
