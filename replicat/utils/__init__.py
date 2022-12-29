@@ -16,7 +16,7 @@ import weakref
 from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Optional
+from typing import List, Optional
 
 from tqdm import tqdm
 
@@ -184,15 +184,29 @@ def make_main_parser(*parent_parsers):
         'list-files', parents=parent_parsers, aliases=['lf']
     )
     list_files_parser.add_argument(
-        '-S', '--snapshot-regex', help='Regex to filter snapshots'
+        '-S',
+        '--snapshot-regex',
+        help='Regex to filter snapshots (can be specified more than once '
+        'to include snapshots matching ANY of the given regexes)',
+        action='append',
     )
-    list_files_parser.add_argument('-F', '--files-regex', help='Regex to filter files')
+    list_files_parser.add_argument(
+        '-F',
+        '--files-regex',
+        help='Regex to filter files (can be specified more than once '
+        'to include files matching ANY of the given regexes)',
+        action='append',
+    )
 
     list_snapshots_parser = subparsers.add_parser(
         'list-snapshots', parents=parent_parsers, aliases=['ls']
     )
     list_snapshots_parser.add_argument(
-        '-S', '--snapshot-regex', help='Regex to filter snapshots'
+        '-S',
+        '--snapshot-regex',
+        help='Regex to filter snapshots (can be specified more than once '
+        'to include snapshots matching ANY of the given regexes)',
+        action='append',
     )
 
     snapshot_parser = subparsers.add_parser('snapshot', parents=parent_parsers)
@@ -205,9 +219,19 @@ def make_main_parser(*parent_parsers):
     restore_parser = subparsers.add_parser('restore', parents=parent_parsers)
     restore_parser.add_argument('path', nargs='?', help='Output directory', type=Path)
     restore_parser.add_argument(
-        '-S', '--snapshot-regex', help='Regex to filter snapshots'
+        '-S',
+        '--snapshot-regex',
+        help='Regex to filter snapshots (can be specified more than once '
+        'to include snapshots matching ANY of the given regexes)',
+        action='append',
     )
-    restore_parser.add_argument('-F', '--files-regex', help='Regex to filter files')
+    restore_parser.add_argument(
+        '-F',
+        '--files-regex',
+        help='Regex to filter files (can be specified more than once '
+        'to include files matching ANY of the given regexes)',
+        action='append',
+    )
 
     delete_parser = subparsers.add_parser('delete', parents=parent_parsers)
     delete_parser.add_argument('snapshot', nargs='+')
@@ -234,7 +258,11 @@ def make_main_parser(*parent_parsers):
         'path', nargs='?', help='Output directory', type=Path
     )
     download_objects_parser.add_argument(
-        '-O', '--objects-regex', help='Regex to filter objects'
+        '-O',
+        '--objects-regex',
+        help='Regex to filter objects (can be specified more than once '
+        'to include objects matching ANY of the given regexes)',
+        action='append',
     )
     download_objects_parser.add_argument('-S', '--skip-existing', action='store_true')
 
@@ -243,7 +271,11 @@ def make_main_parser(*parent_parsers):
         'path', nargs='?', help='Output directory', type=Path
     )
     list_objects_parser.add_argument(
-        '-O', '--objects-regex', help='Regex to filter objects'
+        '-O',
+        '--objects-regex',
+        help='Regex to filter objects (can be specified more than once '
+        'to include objects matching ANY of the given regexes)',
+        action='append',
     )
 
     delete_objects_parser = subparsers.add_parser(
@@ -292,6 +324,10 @@ def parser_from_backend_class(cls, *, inherit_common=True, missing=None):
         )
 
     return parser
+
+
+def combine_regexes(regex_list: List[str]) -> str:
+    return '|'.join(regex_list)
 
 
 def parse_cli_settings(args_list):

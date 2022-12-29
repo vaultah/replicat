@@ -24,6 +24,10 @@ def _instantiate_backend(backend_type, connection_string, **kwargs):
     return backend_type(connection_string, **kwonly)
 
 
+def _combine_optional_regexes(value):
+    return utils.combine_regexes(value) if value is not None else None
+
+
 async def _cmd_handler(args, unknown, error):
     settings = None
 
@@ -60,11 +64,13 @@ async def _cmd_handler(args, unknown, error):
     elif args.action == 'download-objects':
         await repository.download_objects(
             path=args.path,
-            object_regex=args.objects_regex,
+            object_regex=_combine_optional_regexes(args.objects_regex),
             skip_existing=args.skip_existing,
         )
     elif args.action == 'list-objects':
-        await repository.list_objects(object_regex=args.objects_regex)
+        await repository.list_objects(
+            object_regex=_combine_optional_regexes(args.objects_regex)
+        )
     elif args.action == 'delete-objects':
         await repository.delete_objects(args.object, confirm=not args.yes)
     elif args.action == 'add-key':
@@ -85,8 +91,8 @@ async def _cmd_handler(args, unknown, error):
             )
         elif args.action == 'restore':
             await repository.restore(
-                snapshot_regex=args.snapshot_regex,
-                files_regex=args.files_regex,
+                snapshot_regex=_combine_optional_regexes(args.snapshot_regex),
+                files_regex=_combine_optional_regexes(args.files_regex),
                 path=args.path,
             )
         elif args.action == 'delete':
@@ -95,11 +101,13 @@ async def _cmd_handler(args, unknown, error):
             await repository.clean()
         elif args.action in {'lf', 'list-files'}:
             await repository.list_files(
-                snapshot_regex=args.snapshot_regex,
-                files_regex=args.files_regex,
+                snapshot_regex=_combine_optional_regexes(args.snapshot_regex),
+                files_regex=_combine_optional_regexes(args.files_regex),
             )
         elif args.action in {'ls', 'list-snapshots'}:
-            await repository.list_snapshots(snapshot_regex=args.snapshot_regex)
+            await repository.list_snapshots(
+                snapshot_regex=_combine_optional_regexes(args.snapshot_regex)
+            )
 
     await repository.close()
 

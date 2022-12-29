@@ -244,6 +244,13 @@ $ replicat snapshot -r some:repository \
 $ replicat list-snapshots -r some:repository -P path/to/password/file -K path/to/key/file
 # Equivalent
 $ replicat ls -r some:repository -P path/to/password/file -K path/to/key/file
+# Lists snapshots with ids that match any of the regexes passed via the -S/--snapshot-regex flag.
+# In this example, we'll only list snapshots that start with 123456 OR include substring abcdef
+$ replicat ls -r some:repository \
+    -P path/to/password/file \
+    -K path/to/key/file \
+    -S '^123456' \
+    -S 'abcdef'
 ```
 
 ## `list-files`/`lf` examples
@@ -253,11 +260,15 @@ $ replicat ls -r some:repository -P path/to/password/file -K path/to/key/file
 $ replicat list-files -r some:repository -P path/to/password/file -K path/to/key/file
 # Equivalent
 $ replicat lf -r some:repository -P path/to/password/file -K path/to/key/file
-# Only lists files with paths matching the -F regex
+# Only lists files with paths that match any of the regexes passed via the -F/--file-regex flag
+# (in this example, PNGs and text files) IF they are included in snapshots that match the
+# -S regex(es) (i.e., snapshots that start with '1234beef')
 $ replicat lf -r some:repository \
     -P path/to/password/file \
     -K path/to/key/file \
-    -F '\.(jpg|text)$'
+    -F '\.t[e]?xt$' \
+    -F '\.png$' \
+    -S '^1234beef'
 ```
 
 ## `restore` examples
@@ -268,13 +279,15 @@ $ replicat restore -r some:repository \
     -P path/to/password/file \
     -K path/to/key/file \
     target-directory
-# Unlocks the repository and restores the latest versions of files with paths matching the
-# -F regex in snapshots matching the -S regex to 'target-directory'
+# Unlocks the repository and restores the latest versions of files that match any of the
+# -F regex(es) from snapshots that match any of the -S regex(es)
 $ replicat restore -r some:repository \
     -P path/to/password/file \
     -K path/to/key/file \
-    -F '\.(jpg|text)$' \
+    -F '\.jpg$' \
+    -F '^/root' \
     -S 'abcdef' \
+    -S '12345' \
     target-directory
 
 ```
@@ -354,9 +367,10 @@ $ replicat download-objects -r some:repository
 $ replicat download-objects -r some:repository different/directory
 # Same, but it skips objects that already exist locally (only checks the file names)
 $ replicat download-objects -r some:repository --skip-existing different/directory
-# Downloads objects whose paths match the -O regex (e.g. all objects inside of the 'data'
-# directory in the repository) to the current working directory, skipping existing objects
-$ replicat download-objects -r some:repository -O '^data/' -S
+# Downloads objects whose paths match any the -O regex(es) (i.e., all objects inside of
+# 'data' OR 'snapshots' top-level directories in the repository) to the current working
+# directory, skipping existing objects
+$ replicat download-objects -r some:repository -O '^data/' -O '^snapshots/' -S
 ```
 
 ## `list-objects` examples
@@ -364,9 +378,9 @@ $ replicat download-objects -r some:repository -O '^data/' -S
 ```bash
 # Lists all objects currently in the repository
 $ replicat list-objects -r some:repository
-# Only lists objects whose paths match the -O regex (e.g. all objects inside of the 'data'
-# directory in the repository)
-$ replicat list-objects -r some:repository -O '^data/'
+# Only lists objects whose paths match the -O regex(es) (i.e., all objects inside of
+# 'data' OR 'snapshots' top-level directories in the repository)
+$ replicat list-objects -r some:repository -O '^data/' -O '^snapshots/'
 ```
 
 ## `delete-objects` examples

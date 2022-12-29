@@ -316,6 +316,9 @@ class Repository:
         async for value in result:
             yield value
 
+    def _compile_or_none(self, pattern):
+        return re.compile(pattern) if pattern is not None else None
+
     def default_serialization_hook(self, data, /):
         return utils.type_hint(data)
 
@@ -804,7 +807,7 @@ class Repository:
         )
         future_to_path = {}
         loop = asyncio.get_running_loop()
-        snapshot_re = re.compile(snapshot_regex) if snapshot_regex is not None else None
+        snapshot_re = self._compile_or_none(snapshot_regex)
 
         def _download_snapshot(path):
             name, tag = self.parse_snapshot_location(path)
@@ -945,7 +948,7 @@ class Repository:
         }
         columns_widths = {}
         files = []
-        files_re = re.compile(files_regex) if files_regex is not None else None
+        files_re = self._compile_or_none(files_regex)
 
         self.display_status('Loading snapshots')
         async for snapshot_path, snapshot_body in self._load_snapshots(
@@ -1287,7 +1290,7 @@ class Repository:
         glock = threading.Lock()
         flocks = {}
         flocks_refcounts = {}
-        files_re = re.compile(files_regex) if files_regex is not None else None
+        files_re = self._compile_or_none(files_regex)
 
         chunks_references = defaultdict(list)
         files_digests = {}
@@ -1688,7 +1691,7 @@ class Repository:
         skip_existing=False,
     ):
         base_directory = path if path is not None else Path.cwd()
-        object_re = re.compile(object_regex) if object_regex is not None else None
+        object_re = self._compile_or_none(object_regex)
         rate_limiter = utils.RateLimiter(rate_limit) if rate_limit is not None else None
         write_mode = 'xb' if skip_existing else 'wb'
         objects = []
@@ -1769,7 +1772,7 @@ class Repository:
         object_prefix='',
         object_regex=None,
     ):
-        object_re = re.compile(object_regex) if object_regex is not None else None
+        object_re = self._compile_or_none(object_regex)
         paths = []
 
         self.display_status('Loading object list')
