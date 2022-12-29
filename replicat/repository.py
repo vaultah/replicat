@@ -148,7 +148,7 @@ class Repository:
         FileListColumn.SNAPSHOT_NAME: 'snapshot name',
         FileListColumn.SNAPSHOT_DATE: 'snapshot date',
         FileListColumn.PATH: 'path',
-        FileListColumn.CHUNK_COUNT: 'chunk count',
+        FileListColumn.CHUNK_COUNT: 'chunks',
         FileListColumn.SIZE: 'size',
         FileListColumn.DIGEST: 'digest',
         FileListColumn.ATIME: 'accessed at',
