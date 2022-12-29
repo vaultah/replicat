@@ -244,7 +244,7 @@ $ replicat snapshot -r some:repository \
 $ replicat list-snapshots -r some:repository -P path/to/password/file -K path/to/key/file
 # Equivalent
 $ replicat ls -r some:repository -P path/to/password/file -K path/to/key/file
-# List snapshots with ids that match any of the regexes passed via the -S/--snapshot-regex flag.
+# Lists snapshots with ids that match any of the regexes passed via the -S/--snapshot-regex flag.
 # In this example, we'll only list snapshots that start with 123456 OR include substring abcdef
 $ replicat ls -r some:repository \
     -P path/to/password/file \
@@ -260,7 +260,7 @@ $ replicat ls -r some:repository \
 $ replicat list-files -r some:repository -P path/to/password/file -K path/to/key/file
 # Equivalent
 $ replicat lf -r some:repository -P path/to/password/file -K path/to/key/file
-# Only list files with paths that match any of the regexes passed via the -F/--file-regex flag
+# Only lists files with paths that match any of the regexes passed via the -F/--file-regex flag
 # (in this example, PNGs and text files) IF they are included in snapshots that match the
 # -S regex(es) (i.e., snapshots that start with '1234beef')
 $ replicat lf -r some:repository \
@@ -367,9 +367,10 @@ $ replicat download-objects -r some:repository
 $ replicat download-objects -r some:repository different/directory
 # Same, but it skips objects that already exist locally (only checks the file names)
 $ replicat download-objects -r some:repository --skip-existing different/directory
-# Downloads objects whose paths match the -O regex (e.g. all objects inside of the 'data'
-# directory in the repository) to the current working directory, skipping existing objects
-$ replicat download-objects -r some:repository -O '^data/' -S
+# Downloads objects whose paths match any the -O regex(es) (i.e., all objects inside of
+# 'data' OR 'snapshots' top-level directories in the repository) to the current working
+# directory, skipping existing objects
+$ replicat download-objects -r some:repository -O '^data/' -O '^snapshots/' -S
 ```
 
 ## `list-objects` examples
@@ -377,9 +378,9 @@ $ replicat download-objects -r some:repository -O '^data/' -S
 ```bash
 # Lists all objects currently in the repository
 $ replicat list-objects -r some:repository
-# Only lists objects whose paths match the -O regex (e.g. all objects inside of the 'data'
-# directory in the repository)
-$ replicat list-objects -r some:repository -O '^data/'
+# Only lists objects whose paths match the -O regex(es) (i.e., all objects inside of
+# 'data' OR 'snapshots' top-level directories in the repository)
+$ replicat list-objects -r some:repository -O '^data/' -O '^snapshots/'
 ```
 
 ## `delete-objects` examples
