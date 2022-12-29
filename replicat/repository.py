@@ -22,7 +22,7 @@ from datetime import datetime
 from decimal import Decimal
 from functools import cached_property
 from pathlib import Path
-from typing import Any, ByteString, Dict, Iterator, List, NamedTuple, Optional
+from typing import Any, ByteString, Dict, Iterator, List, NamedTuple, Optional, Tuple
 
 from sty import ef, fg
 from tqdm import tqdm
@@ -74,7 +74,7 @@ class _SnapshotState:
     bytes_reused: int = 0
     chunk_counter: int = 0
     current_file: Optional[_SnapshotFile] = None
-    files: List[_SnapshotFile] = dataclasses.field(default_factory=list)
+    files: List[Tuple[int, _SnapshotFile]] = dataclasses.field(default_factory=list)
 
 
 @dataclasses.dataclass(repr=False, frozen=True)
@@ -1102,7 +1102,7 @@ class Repository:
                     while True:
                         chunk = source_file.read(chunk_size)
                         state.bytes_with_padding += len(chunk)
-                        file.stream_end = state.bytes_with_padding
+                        file.stream_end += len(chunk)
                         hasher.feed(chunk)
                         yield chunk
 
