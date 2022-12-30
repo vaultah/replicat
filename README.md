@@ -245,15 +245,16 @@ $ replicat list-snapshots -r some:repository -P path/to/password/file -K path/to
 # Same, but without the table header
 $ replicat ls -r some:repository -P path/to/password/file -K path/to/key/file --no-header
 # Lists snapshots with names that match any of the regexes passed via -S/--snapshot-regex
-# In this example, we'll only list snapshots that start with 123456 OR include substring abcdef
+# In this example, we'll only list snapshots whose names start with '123456' OR include
+# substring 'abcdef'
 $ replicat ls -r some:repository \
     -P path/to/password/file \
     -K path/to/key/file \
     -S '^123456' \
-    -S 'abcdef'
-# Lists the snapshots, but instead of the default set of columns, displays just the snapshot name,
-# the number of files in the snapshot, and the total size of the snapshot (in that order).
-# Oh, there's also --no-header
+    -S abcdef
+# Lists the snapshots, but instead of the default set of columns, displays just the
+# snapshot name, the number of files in the snapshot, and the total size of the snapshot
+# (in that order). Oh, there's also --no-header
 $ replicat ls -r some:repository \
     -P path/to/password/file \
     -K path/to/key/file \
@@ -268,18 +269,18 @@ $ replicat ls -r some:repository \
 $ replicat list-files -r some:repository -P path/to/password/file -K path/to/key/file
 # Same, but without the table header
 $ replicat lf -r some:repository -P path/to/password/file -K path/to/key/file --no-header
-# Only lists files with paths that match any of the regexes passed via the -F/--file-regex flag
-# (in this example, PNGs and text files) IF they are included in snapshots that match the
-# -S regex(es) (i.e., snapshots that start with '1234beef')
+# Only lists files with paths that match any of the regexes passed via -F/--file-regex
+# (in this example, PNGs and text files) IF they are included in snapshots that match
+# the -S regex(es) (i.e., snapshot names that start with '1234beef')
 $ replicat lf -r some:repository \
     -P path/to/password/file \
     -K path/to/key/file \
     -F '\.t[e]?xt$' \
     -F '\.png$' \
     -S '^1234beef'
-# Lists all versions of all the files, but instead of the default set of columns, displays
-# the original path of the file first, then the snapshot name, the hash digest of the file,
-# and the file access time (as of the snapshot creation date)
+# Lists all versions of all the files, but instead of the default set of columns,
+# displays the original path of the file first, then the snapshot name, the hash digest
+# of the file, and the file access time (recorded at the time of the snapshot creation)
 $ replicat lf -r some:repository \
     -P path/to/password/file \
     -K path/to/key/file \
@@ -393,8 +394,8 @@ $ replicat download-objects -r some:repository -O '^data/' -O '^snapshots/' -S
 ```bash
 # Lists all objects currently in the repository
 $ replicat list-objects -r some:repository
-# Only lists objects whose paths match any of the regexes passed to the -O/--object-regex flag
-# (i.e., all objects inside of 'data' OR 'snapshots' top-level directories in the repository)
+# Only lists objects whose paths match any of the regexes passed via -O/--object-regex
+# (i.e., all objects within 'data' AND 'snapshots' top-level directories in the repository)
 $ replicat list-objects -r some:repository -O '^data/' -O '^snapshots/'
 ```
 
