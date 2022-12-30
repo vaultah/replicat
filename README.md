@@ -244,7 +244,7 @@ $ replicat snapshot -r some:repository \
 $ replicat list-snapshots -r some:repository -P path/to/password/file -K path/to/key/file
 # Same, but without the table header
 $ replicat ls -r some:repository -P path/to/password/file -K path/to/key/file --no-header
-# Lists snapshots with names that match any of the regexes passed via the -S/--snapshot-regex flag
+# Lists snapshots with names that match any of the regexes passed via -S/--snapshot-regex
 # In this example, we'll only list snapshots that start with 123456 OR include substring abcdef
 $ replicat ls -r some:repository \
     -P path/to/password/file \
