@@ -103,7 +103,7 @@ async def _cmd_handler(repository, args, settings):
 
 
 def main():
-    # Start by obtaining the profile, repository backend type and location
+    # Start by parsing the small subset of arguments to bootstrap the CLI
     args, _ = cli.initial_parser.parse_known_args()
 
     # Configure logging immediately, if possible
@@ -116,7 +116,7 @@ def main():
     cfg = config.Config()
     remaining_file_options = {}
 
-    # Add profile's standard options from the configuration file and env
+    # Add profile's standard options from the configuration file and environment
     if args.configuration_file is not None:
         logger.info(
             'Trying to load options from %s for the %s profile',
@@ -128,7 +128,8 @@ def main():
                 args.configuration_file, profile=args.profile
             )
         except FileNotFoundError:
-            # i.e. was provided by the user *explicitly*, even if it's the default
+            # If the file that was explicitly provided by the user does not
+            # exist, fail loudly (even if it's the path of the default config)
             if args.configuration_file is not config.DEFAULT_CONFIG_PATH:
                 raise
             logger.info('Configuration file does not exist, skipping')
@@ -142,16 +143,16 @@ def main():
 
     cfg.apply_env()
 
-    # Not provided from CLI, use config's default
+    # Fall back to log level from config if logging has not been configured via CLI
     if not args.verbose:
         _configure_logging(level=cfg.log_level)
 
-    # Add repository from CLI, create the backend-specific config, apply
-    # backend-specific options from the configuration file and env. Create
-    # the CLI parser for backend options
     if args.repository is not None:
         cfg.repository = args.repository
 
+    # We now know which backend we'll be using. Create backend-specific config class
+    # and CLI parser with backend-specific options. Load defaults for those options
+    # from the configuration file and environment variables
     backend_type, connection_string = utils.load_backend(*cfg.repository)
     backend_config_type = config.config_for_backend(
         backend_type, missing=_missing_backend_argument
@@ -167,8 +168,8 @@ def main():
 
     backend_cfg.apply_env()
 
-    # Create the main parser incorporating all of the auxiliary parsers
-    # and config defaults
+    # Create the main parser incorporating all of the auxiliary parsers and setting
+    # config options as parser-level defaults (they'll override argument-level defaults)
     defaults = cfg.dict()
     defaults.update(backend_cfg.dict())
     logger.info('The new defaults for CLI arguments are: %s', defaults)

@@ -8,7 +8,6 @@ from . import (
     FileListColumn,
     SnapshotListColumn,
     __version__,
-    backend_env_var,
     config,
     guess_type,
     human_to_bytes,
@@ -303,12 +302,10 @@ def parser_for_backend(cls, missing=None):
         if arg.kind is not arg.KEYWORD_ONLY:
             continue
 
-        help_text = (
-            f'or the {backend_env_var(cls.short_name, name)} environment variable'
-        )
+        help = f'or the {config.backend_env_option(cls, name)} environment variable'
         if arg.default is not arg.empty:
             default = arg.default
-            help_text += f', or the constructor default ({default})'
+            help += f', or the constructor default ({default})'
         else:
             default = missing
 
@@ -318,7 +315,7 @@ def parser_for_backend(cls, missing=None):
             # TODO: consider annotations?
             default=default,
             type=guess_type,
-            help=help_text,
+            help=help,
         )
 
     return parser

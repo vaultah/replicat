@@ -76,10 +76,6 @@ class FileListColumn(ColumnMixin, AutoLowerStrEnum):
     CTIME = auto()
 
 
-def backend_env_var(backend, name):
-    return f'{backend}_{name}'.upper()
-
-
 def parse_repository(uri):
     parts = uri.split(':', 1)
     if len(parts) < 2:

@@ -581,6 +581,9 @@ class TestConfig:
 
         assert cfg.password == b'<plaintext>'
 
+    @pytest.mark.skipif(
+        not os.supports_bytes_environ, reason='OS does not support bytes environ'
+    )
     def test_apply_env_repository_password_bytes_ok(self):
         cfg = config.Config()
         with patch.dict(os.environb, {b'REPLICAT_PASSWORD': b'<plaintext>'}):

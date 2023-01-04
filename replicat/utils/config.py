@@ -10,7 +10,7 @@ from typing import Any, Dict, Optional, Tuple
 from appdirs import user_cache_dir, user_config_dir
 
 from .. import exceptions
-from . import backend_env_var, guess_type, parse_repository
+from . import guess_type, parse_repository
 
 logger = logging.getLogger(__name__)
 
@@ -177,8 +177,12 @@ class BaseBackendConfig(BaseConfig):
 
     def apply_env(self):
         for field in dataclasses.fields(self):
-            varname = backend_env_var(self.backend_type.short_name, field.name)
-            self.getset(os.environ, varname, guess_type, field=field.name)
+            env_name = backend_env_option(self.backend_type, field.name)
+            self.getset(os.environ, env_name, guess_type, field=field.name)
+
+
+def backend_env_option(backend_type, option_name):
+    return f'{backend_type.short_name}_{option_name}'.upper()
 
 
 def config_for_backend(cls, missing=None):
