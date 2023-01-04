@@ -1,14 +1,11 @@
 from __future__ import annotations
 
 import hashlib
+import inspect
 import os
 from abc import ABC, abstractmethod
 from collections.abc import ByteString, Iterator
 from typing import Optional
-
-import cryptography.exceptions
-from cryptography.hazmat.primitives.ciphers import aead
-from cryptography.hazmat.primitives.kdf.scrypt import Scrypt
 
 import _replicat_adapters
 from .. import exceptions
@@ -118,22 +115,30 @@ class HashlibIncrementalHasher(IncrementalHasher):
 
 
 class AEADCipherAdapterMixin(CipherAdapter):
-    cipher = None
+    aead_cipher_name = None
 
     def __init__(self):
         self._key_bytes, self._nonce_bytes = self.key_bits // 8, self.nonce_bits // 8
 
+    @property
+    def cipher_class(self):
+        from cryptography.hazmat.primitives.ciphers import aead
+
+        return getattr(aead, self.aead_cipher_name)
+
     def encrypt(self, data, key):
-        cipher = self.cipher(key)
+        cipher = self.cipher_class(key)
         nonce = os.urandom(self._nonce_bytes)
         return nonce + cipher.encrypt(nonce, data, None)
 
     def decrypt(self, data, key):
-        cipher = self.cipher(key)
+        from cryptography.exceptions import InvalidTag
+
         nonce, ciphertext = data[: self._nonce_bytes], data[self._nonce_bytes :]
+        cipher = self.cipher_class(key)
         try:
             return cipher.decrypt(nonce, ciphertext, None)
-        except cryptography.exceptions.InvalidTag as e:
+        except InvalidTag as e:
             raise exceptions.DecryptionError from e
 
     @property
@@ -142,7 +147,7 @@ class AEADCipherAdapterMixin(CipherAdapter):
 
 
 class aes_gcm(AEADCipherAdapterMixin):
-    cipher = aead.AESGCM
+    aead_cipher_name = 'AESGCM'
 
     def __init__(self, *, key_bits=256, nonce_bits=96):
         self.key_bits, self.nonce_bits = key_bits, nonce_bits
@@ -150,7 +155,7 @@ class aes_gcm(AEADCipherAdapterMixin):
 
 
 class chacha20_poly1305(AEADCipherAdapterMixin):
-    cipher = aead.ChaCha20Poly1305
+    aead_cipher_name = 'ChaCha20Poly1305'
     key_bits = 256
     nonce_bits = 96
 
@@ -164,6 +169,8 @@ class scrypt(KDFAdapter):
         return salt
 
     def derive(self, pwd, *, params, context=None):
+        from cryptography.hazmat.primitives.kdf.scrypt import Scrypt
+
         if context is None:
             context = b''
 
@@ -283,3 +290,37 @@ class gclmulchunker(ChunkerAdapter):
 
     def generate_chunking_params(self):
         return os.urandom(16)
+
+
+_adapters = [
+    aes_gcm,
+    chacha20_poly1305,
+    scrypt,
+    blake2b,
+    blake2b,
+    blake2b,
+    sha2,
+    sha3,
+    gclmulchunker,
+]
+_adapters_mapping = {a.__name__: a for a in _adapters}
+
+
+def from_config(name, **kwargs):
+    try:
+        adapter_type = _adapters_mapping[name]
+    except KeyError:
+        raise LookupError(f'Unrecognized adapter {name!r}') from None
+
+    signature = inspect.signature(adapter_type)
+
+    try:
+        bound_args = signature.bind(**kwargs)
+    except TypeError as e:
+        raise exceptions.ReplicatError(
+            f'Invalid configuration for adapter {name}'
+        ) from e
+
+    bound_args.apply_defaults()
+    adapter_args = bound_args.arguments
+    return adapter_type, adapter_args
