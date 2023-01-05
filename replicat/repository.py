@@ -29,16 +29,10 @@ from tqdm import tqdm
 from tqdm.utils import CallbackIOWrapper
 
 from . import exceptions, utils
-from .utils import FileListColumn, SnapshotListColumn
-from .utils.adapters import (
-    ChunkerAdapter,
-    CipherAdapter,
-    HashAdapter,
-    IncrementalHasher,
-    KDFAdapter,
-    MACAdapter,
-)
+from .utils import FileListColumn, SnapshotListColumn, adapters
 from .utils.compat import Random
+from .utils.config import DEFAULT_CACHE_DIRECTORY
+from .utils.fs import flatten_paths
 
 logger = logging.getLogger(__name__)
 
@@ -80,12 +74,12 @@ class _SnapshotState:
 
 @dataclasses.dataclass(repr=False, frozen=True)
 class RepositoryProps:
-    chunker: ChunkerAdapter
-    hasher: HashAdapter
-    cipher: Optional[CipherAdapter] = None
+    chunker: adapters.ChunkerAdapter
+    hasher: adapters.HashAdapter
+    cipher: Optional[adapters.CipherAdapter] = None
     userkey: Optional[bytes] = None
-    authenticator: Optional[MACAdapter] = None
-    shared_kdf: Optional[KDFAdapter] = None
+    authenticator: Optional[adapters.MACAdapter] = None
+    shared_kdf: Optional[adapters.KDFAdapter] = None
     private: Optional[Dict[str, Any]] = None
 
     @cached_property
@@ -95,7 +89,7 @@ class RepositoryProps:
     def hash_digest(self, data: bytes) -> bytes:
         return self.hasher.digest(data)
 
-    def incremental_hasher(self) -> IncrementalHasher:
+    def incremental_hasher(self) -> adapters.IncrementalHasher:
         return self.hasher.incremental_hasher()
 
     def encrypt(self, data: bytes, key: bytes) -> bytes:
@@ -136,7 +130,7 @@ class Repository:
     # Fast KDF for high-entropy inputs (used for shared data)
     DEFAULT_SHARED_KDF_NAME = 'blake2b'
     EMPTY_TABLE_VALUE = '--'
-    DEFAULT_CACHE_DIRECTORY = utils.fs.DEFAULT_CACHE_DIRECTORY
+    DEFAULT_CACHE_DIRECTORY = DEFAULT_CACHE_DIRECTORY
     SNAPSHOT_LIST_COLUMN_LABELS = {
         SnapshotListColumn.NAME: 'name',
         SnapshotListColumn.NOTE: 'note',
@@ -471,19 +465,19 @@ class Repository:
         # Hashing
         hashing_settings = settings.get('hashing', {})
         hashing_settings.setdefault('name', self.DEFAULT_HASHER_NAME)
-        hasher_type, hasher_args = utils.adapter_from_config(**hashing_settings)
+        hasher_type, hasher_args = adapters.from_config(**hashing_settings)
         config['hashing'] = dict(hasher_args, name=hasher_type.__name__)
 
         # Deduplication params
         chunking_settings = settings.get('chunking', {})
         chunking_settings.setdefault('name', self.DEFAULT_CHUNKER_NAME)
-        chunker_type, chunker_args = utils.adapter_from_config(**chunking_settings)
+        chunker_type, chunker_args = adapters.from_config(**chunking_settings)
         config['chunking'] = dict(chunker_args, name=chunker_type.__name__)
 
         if (encryption_settings := settings.get('encryption', {})) is not None:
             cipher_settings = encryption_settings.get('cipher', {})
             cipher_settings.setdefault('name', self.DEFAULT_CIPHER_NAME)
-            cipher_type, cipher_args = utils.adapter_from_config(**cipher_settings)
+            cipher_type, cipher_args = adapters.from_config(**cipher_settings)
             config['encryption'] = {
                 'cipher': dict(cipher_args, name=cipher_type.__name__)
             }
@@ -491,11 +485,11 @@ class Repository:
         return config
 
     def _instantiate_config(self, config):
-        chunker_type, chunker_args = utils.adapter_from_config(**config['chunking'])
-        hasher_type, hasher_args = utils.adapter_from_config(**config['hashing'])
+        chunker_type, chunker_args = adapters.from_config(**config['chunking'])
+        hasher_type, hasher_args = adapters.from_config(**config['hashing'])
 
         if (encryption_config := config.get('encryption')) is not None:
-            cipher_type, cipher_args = utils.adapter_from_config(
+            cipher_type, cipher_args = adapters.from_config(
                 **encryption_config['cipher']
             )
             cipher = cipher_type(**cipher_args)
@@ -516,7 +510,7 @@ class Repository:
         # KDF for user personal data
         user_kdf_settings = encryption_settings.get('kdf', {})
         user_kdf_settings.setdefault('name', self.DEFAULT_USER_KDF_NAME)
-        user_kdf_type, user_kdf_args = utils.adapter_from_config(
+        user_kdf_type, user_kdf_args = adapters.from_config(
             **user_kdf_settings, length=cipher.key_bytes
         )
         user_kdf = user_kdf_type(**user_kdf_args)
@@ -525,7 +519,7 @@ class Repository:
             # KDF for shared data
             shared_kdf_settings = encryption_settings.get('shared_kdf', {})
             shared_kdf_settings.setdefault('name', self.DEFAULT_SHARED_KDF_NAME)
-            shared_kdf_type, shared_args = utils.adapter_from_config(
+            shared_kdf_type, shared_args = adapters.from_config(
                 **shared_kdf_settings, length=cipher.key_bytes
             )
             shared_kdf = shared_kdf_type(**shared_args)
@@ -533,7 +527,7 @@ class Repository:
             # Message authentication
             mac_settings = encryption_settings.get('mac', {})
             mac_settings.setdefault('name', self.DEFAULT_MAC_NAME)
-            mac_type, mac_args = utils.adapter_from_config(**mac_settings)
+            mac_type, mac_args = adapters.from_config(**mac_settings)
             mac = mac_type(**mac_args)
 
             private = {
@@ -553,7 +547,7 @@ class Repository:
 
     def _instantiate_key(self, key, *, password, cipher):
         # User key derivation
-        kdf_type, kdf_args = utils.adapter_from_config(**key['kdf'])
+        kdf_type, kdf_args = adapters.from_config(**key['kdf'])
         userkey = kdf_type(**kdf_args).derive(password, params=key['kdf_params'])
 
         if isinstance(key['private'], bytes):
@@ -563,13 +557,9 @@ class Repository:
             private = key['private']
 
         # Message authentication
-        authenticator_type, authenticator_args = utils.adapter_from_config(
-            **private['mac']
-        )
+        authenticator_type, authenticator_args = adapters.from_config(**private['mac'])
         # KDF for shared data
-        shared_kdf_type, shared_kdf_args = utils.adapter_from_config(
-            **private['shared_kdf']
-        )
+        shared_kdf_type, shared_kdf_args = adapters.from_config(**private['shared_kdf'])
 
         return {
             'userkey': userkey,
@@ -660,7 +650,7 @@ class Repository:
                 )
 
             # TODO: Load keys from the backend as a fallback?
-            if isinstance(key, collections.abc.ByteString):
+            if isinstance(key, (str, collections.abc.ByteString)):
                 key = self.deserialize(key)
 
             props = dataclasses.replace(
@@ -1088,7 +1078,7 @@ class Repository:
             )
 
     def _flatten_resolve_paths(self, paths):
-        return list(utils.fs.flatten_paths(path.resolve(strict=True) for path in paths))
+        return list(flatten_paths(path.resolve(strict=True) for path in paths))
 
     async def snapshot(self, *, paths, note=None, rate_limit=None):
         self.display_status('Collecting files')
@@ -1686,7 +1676,7 @@ class Repository:
         if settings is None:
             settings = {}
 
-        adapter_type, adapter_args = utils.adapter_from_config(name=name, **settings)
+        adapter_type, adapter_args = adapters.from_config(name=name, **settings)
         adapter = adapter_type(**adapter_args)
         argument_string = ', '.join(
             f'{name}={value!r}' for name, value in adapter_args.items()
@@ -1696,7 +1686,7 @@ class Repository:
             max_workers=1, thread_name_prefix='benchmarker'
         )
 
-        if isinstance(adapter, ChunkerAdapter):
+        if isinstance(adapter, adapters.ChunkerAdapter):
             loop = asyncio.get_running_loop()
             await loop.run_in_executor(benchmarker, self._benchmark_chunker, adapter)
         else:

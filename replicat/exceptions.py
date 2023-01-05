@@ -2,6 +2,10 @@ class ReplicatError(Exception):
     pass
 
 
+class InvalidConfig(ReplicatError):
+    pass
+
+
 class DecryptionError(ReplicatError):
     pass
 

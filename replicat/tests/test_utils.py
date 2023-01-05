@@ -1,14 +1,18 @@
 import asyncio
+import logging
 import os
 import threading
 import time
 from base64 import standard_b64encode
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
 from replicat import exceptions, utils
 from replicat.backends.base import Backend
+from replicat.utils import cli, config, fs
 
 # TODO: tests for make_main_parser
 
@@ -220,7 +224,7 @@ def test_bytes_to_human(bytes_amount, human):
     assert utils.bytes_to_human(bytes_amount) == human
 
 
-def test_parser_from_backend_class():
+def test_parser_for_backend():
     weird_default = object()
 
     class A(Backend):
@@ -241,7 +245,7 @@ def test_parser_from_backend_class():
         ):
             pass
 
-    parser = utils.parser_from_backend_class(A)
+    parser = cli.parser_for_backend(A)
     known, unknown = parser.parse_known_args(['--g', 'true', '--h', 'H', '--j', '2'])
     assert not unknown
     assert known.a == 0x6CAB0F071
@@ -276,7 +280,7 @@ def test_parse_cli_settings():
         '1_234',
         '--seventh-trailing',
     ]
-    parsed, unknown = utils.parse_cli_settings(args_list)
+    parsed, unknown = cli.parse_cli_settings(args_list)
     assert len(parsed) == 5
     assert parsed['second_long_name.single_value'] is None
     assert parsed['third_long_name.multiple_values'] == 1
@@ -321,9 +325,373 @@ def test_iterative_scandir(tmp_path):
     (tmp_path / 'Y').mkdir()
     (tmp_path / 'Y/yetanotherfile').touch()
 
-    entries = utils.fs.iterative_scandir(tmp_path)
+    entries = fs.iterative_scandir(tmp_path)
     assert sorted(map(os.fspath, entries)) == [
         str(tmp_path / 'A/B/C/D/somefile'),
         str(tmp_path / 'A/B/K/differentfile'),
         str(tmp_path / 'Y/yetanotherfile'),
     ]
+
+
+class TestReadConfig:
+    @pytest.fixture
+    def config_path(self, tmp_path):
+        path = tmp_path / '.config/test.cfg'
+        path.parent.mkdir(parents=True, exist_ok=False)
+        return path
+
+    def test_ok(self, config_path):
+        config_path.write_text(
+            """
+            first-option = 1
+            second-option = a
+
+            [first-section]
+
+
+            [second_section]
+            third_option = b
+
+            [ with-spaces_weird   ]
+            second-option=c
+            boolean_option = false
+            """
+        )
+        # What can I say, not quite TOML
+        assert config.read_config(config_path) == {
+            'first-option': '1',
+            'second-option': 'a',
+        }
+        assert config.read_config(config_path, profile='second_section') == {
+            'first-option': '1',
+            'second-option': 'a',
+            'third_option': 'b',
+        }
+        assert config.read_config(config_path, profile='with-spaces_weird') == {
+            'first-option': '1',
+            'second-option': 'c',
+            'boolean_option': 'false',
+        }
+
+    def test_default_already_present(self, config_path):
+        config_path.write_text(
+            f"""
+            [{config.DEFAULTS_SECTION}]
+            first-option = 1
+            second-option = a
+            """
+        )
+        result = config.read_config(config_path)
+        assert result == {'first-option': '1', 'second-option': 'a'}
+
+    def test_no_matching_section(self, config_path):
+        config_path.write_text(
+            """
+            only-default-option = 1
+            [proper-section-name]
+            section-option = 1
+            """
+        )
+        with pytest.raises(LookupError):
+            config.read_config(config_path, profile='bad-section-name')
+
+    @pytest.mark.parametrize(
+        'contents',
+        [
+            """
+            duplicate-option = 1
+            duplicate-option = 2
+            """,
+            """
+            no-value
+            yes-value = 'yes'
+            """,
+        ],
+    )
+    def test_invalid_config(self, config_path, contents):
+        config_path.write_text(contents)
+        with pytest.raises(exceptions.InvalidConfig):
+            config.read_config(config_path)
+
+
+class TestConfig:
+    @pytest.mark.parametrize(
+        'options',
+        [
+            ('key', 'key-file'),
+            ('password', 'password-file'),
+        ],
+    )
+    def test_mutually_exclusive(self, options):
+        cfg = config.Config()
+        with pytest.raises(exceptions.InvalidConfig):
+            cfg.apply_known(dict.fromkeys(options, '<some value>'))
+
+    def test_apply_repository_ok(self):
+        cfg = config.Config()
+        cfg.apply_known({'repository': 'somebackend:<some param>'})
+        assert cfg.repository == ('somebackend', '<some param>')
+
+    def test_apply_repository_fail(self):
+        cfg = config.Config()
+        with pytest.raises(ValueError):
+            cfg.apply_known({'repository': '<non-identifier>:<some param>'})
+
+    def test_apply_concurrent_ok(self):
+        cfg = config.Config()
+        cfg.apply_known({'concurrent': '789'})
+        assert cfg.concurrent == 789
+
+    def test_apply_concurrent_fail(self):
+        cfg = config.Config()
+        with pytest.raises(ValueError):
+            cfg.apply_known({'concurrent': '789.0'})
+
+    @pytest.mark.parametrize(
+        'input_value, converted_value',
+        [
+            ('true', True),
+            ('false', False),
+            ('TRUE', True),
+        ],
+    )
+    def test_apply_quiet_ok(self, input_value, converted_value):
+        cfg = config.Config()
+        cfg.apply_known({'hide-progress': input_value})
+        assert cfg.quiet is converted_value
+
+    @pytest.mark.parametrize('input_value', ['none', '1', '0', 'true    '])
+    def test_apply_quiet_fail(self, input_value):
+        cfg = config.Config()
+        with pytest.raises(ValueError):
+            cfg.apply_known({'hide-progress': input_value})
+
+    def test_apply_cache_directory_ok(self):
+        cfg = config.Config()
+        cfg.apply_known({'cache-directory': 'dir/file'})
+        assert cfg.cache_directory == Path('dir/file')
+
+    @pytest.mark.parametrize(
+        'input_value, converted_value',
+        [
+            ('true', None),
+            ('false', Path('dir/file')),
+            ('TRUE', None),
+        ],
+    )
+    def test_apply_no_cache_ok(self, input_value, converted_value):
+        cfg = config.Config()
+        cfg.apply_known({'cache-directory': Path('dir/file'), 'no-cache': input_value})
+        assert cfg.cache_directory == converted_value
+
+    @pytest.mark.parametrize('input_value', ['none', '1', '0', 'true    '])
+    def test_apply_no_cache_fail(self, input_value):
+        cfg = config.Config()
+        with pytest.raises(ValueError):
+            cfg.apply_known(
+                {'cache-directory': Path('dir/file'), 'no-cache': input_value}
+            )
+
+    def test_apply_password_ok(self):
+        cfg = config.Config()
+        cfg.apply_known({'password': '<password as a string>'})
+        assert cfg.password == b'<password as a string>'
+
+    def test_apply_password_fail(self):
+        cfg = config.Config()
+        with pytest.raises(ValueError):
+            cfg.apply_known({'password': '\ud861\udd37'})
+
+    def test_apply_password_file_ok(self, tmp_path):
+        cfg = config.Config()
+        data = bytes(59) + b'\n\n\n\n'
+        (tmp_path / 'pwd.text').write_bytes(data)
+        cfg.apply_known({'password-file': str(tmp_path / 'pwd.text')})
+        assert cfg.password == data
+
+    def test_apply_password_file_fail(self, tmp_path):
+        cfg = config.Config()
+        with pytest.raises(FileNotFoundError):
+            cfg.apply_known({'password-file': str(tmp_path / 'pwd.text')})
+
+    def test_apply_key_ok(self):
+        cfg = config.Config()
+        cfg.apply_known({'key': '<key string>'})
+        assert cfg.key == '<key string>'
+
+    def test_apply_key_file_fail(self, tmp_path):
+        cfg = config.Config()
+        with pytest.raises(FileNotFoundError):
+            cfg.apply_known({'key-file': str(tmp_path / 'key.text')})
+
+    @pytest.mark.parametrize(
+        'input_value, converted_value',
+        [
+            ('fatal', logging.FATAL),
+            ('critical', logging.CRITICAL),
+            ('error', logging.ERROR),
+            ('warning', logging.WARNING),
+            ('info', logging.INFO),
+            ('debug', logging.DEBUG),
+        ],
+    )
+    def test_apply_log_level_ok(self, input_value, converted_value):
+        cfg = config.Config()
+        cfg.apply_known({'log-level': input_value})
+        assert cfg.log_level is converted_value
+
+    @pytest.mark.parametrize('input_value', ['', 'notset', 'warn'])
+    def test_apply_log_level_fail(self, input_value):
+        cfg = config.Config()
+        with pytest.raises(ValueError):
+            cfg.apply_known({'log-level': input_value})
+
+    def test_apply_known_returns_unknown(self):
+        data = {
+            'keyhole': None,
+            'key': '<key string>',
+            'concurrent': '100',
+            'yes-cache': 'false',
+            'no-cache': 'true',
+        }
+
+        cfg = config.Config()
+        unknown = cfg.apply_known(data)
+        assert unknown == {'keyhole': None, 'yes-cache': 'false'}
+        assert unknown is not data
+
+    def test_apply_env_repository_ok(self):
+        cfg = config.Config()
+        with patch.dict(os.environ, REPLICAT_REPOSITORY='somebackend:<backend param>'):
+            cfg.apply_env()
+
+        assert cfg.repository == ('somebackend', '<backend param>')
+
+    def test_apply_env_repository_fail(self):
+        cfg = config.Config()
+        with patch.dict(
+            os.environ, REPLICAT_REPOSITORY='<not an identifier>:<backend param>'
+        ), pytest.raises(ValueError):
+            cfg.apply_env()
+
+    def test_apply_env_repository_password_string_ok(self):
+        cfg = config.Config()
+        with patch.dict(os.environ, REPLICAT_PASSWORD='<plaintext>'):
+            cfg.apply_env()
+
+        assert cfg.password == b'<plaintext>'
+
+    @pytest.mark.skipif(
+        not os.supports_bytes_environ, reason='OS does not support bytes environ'
+    )
+    def test_apply_env_repository_password_bytes_ok(self):
+        cfg = config.Config()
+        with patch.dict(os.environb, {b'REPLICAT_PASSWORD': b'<plaintext>'}):
+            cfg.apply_env()
+
+        assert cfg.password == b'<plaintext>'
+
+    def test_dict(self):
+        cfg = config.Config(
+            cache_directory=None,
+            log_level=logging.DEBUG,
+            repository=('local', 'some/path'),
+        )
+        assert cfg.dict() == {
+            'repository': ('local', 'some/path'),
+            'quiet': False,
+            'concurrent': 5,
+            'cache_directory': None,
+            'password': None,
+            'key': None,
+            'log_level': logging.DEBUG,
+        }
+
+
+def test_config_for_backend():
+    class testbackend:
+        short_name = 'TB'
+
+        def __init__(self, a: int = 1, *, b: str, c=None, **kwargs):
+            ...
+
+    backend_config_type = config.config_for_backend(testbackend, missing='<empty>')
+    assert issubclass(backend_config_type, config.BaseBackendConfig)
+
+    backend_config = backend_config_type()
+    assert backend_config.b == '<empty>'
+    assert backend_config.c is None
+    # No more fields
+    assert backend_config.dict() == {'b': '<empty>', 'c': None}
+
+
+class TestBaseBackendConfig:
+    @pytest.fixture
+    def backend_type(self):
+        class testbackend:
+            short_name = 'BAKEND'
+
+            def __init__(
+                self,
+                a: int = 1,
+                *,
+                b: str,
+                c=None,
+                d: bool,
+                e,
+                f,
+                with_underscores=True,
+            ):
+                ...
+
+        return testbackend
+
+    @pytest.fixture
+    def backend_config(self, backend_type):
+        return config.config_for_backend(backend_type, missing='<not specified>')()
+
+    def test_apply_known_ok(self, backend_config):
+        data = {
+            'a': '0',
+            'b': '<specified>',
+            'd': 'none',
+            'f': '-15773',
+            'with_underscores': 'true',
+            'with-underscores': 'false',
+        }
+        unknown = backend_config.apply_known(data)
+        assert backend_config.b == '<specified>'
+        assert backend_config.c is None
+        assert backend_config.d is None
+        assert backend_config.e == '<not specified>'
+        assert backend_config.f == -15773
+        assert backend_config.with_underscores is False
+
+        assert unknown == {'a': '0', 'with_underscores': 'true'}
+        assert unknown is not data
+
+    def test_apply_env(self, backend_config):
+        with patch.dict(
+            os.environ,
+            BAKEND_B='<specified via env>',
+            BAKEND_D='none',
+            BAKEND_WITH_UNDERSCORES='1234',
+        ):
+            backend_config.apply_env()
+
+        assert backend_config.b == '<specified via env>'
+        assert backend_config.c is None
+        assert backend_config.d is None
+        assert backend_config.e == '<not specified>'
+        assert backend_config.with_underscores == 1234
+
+    def test_dict(self, backend_config):
+        backend_config.e = '<yes specified>'
+        assert backend_config.dict() == {
+            'b': '<not specified>',
+            'c': None,
+            'd': '<not specified>',
+            'e': '<yes specified>',
+            'f': '<not specified>',
+            'with_underscores': True,
+        }

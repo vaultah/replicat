@@ -1,4 +1,3 @@
-import argparse
 import ast
 import asyncio
 import base64
@@ -8,21 +7,21 @@ import gc
 import importlib
 import inspect
 import logging
-import os
 import re
 import threading
 import time
 import weakref
 from decimal import Decimal
 from enum import Enum, auto
-from pathlib import Path
 from types import SimpleNamespace
-from typing import List, Optional
+from typing import Any, List, Optional
 
 from tqdm import tqdm
 
-from .. import __version__, exceptions
-from . import adapters, compat, fs  # noqa
+from .. import __version__  # noqa
+from .. import exceptions
+
+logger = logging.getLogger(__name__)
 
 PREFIXES_TABLE = {
     'k': 1_000,
@@ -43,8 +42,6 @@ HUMAN_SIZE_REGEX = (
     r'(?P<value>([\d]*[.])?[\d]+)\s*?(?P<prefix>%s)?(?P<unit>[Bb])?'
     % "|".join(PREFIXES_TABLE)
 )
-
-logger = logging.getLogger(__name__)
 
 
 class AutoLowerStrEnum(str, Enum):
@@ -79,7 +76,7 @@ class FileListColumn(ColumnMixin, AutoLowerStrEnum):
     CTIME = auto()
 
 
-def _backend_tuple(uri):
+def parse_repository(uri):
     parts = uri.split(':', 1)
     if len(parts) < 2:
         name, connection_string = 'local', parts[0]
@@ -90,6 +87,10 @@ def _backend_tuple(uri):
         logger.error('Invalid backend module name format')
         raise ValueError
 
+    return name, connection_string
+
+
+def load_backend(name, connection_string):
     try:
         mod = importlib.import_module(f'..backends.{name}', package=__package__)
     except BaseException as e:
@@ -100,330 +101,8 @@ def _backend_tuple(uri):
         return (mod.Client, connection_string)
 
 
-def _read_bytes(arg):
-    return Path(arg).read_bytes()
-
-
-# NOTE: Python uses the file system encoding in surrograteescape mode
-# for command line arguments AND os.environ. And we need bytes. So yeah.
-# Still, we'll use os.environb when available.
-def _get_environb(var, default=None):
-    try:
-        return os.environb.get(os.fsencode(var), default)
-    except AttributeError:
-        if (value := os.environ.get(var, default)) is not default:
-            return os.fsencode(value)
-        else:
-            return value
-
-
-repository_parser = argparse.ArgumentParser(add_help=False)
-repository_parser.add_argument(
-    '-r',
-    '--repository',
-    type=_backend_tuple,
-    dest='repo',
-    help='<backend>:<connection string>. The REPLICAT_REPOSITORY environment '
-    "variable is used as a fallback. If neither is provided, we'll use the CWD.",
-    default=os.environ.get('REPLICAT_REPOSITORY', str(Path())),
-)
-
-common_options_parser = argparse.ArgumentParser(add_help=False)
-common_options_parser.add_argument(
-    '-q',
-    '--hide-progress',
-    dest='quiet',
-    action='store_true',
-    help='Disable progress bar for commands that support it.',
-)
-common_options_parser.add_argument(
-    '-c',
-    '--concurrent',
-    default=5,
-    type=int,
-    help='The number of concurrent connections to the backend.',
-)
-cache_options = common_options_parser.add_mutually_exclusive_group()
-cache_options.add_argument(
-    '--cache-directory', help='Cache directory', default=fs.DEFAULT_CACHE_DIRECTORY
-)
-cache_options.add_argument(
-    '--no-cache', action='store_const', const=None, dest='cache_directory'
-)
-common_options_parser.add_argument('-v', '--verbose', action='count', default=0)
-common_options_parser.add_argument(
-    '-K', '--key-file', metavar='KEYFILE', dest='key', type=_read_bytes
-)
-# All the different ways to provide the repository password.
-# We could add a proper description for this group, but there's
-# a long-standing argparse bug https://bugs.python.org/issue16807
-password_options = common_options_parser.add_mutually_exclusive_group()
-password_options.add_argument(
-    '-p',
-    '--password',
-    type=os.fsencode,
-    help="Password as a string. If neither password string nor the password file "
-    "is provided, we'll use the REPLICAT_PASSWORD environment variable.",
-)
-password_options.add_argument(
-    '-P',
-    '--password-file',
-    dest='password',
-    metavar='PASSWORD_FILE_PATH',
-    help="Path to a file with the password. If neither password string nor the "
-    "password file is provided, we'll use the REPLICAT_PASSWORD environment variable.",
-    type=_read_bytes,
-)
-common_options_parser.set_defaults(password=_get_environb('REPLICAT_PASSWORD'))
-
-
-def make_main_parser(*parent_parsers):
-    parser = argparse.ArgumentParser(add_help=True)
-    parser.add_argument('--version', action='version', version=__version__)
-
-    subparsers = parser.add_subparsers(dest='action', required=True)
-
-    init_parser = subparsers.add_parser('init', parents=parent_parsers)
-    init_parser.add_argument(
-        '-o',
-        '--key-output-file',
-        help='Where to save the new repository key (the default is to write to standard output)',
-        type=Path,
-    )
-
-    add_key_parser = subparsers.add_parser('add-key', parents=parent_parsers)
-    add_key_password_options = add_key_parser.add_mutually_exclusive_group()
-    add_key_password_options.add_argument('-n', '--new-password', type=os.fsencode)
-    add_key_password_options.add_argument(
-        '-N',
-        '--new-password-file',
-        dest='new_password',
-        metavar='NEW_PASSWORD_FILE_PATH',
-        type=_read_bytes,
-    )
-    add_key_parser.add_argument(
-        '--shared',
-        action='store_true',
-        help='Whether to share encrypted chunks with the owner of that key',
-    )
-    add_key_parser.add_argument(
-        '-o',
-        '--key-output-file',
-        help='Where to save the new repository key (the default is to write to standard output)',
-        type=Path,
-    )
-
-    list_snapshots_parser = subparsers.add_parser(
-        'list-snapshots', parents=parent_parsers, aliases=['ls']
-    )
-    list_snapshots_parser.add_argument(
-        '-S',
-        '--snapshot-regex',
-        help='Regex to filter snapshots (can be specified more than once '
-        'to include snapshots matching ANY of the given regexes)',
-        action='append',
-    )
-    list_snapshots_parser.add_argument(
-        '--no-header',
-        help='Do not include table header in the output',
-        action='store_true',
-    )
-    list_snapshots_parser.add_argument(
-        '--columns',
-        help='Comma-separated list of columns to include in the output '
-        '(choices are {})'.format(', '.join(SnapshotListColumn)),
-        type=SnapshotListColumn.parse_list,
-    )
-
-    list_files_parser = subparsers.add_parser(
-        'list-files', parents=parent_parsers, aliases=['lf']
-    )
-    list_files_parser.add_argument(
-        '-S',
-        '--snapshot-regex',
-        help='Regex to filter snapshots (can be specified more than once '
-        'to include snapshots matching ANY of the given regexes)',
-        action='append',
-    )
-    list_files_parser.add_argument(
-        '-F',
-        '--file-regex',
-        help='Regex to filter files (can be specified more than once '
-        'to include files matching ANY of the given regexes)',
-        action='append',
-    )
-    list_files_parser.add_argument(
-        '--no-header',
-        help='Do not include table header in the output',
-        action='store_true',
-    )
-    list_files_parser.add_argument(
-        '--columns',
-        help='Comma-separated list of columns to include in the output '
-        '(choices are {})'.format(', '.join(FileListColumn)),
-        type=FileListColumn.parse_list,
-    )
-
-    snapshot_parser = subparsers.add_parser('snapshot', parents=parent_parsers)
-    snapshot_parser.add_argument('path', nargs='+', type=Path)
-    snapshot_parser.add_argument('-n', '--note')
-    snapshot_parser.add_argument(
-        '-L', '--limit-rate', dest='rate_limit', type=human_to_bytes
-    )
-
-    restore_parser = subparsers.add_parser('restore', parents=parent_parsers)
-    restore_parser.add_argument('path', nargs='?', help='Output directory', type=Path)
-    restore_parser.add_argument(
-        '-S',
-        '--snapshot-regex',
-        help='Regex to filter snapshots (can be specified more than once '
-        'to include snapshots matching ANY of the given regexes)',
-        action='append',
-    )
-    restore_parser.add_argument(
-        '-F',
-        '--file-regex',
-        help='Regex to filter files (can be specified more than once '
-        'to include files matching ANY of the given regexes)',
-        action='append',
-    )
-
-    delete_parser = subparsers.add_parser('delete', parents=parent_parsers)
-    delete_parser.add_argument('snapshot', nargs='+')
-    delete_parser.add_argument('-y', '--yes', action='store_true')
-
-    subparsers.add_parser('clean', parents=parent_parsers)
-
-    benchmark_parser = subparsers.add_parser('benchmark', parents=parent_parsers)
-    benchmark_parser.add_argument('name')
-
-    upload_objects_parser = subparsers.add_parser(
-        'upload-objects', parents=parent_parsers
-    )
-    upload_objects_parser.add_argument('path', nargs='+', type=Path)
-    upload_objects_parser.add_argument(
-        '-L', '--limit-rate', dest='rate_limit', type=human_to_bytes
-    )
-    upload_objects_parser.add_argument('-S', '--skip-existing', action='store_true')
-
-    download_objects_parser = subparsers.add_parser(
-        'download-objects', parents=parent_parsers
-    )
-    download_objects_parser.add_argument(
-        'path', nargs='?', help='Output directory', type=Path
-    )
-    download_objects_parser.add_argument(
-        '-O',
-        '--object-regex',
-        help='Regex to filter objects (can be specified more than once '
-        'to include objects matching ANY of the given regexes)',
-        action='append',
-    )
-    download_objects_parser.add_argument('-S', '--skip-existing', action='store_true')
-
-    list_objects_parser = subparsers.add_parser('list-objects', parents=parent_parsers)
-    list_objects_parser.add_argument(
-        'path', nargs='?', help='Output directory', type=Path
-    )
-    list_objects_parser.add_argument(
-        '-O',
-        '--object-regex',
-        help='Regex to filter objects (can be specified more than once '
-        'to include objects matching ANY of the given regexes)',
-        action='append',
-    )
-
-    delete_objects_parser = subparsers.add_parser(
-        'delete-objects', parents=parent_parsers
-    )
-    delete_objects_parser.add_argument('object', nargs='+')
-    delete_objects_parser.add_argument('-y', '--yes', action='store_true')
-    return parser
-
-
-def parser_from_backend_class(cls, *, inherit_common=True, missing=None):
-    """Create a parser instance that inherits arguments from the common parser
-    and adds arguments based on the class constructor signature
-    """
-    if inherit_common:
-        parent_parsers = [common_options_parser]
-    else:
-        parent_parsers = []
-
-    parser = argparse.ArgumentParser(add_help=False, parents=parent_parsers)
-    group = parser.add_argument_group(
-        f'arguments specific to the {cls.display_name} backend'
-    )
-    params = inspect.signature(cls).parameters
-
-    for name, arg in params.items():
-        # Take just keyword-only arguments
-        if arg.kind is not arg.KEYWORD_ONLY:
-            continue
-
-        environment_var = f'{cls.short_name.upper()}_{name.upper()}'
-        help_text = f'or the {environment_var} environment variable'
-        if arg.default is not arg.empty:
-            default = arg.default
-            help_text += f', or the constructor default ({default})'
-        else:
-            default = missing
-
-        name = name.replace('_', '-')
-        group.add_argument(
-            f'--{name}',
-            default=os.environ.get(environment_var, default),
-            # TODO: consider annotations?
-            type=guess_type,
-            help=help_text,
-        )
-
-    return parser
-
-
 def combine_regexes(regex_list: List[str]) -> str:
     return '|'.join(regex_list)
-
-
-def parse_cli_settings(args_list):
-    mapping = {}
-    unknown = []
-    flag = None
-
-    for arg in args_list:
-        if arg.startswith('--'):
-            if flag is not None:
-                unknown.append(flag)
-            flag = arg
-        else:
-            if flag is not None:
-                key = flag.lstrip('-').replace('-', '_')
-                value = guess_type(arg)
-                mapping[key] = value
-                flag = None
-            else:
-                unknown.append(arg)
-
-    if flag is not None:
-        unknown.append(flag)
-
-    return mapping, unknown
-
-
-def adapter_from_config(name, **kwargs):
-    adapter_type = getattr(adapters, name)
-    signature = inspect.signature(adapter_type)
-
-    try:
-        bound_args = signature.bind(**kwargs)
-    except TypeError as e:
-        raise exceptions.ReplicatError(
-            f'Invalid configuration for adapter {name}'
-        ) from e
-
-    bound_args.apply_defaults()
-    adapter_args = bound_args.arguments
-    return adapter_type, adapter_args
 
 
 def human_to_bytes(value):
@@ -452,7 +131,7 @@ def bytes_to_human(value, prec=2):
     return f'{round(value / divisor, prec):g}{unit}'
 
 
-def guess_type(value):
+def guess_type(value: str) -> Any:
     if value.lower() in {'none', 'false', 'true'}:
         value = value.title()
 

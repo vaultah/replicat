@@ -2,10 +2,6 @@ import os
 import os.path
 from pathlib import Path
 
-from appdirs import user_cache_dir
-
-DEFAULT_CACHE_DIRECTORY = user_cache_dir('replicat', 'replicat')
-
 
 def iterative_scandir(path, *, follow_symlinks=False):
     """Yield *files* under path recursively"""
