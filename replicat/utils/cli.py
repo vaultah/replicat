@@ -50,7 +50,13 @@ config_group.add_argument(
     type=Path,
     default=config.DEFAULT_CONFIG_PATH,
 )
-initial_parser.add_argument('-v', '--verbose', action='count', default=0)
+initial_parser.add_argument(
+    '-v',
+    '--verbose',
+    action='count',
+    help='Increase logging verbosity (-v for info, -vv for debug)',
+    default=0,
+)
 
 common_options_parser = argparse.ArgumentParser(add_help=False)
 common_options_parser.add_argument(
@@ -58,14 +64,14 @@ common_options_parser.add_argument(
     '--hide-progress',
     dest='quiet',
     action='store_true',
-    help='Disable progress bar for commands that support it.',
+    help='Disable progress bar for commands that support it',
 )
 common_options_parser.add_argument(
     '-c',
     '--concurrent',
     type=int,
     help='The number of concurrent connections to the backend '
-    f'(the default is {config.DEFAULT_CONCURRENT}).',
+    f'(the default is {config.DEFAULT_CONCURRENT})',
     default=config.DEFAULT_CONCURRENT,
 )
 cache_options = common_options_parser.add_mutually_exclusive_group()

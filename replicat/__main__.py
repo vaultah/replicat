@@ -143,7 +143,7 @@ def main():
 
     cfg.apply_env()
 
-    # Fall back to log level from config if logging has not been configured via CLI
+    # Fall back on log level from config if logging has not been configured via CLI
     if not args.verbose:
         _configure_logging(level=cfg.log_level)
 
