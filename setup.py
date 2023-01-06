@@ -100,6 +100,7 @@ setup(
         'appdirs>=1.4.4,<1.5',
         'tqdm>=4.63,<5',
         'sty>=1,<1.1',
+        'tomli >= 1.1.0 ; python_version < "3.11"',
     ],
     extras_require=extras_require,
     ext_modules=[CMakeExtension('_replicat_adapters')],

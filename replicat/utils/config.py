@@ -1,4 +1,3 @@
-import configparser
 import dataclasses
 import inspect
 import logging
@@ -10,11 +9,11 @@ from typing import Any, Dict, Optional, Tuple
 from appdirs import user_cache_dir, user_config_dir
 
 from .. import exceptions
-from . import guess_type, parse_repository
+from . import compat, guess_type, parse_repository
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_CONFIG_PATH = Path(user_config_dir('replicat'), 'replicat.conf')
+DEFAULT_CONFIG_PATH = Path(user_config_dir('replicat'), 'replicat.toml')
 DEFAULTS_SECTION = 'default'
 
 DEFAULT_REPOSITORY = ('local', os.getcwd())
@@ -42,10 +41,26 @@ def _check_mutually_exclusive(mapping, *keys):
         )
 
 
-def _guess_boolean(value):
-    if not isinstance(rv := guess_type(value), bool):
-        raise ValueError(f'{value!r} is not a valid boolean')
-    return rv
+def _check_natural_number(value):
+    if isinstance(value, str):
+        value = int(value)
+    elif not isinstance(value, int):
+        raise ValueError(f'{value!r} is not an integer')
+
+    if value < 1:
+        raise ValueError(f'{value!r} is not an valid value')
+
+    return value
+
+
+def _check_boolean(value):
+    if isinstance(value, str):
+        value = guess_type(value)
+
+    if not isinstance(value, bool):
+        raise ValueError(f'{value!r} is not a boolean')
+
+    return value
 
 
 def _read_bytes(path):
@@ -72,25 +87,20 @@ def read_config(path=None, *, profile=None):
     if path is None:
         path = DEFAULT_CONFIG_PATH
 
-    if profile is None:
-        section = DEFAULTS_SECTION
-
     text = f'[{DEFAULTS_SECTION}]\n' + Path(path).read_text(encoding='utf-8')
     try:
-        parser = configparser.ConfigParser(default_section=DEFAULTS_SECTION)
-        parser.read_string(text)
-    except configparser.Error as e:
+        sections = compat.toml.loads(text)
+    except compat.toml.TOMLDecodeError as e:
         raise exceptions.InvalidConfig(f'Config at {path} is invalid') from e
     else:
-        if profile is None:
-            return dict(parser[DEFAULTS_SECTION])
+        defaults = sections[DEFAULTS_SECTION]
+        if profile is not None:
+            try:
+                defaults.update(sections[profile])
+            except KeyError as e:
+                raise LookupError(f'Unrecognized profile {profile!r}') from e
 
-        # We want to be like TOML
-        for section_name, section in parser.items():
-            if section_name.strip() == profile:
-                return dict(section)
-
-        raise LookupError(f'Unrecognized profile {profile!r}')
+        return defaults
 
 
 class BaseConfig(ABC):
@@ -102,22 +112,22 @@ class BaseConfig(ABC):
     def apply_env(self) -> None:
         return None
 
-    def _convert_set(self, method, key, conversion=None, *, field):
+    def _validate_set(self, method, key, validator=None, *, field):
         try:
             value = method(key)
         except KeyError:
             pass
         else:
-            if conversion is not None:
-                setattr(self, field, conversion(value))
+            if validator is not None:
+                setattr(self, field, validator(value))
             else:
                 setattr(self, field, value)
 
-    def getset(self, mapping, key, conversion=None, *, field):
-        self._convert_set(mapping.__getitem__, key, conversion, field=field)
+    def getset(self, mapping, key, validator=None, *, field):
+        self._validate_set(mapping.__getitem__, key, validator, field=field)
 
-    def popset(self, mapping, key, conversion=None, *, field):
-        self._convert_set(mapping.pop, key, conversion, field=field)
+    def popset(self, mapping, key, validator=None, *, field):
+        self._validate_set(mapping.pop, key, validator, field=field)
 
     def dict(self):
         return {
@@ -141,16 +151,16 @@ class Config(BaseConfig):
 
         remaining = mapping.copy()
         self.popset(remaining, 'repository', parse_repository, field='repository')
-        self.popset(remaining, 'concurrent', int, field='concurrent')
-        self.popset(remaining, 'hide-progress', _guess_boolean, field='quiet')
+        self.popset(remaining, 'concurrent', _check_natural_number, field='concurrent')
+        self.popset(remaining, 'hide-progress', _check_boolean, field='quiet')
         self.popset(remaining, 'cache-directory', Path, field='cache_directory')
 
-        if _guess_boolean(remaining.pop('no-cache', 'false')):
+        if _check_boolean(remaining.pop('no-cache', False)):
             self.cache_directory = None
 
         self.popset(remaining, 'password', str.encode, field='password')
         self.popset(remaining, 'password-file', _read_bytes, field='password')
-        self.popset(remaining, 'key', field='key')
+        self.popset(remaining, 'key', str.encode, field='key')
         self.popset(remaining, 'key-file', _read_bytes, field='key')
         self.popset(remaining, 'log-level', _convert_log_level, field='log_level')
         return remaining

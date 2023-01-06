@@ -21,6 +21,12 @@ def _read_bytes(path):
     return Path(path).read_bytes()
 
 
+def _check_natural_number(value):
+    if (converted := int(value)) < 1:
+        raise ValueError
+    return converted
+
+
 initial_parser = argparse.ArgumentParser(add_help=False)
 initial_parser.add_argument(
     '-r',
@@ -69,7 +75,7 @@ common_options_parser.add_argument(
 common_options_parser.add_argument(
     '-c',
     '--concurrent',
-    type=int,
+    type=_check_natural_number,
     help='The number of concurrent connections to the backend '
     f'(the default is {config.DEFAULT_CONCURRENT})',
     default=config.DEFAULT_CONCURRENT,

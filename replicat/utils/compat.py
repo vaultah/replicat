@@ -10,3 +10,9 @@ if sys.version_info < (3, 9):
 
 else:
     Random = random.Random
+
+
+if sys.version_info < (3, 11):
+    import tomli as toml  # noqa
+else:
+    import tomllib as toml  # noqa
