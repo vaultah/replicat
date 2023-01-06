@@ -469,7 +469,7 @@ you can put in the configuration file mostly match CLI arguments, with few excep
 |<b><code>no&#8209;cache</code></b>| boolean | `true`, `false` ||
 |**`password`**             | string  | Password as a string | Cannot be used together with `password-file` |
 |<b><code>password&#8209;file</code></b>| path    | Relative or absolute path | Cannot be used together with `password` |
-|**`key`**                  | string   | JSON as an inline table | Cannot be used together with `key-file` |
+|**`key`**                  | string   | JSON as a string | Cannot be used together with `key-file` |
 |<b><code>key&#8209;file</code></b>| path | Relative or absolute path | Cannot be used together with `key` |
 |<b><code>log&#8209;level</code></b>| string | `debug`, `info`, `warning`, `error`, `critical`, `fatal` | CLI option `-v` _increases_ logging verbosity starting from `warning`, while this option lets you set _lower_ logging verbosity, such as  `error` |
 
