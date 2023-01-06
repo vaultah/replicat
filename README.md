@@ -35,8 +35,8 @@ pip install replicat
 ## Reasoning
 
 For various reasons, I wasn't 100% happy with any of the similar projects that I've tried.
-It's likely that I will never be 100% happy with Replicat either, but at least it will be
-easier for me to fix problems or add new features.
+Also, it's much easier to add new features or fix problems in a project that was built
+with those issues in mind and written in a familiar language.
 
 Highlights/goals:
 
@@ -50,83 +50,101 @@ Highlights/goals:
 This project borrows a few ideas from those other projects, but not enough to be considered
 a copycat.
 
-# Introduction
+# Basics
 
 You can use Replicat to backup files from your machine to a *repository*, located on a *backend*
-such as a local directory or cloud storage (like Backblaze B2). Your files are transfered and stored
-in an optionally encrypted and chunked form, and references to *chunks* (i.e. their hash digests)
-are stored in *snapshots* along with file name and metadata.
+such as a local directory or cloud storage (like Backblaze B2). Your files are transfered and
+stored in an optionally encrypted and chunked form, and references to *chunks* (i.e. their hash
+digests) are stored in *snapshots* along with file name and metadata. You can create, list,
+and delete snapshots, and, of course, restore original files from snapshots.
 
-Replicat supports two types of repositories: encrypted (the default) and unencrypted.
+Replicat supports two types of repositories: **encrypted** (the default) and **unencrypted**.
+You may want to disable encryption if you trust your backend provider and network, for example.
 
-Chunks, snapshots, and all other pieces of data inside unencrypted repositories are stored
-unencrypted. The storage names for chunks and snapshots are simply the hash digests of their
-contents.
+Chunks, snapshots, and all other pieces of data inside **unencrypted** repositories are stored
+unencrypted.
 
-Currently, the only supported type of encryption is symmetric encryption. To use symmetric encryption,
-you will need a key and the password associated with that key. A key contains parameters for the
-KDF and an encrypted (private) section, which can only be decrypted by the owner of the key using
-the matching password. That section contains secrets for the cryptographic primitives that control
-how the data is split into chunks, visibility of chunks of data, and more.
+In case of **encrypted** repositories, Replicat will use symmetric encryption to encrypt chunks
+and snapshots. In order to use encryption, you will need to choose a password and generate the key
+associated with that password (Replicat can do it for you). You'll need both the password and the
+matching key to unlock the repository, but how or where you're going to store them is up to you.
 
-You can create multiple keys with different passwords and settings. When adding a new key to a
-repository with symmetric encryption, you'll have to unlock it with one of the existing keys.
-You have a choice to either share secrets with the other key OR generate new secrets. Owners of
-keys with shared secrets ("shared" keys) can use deduplication features *together*, i.e., chunks
-of data that were uploaded by the owner of one such key can be accessed and decrypted by the owner
-of the other key. Assume that they will also be able to check whether you have a specific piece
-of data. To avoid such risk, you can create a key with new secrets (an "independent" key).
-That way, Replicat will isolate your data and make it inaccessible to the owners of other keys.
-Of course, if you use your key to create a yet another (new) key, you will also have the ability
-to share your secrets with others, even if they were originally copied from some other key.
-This creates a web of trust of sorts.
+Actually, you can create multiple keys with different passwords and maybe share those with
+other people. If you ask Replicat to create a "shared" key, it will copy some of the secrets
+from your key to the new key, so that you and the owner of the new key could use deduplication
+features *together*, meaning data uploaded by you could be reused (referenced and decrypted)
+by the other person. That other person will also be able to create "shared" keys by copying
+secrets that were originally copied to their key from your key, and so on. This creates a web of
+trust of sorts. If any of this is not desirable, you can create "independent" keys.
 
-In contrast with unencrypted repositories, the storage name for the chunk is derived from
-the hash digest of its contents **and** one of the aforementioned secrets, in order to reduce
+Names of files, file timestamps, and other file metadata within snapshots are encrypted using
+a secret that never gets copied to other keys. That is, if you create a snapshot, owners of shared
+keys will be able to see it, but there will be no available information about it beyond its storage
+name and the table of chunk references (still, they might still be able to check whether you have
+ever uploaded a specific piece of data - that's what enables shared deduplication).
+No data will be accessible if a snapshot was created using an independent key.
+
+<details>
+    <summary>
+        <b><i>High-level technical details</i></b>
+    </summary>
+<p>
+The key is a JSON object that contains parameters for the KDF, which will be used to derive
+user key from the password, and a private encrypted section, which can only be decrypted
+by the owner of the key and the matching password (i.e., it's encrypted and decrypted using
+the previously derived user key). The encrypted section contains secrets for the cryptographic
+primitives that control how the data is split into chunks, visibility of chunks of data, and more.
+</p>
+
+<p>
+The storage names for chunks and snapshots in unencrypted repositories are simply the hash
+digests of their contents. For encrypted repositories, the storage name for the chunk is derived
+from the hash digest of its contents <i>and</i> one of the aforementioned secrets, in order to reduce
 the chance of successful "confirmation of file" attacks. The chunk itself is encrypted with
-the combination of the hash digest of its contents **and** another one of those secrets, since
-the usual convergent encryption is vulnerable to that same "confirmation of file" attack. Table
-of chunk references inside a snapshot is encrypted similarly, but the list of files that reference
-those chunks is encrypted using the key and the password that were used to unlock the repository,
-and therefore can only be decrypted by the owner of that key (even in the case of shared secrets).
-A snapshot created using an independent key will not be visible. A snapshot created using a
-shared key will be visible, but there will be no available information about it beyond its storage
-name and the table of chunk references.
+the combination of the hash digest of its contents <i>and</i> another one of those secrets, since
+the usual convergent encryption is vulnerable to that same "confirmation of file" attack. Note that
+that these secrets get copied to shared keys in order to support shared deduplication. Table
+of chunk references in a snapshot also gets encrypted in a way that lets owners of shared keys to
+decrypt it. This helps Replicat to identify which chunks are still referenced by snapshots and
+which can be garbage collected.
+</p>
+</details>
 
-## Deeper dive
+<details>
+    <summary>
+        <b><i>Extremely cool, colorful, in-depth diagrams that I worked really hard on</i></b>
+    </summary>
+Glossary:
 
-You're about to see diagrams illustrating how replicat processes data, along with example contents
-of the configuration file, keys, and snapshots. Here's the terminology:
-
- - **`Encrypt(data, key)`/`Decrypt(data, key)`** -- encrypts/decrypts `data` with the encryption key
+ - **`Encrypt(data, key)`/`Decrypt(data, key)`** - encrypts/decrypts `data` with the encryption key
  `key` using an authenticated encryption algorithm. It's normally used to encrypt/decrypt private
  sections in keys, as well as chunks and snapshots.
 
- - **`Hash(data)`** -- computes the hash digest of `data` using a hashing algorithm.
+ - **`Hash(data)`** - computes the hash digest of `data` using a hashing algorithm.
  It's used to check integrity of data and to derive encryption keys for chunks and snapshots.
 
- - **`Mac(data, key)`** -- computes the message authentication code for `data` using suitable `key`
+ - **`Mac(data, key)`** - computes the message authentication code for `data` using suitable `key`
  and a MAC algorithm. It's mainly used to verify ownership of chunks.
 
- - **`SlowKdf(ikm, salt[, context])`/`FastKdf(ikm, salt[, context])`** -- calls a "slow"/"fast" key derivation
+ - **`SlowKdf(ikm, salt[, context])`/`FastKdf(ikm, salt[, context])`** - calls a "slow"/"fast" key derivation
  function to obtain an encryption key from `ikm` using `salt` and an optional `context`. As a general rule,
  replicat uses "slow" KDF for low-entropy inputs and "fast" KDF for high-entropy inputs. The output length
  will match the encryption key length of the chosen encryption algorithm.
 
- - **`UserKey`** -- encryption key derived as `SlowKdf(Password, UserKdfParams)`, where `Password`
+ - **`UserKey`** - encryption key derived as `SlowKdf(Password, UserKdfParams)`, where `Password`
  is the user's password and `UserKdfParams` is the salt. `UserKey` is used to encrypt sensitive
  personal data: private sections in keys and file metadata in snapshots.
 
- - **`SharedKey`**, **`SharedKdfParams`**, **`SharedMacKey`**, **`SharedChunkerKey`** -- secrets stored in
+ - **`SharedKey`**, **`SharedKdfParams`**, **`SharedMacKey`**, **`SharedChunkerKey`** - secrets stored in
  the private sections of keys. `SharedKey` and `SharedKdfParams` are used to derive encryption keys using
  "fast" KDF (they will encrypt shared data, like chunks and chunk references). `SharedMacKey` is the MAC key.
  `SharedChunkerKey` personalises content-defined chunking (CDC) to prevent watermarking attacks.
 
- - **`GetChunkLocation(name, authentication_tag)`/`GetSnapshotLocation(name, authentication_tag)`** -- obtains the
+ - **`GetChunkLocation(name, authentication_tag)`/`GetSnapshotLocation(name, authentication_tag)`** - obtains the
  location for a chunk/snapshot using its name and the corresponding authentication tag.
  
- - **`Upload(data, location)`** -- uploads `data` to the backend to the given `location`.
- - **`Download(location)`** -- downloads data from the backend at the given `location`.
+ - **`Upload(data, location)`** - uploads `data` to the backend to the given `location`.
+ - **`Download(location)`** - downloads data from the backend at the given `location`.
  
 ![replicat config](https://user-images.githubusercontent.com/4944562/172485084-e2935819-0287-442c-a71c-b2098ef12077.svg)
 
@@ -135,24 +153,25 @@ of the configuration file, keys, and snapshots. Here's the terminology:
 ![replicat chunks](https://user-images.githubusercontent.com/4944562/172485100-f4dc189f-6736-4914-8fe9-51960771f122.svg)
 
 ![replicat snapshots](https://user-images.githubusercontent.com/4944562/172485108-b4d66ee8-d00d-4593-a95a-c84eef53af3e.svg)
+</details>
 
 # Command line interface
 
 The installer will create the `replicat` command (same as `python -m replicat`).
 There are several available subcommands:
 
- - `init` -- initializes the repository using the provided settings
- - `snapshot` -- creates a new snapshot in the repository
- - `list-snapshots`/`ls` -- lists snapshots
- - `list-files`/`lf` -- lists files across snapshots
- - `restore` -- restores files from snapshots
- - `add-key` -- creates a new key for the encrypted repository
- - `delete` -- deletes snapshots by their names
- - `clean` -- performs garbage collection
- - `upload-objects` -- uploads objects to the backend (a low-level command)
- - `download-objects` -- downloads objects from the backend (a low-level command)
- - `list-objects` -- lists objects at the backend (a low-level command)
- - `delete-objects` -- deletes objects from the backend (a low-level command)
+ - `init` - initializes the repository using the provided settings
+ - `snapshot` - creates a new snapshot in the repository
+ - `list-snapshots`/`ls` - lists snapshots
+ - `list-files`/`lf` - lists files across snapshots
+ - `restore` - restores files from snapshots
+ - `add-key` - creates a new key for the encrypted repository
+ - `delete` - deletes snapshots by their names
+ - `clean` - performs garbage collection
+ - `upload-objects` - uploads objects to the backend (a low-level command)
+ - `download-objects` - downloads objects from the backend (a low-level command)
+ - `list-objects` - lists objects at the backend (a low-level command)
+ - `delete-objects` - deletes objects from the backend (a low-level command)
 
 > ⚠️ **WARNING**: commands that read from or upload to the repository can safely be run
 > concurrently; however, there are presently no guards in place that would make it safe
@@ -166,7 +185,7 @@ There are several available subcommands:
 
 There are several command line arguments that are common to all subcommands:
 
- - `-r`/`--repository` -- used to specify the type and location of the repository backend
+ - `-r`/`--repository` - used to specify the type and location of the repository backend
  (backup destination). The format is `<backend>:<connection string>`, where `<backend>` is
  the short name of a Replicat-compatible backend and `<connection string>` is open to
  interpretation by the adapter for the selected backend. Examples:
@@ -175,19 +194,41 @@ There are several command line arguments that are common to all subcommands:
  destinations). If the backend requires additional arguments, they will appear in the
  `--help` output. Refer to the section on backends for more detailed information.
 
- - `-q`/`--hide-progress` -- suppresses progress indication for commands that support it
- - `-c`/`--concurrent` -- the number of concurrent connections to the backend
- - `--cache-directory` -- specifies the directory to use for cache. `--no-cache` disables
+ - `-q`/`--hide-progress` - suppresses progress indication for commands that support it
+ - `-c`/`--concurrent` - the number of concurrent connections to the backend
+ - `--cache-directory` - specifies the directory to use for cache. `--no-cache` disables
  cache completely.
- - `-v`/`--verbose` -- specifies the logging verbosity. The default verbosity is `WARNING`,
- `-v` means `INFO`, `-vv` means `DEBUG`.
+ - `-v`/`--verbose` - increases the logging verbosity. The default verbosity is `warning`,
+ `-v` means `info`, `-vv` means `debug`.
 
 Encrypted repositories require a key and a matching password for every operation:
 
- - `-K`/`--key-file` -- the path to the key file
- - `-p`/`--password` -- the password in plaintext. **However**, it's more secure to provide the
+ - `-K`/`--key-file` - the path to the key file
+ - `-p`/`--password` - the password in plaintext. **However**, it's more secure to provide the
  password in a file via the `-P`/`--password-file` argument, or as an environment variable
  `REPLICAT_PASSWORD`.
+
+If the backend requires additional parameters (account name, client secret, some boolean flag, or
+literally anything else), you'll also be able to set them via command line arguments or
+in the configuration file. Refer to [_Backends_ section](#backends) section to learn more.
+
+If you often use many of these arguments, and their values mostly stay the same between
+invocations, you may find it easier to put them in a configuration file instead.
+There are three arguments related to that:
+
+ - `--profile` - load settings from this profile in the configuration file
+ - `--config` - path to the configuration file (check `--help` for the default config location)
+ - `--ignore-config` - ignore the configuration file
+
+Note that values from CLI always take precedence over options from the configuration file.
+Specifically, to build the final configuration, Replicat considers command line arguments, environment
+variables, the configuration file (either the default one *or* the one supplied via `--config`),
+and global defaults, in that order.
+
+Names of configuration file options mostly match the long names of command line arguments
+(e.g., `hide-progress = true` matches `--hide-progress`, `repository = "s3:bucket"` matches
+`-r s3:bucket`), but you can always refer to the
+[_Configuration file_ section](#configuration-file) for full reference.
 
 ## `init` examples
 
@@ -245,8 +286,8 @@ $ replicat list-snapshots -r some:repository -P path/to/password/file -K path/to
 # Same, but without the table header
 $ replicat ls -r some:repository -P path/to/password/file -K path/to/key/file --no-header
 # Lists snapshots with names that match any of the regexes passed via -S/--snapshot-regex
-# In this example, we'll only list snapshots whose names start with '123456' OR include
-# substring 'abcdef'
+# In this example, Replicat will only list snapshots whose names start with '123456'
+# OR include substring 'abcdef'
 $ replicat ls -r some:repository \
     -P path/to/password/file \
     -K path/to/key/file \
@@ -414,6 +455,69 @@ $ replicat delete-objects -r some:repository object/path/1 object/path/2 ... -y
 replicat --version
 ```
 
+# Configuration file
+
+As mentioned in the [_Command line interface_ section](#command-line-interface), options that
+you can put in the configuration file mostly match CLI arguments, with few exceptions.
+
+|        Option name        |  Type   |    Supported values    |           Notes           |
+|---------------------------| ------- |------------------------|---------------------------|
+|**`repository`**           | string  | <code>\<backend\>:\<connection&#8239;string\></code> ||
+|**`concurrent`**           | integer | Integers greater than 0 ||
+|<b><code>hide&#8209;progress</code></b>| boolean | `true`, `false` ||
+|<b><code>cache&#8209;directory</code></b>| path | Relative or absolute path ||
+|<b><code>no&#8209;cache</code></b>| boolean | `true`, `false` ||
+|**`password`**             | string  | Password as a string | Cannot be used together with `password-file` |
+|<b><code>password&#8209;file</code></b>| path    | Relative or absolute path | Cannot be used together with `password` |
+|**`key`**                  | string   | JSON as a string | Cannot be used together with `key-file` |
+|<b><code>key&#8209;file</code></b>| path | Relative or absolute path | Cannot be used together with `key` |
+|<b><code>log&#8209;level</code></b>| string | `debug`, `info`, `warning`, `error`, `critical`, `fatal` | CLI option `-v` _increases_ logging verbosity starting from `warning`, while this option lets you set _lower_ logging verbosity, such as  `error` |
+
+If the backend requires additional parameters (account id, access key, numeric port, or literally
+anything else), Replicat lets you provide them via the configuration file. For example, if you see
+a backend-specific argument `--some-backend-option` in the `--help` output, the equivalent
+configuration file option will be called `some-backend-option`.
+
+Here's an example configuration file (it uses TOML syntax)
+
+```toml
+concurrent = 10
+# Relative paths work
+cache-directory = "~/.cache/directory/for/replicat"
+
+[debugging]
+log-level = "info"
+hide-progress = true
+
+[my-local-repo]
+repository = "some/local/path"
+password = "<secret>"
+key = """
+{
+    "kdf": { ... },
+    "kdf_params": { "!b": "..." },
+    "private": { "!b": "..." }
+}
+"""
+concurrent = 15
+no-cache = true
+
+[some-s3-repo]
+repository = "s3:bucket-name"
+key-id = "..."
+access-key = "..."
+region = "..."
+```
+
+Options that you specify at the top of the configuration file are defaults and they will be
+inherited by all of the profiles. In the example above there are three profiles
+(not including the default one): `debugging`, `my-local-repo`, `some-s3-repo`. You can tell
+Replicat which profile to use via the `--profile` CLI argument.
+
+Notice that `some-s3-repo` includes options that were not listed in the table. `key-id`,
+`access-key`, `region` are the aforementioned backend-specific options for the S3 backend.
+See [_Backends_](#backends).
+
 # Backends
 
 Run `replicat` commands with `-r <backend>:<connection string>` and additional arguments
@@ -435,8 +539,10 @@ The format is `-r local:some/local/path` or simply `-r some/local/path`.
 The format is `-r b2:bucket-id` or `-r b2:bucket-name`. This backend uses B2 native API and
 requires
 
- - key ID (`--key-id` argument or `B2_KEY_ID` environment variable)
- - application key (`--application-key` argument or `B2_APPLICATION_KEY` environment variable)
+ - key ID (`--key-id` argument, or `B2_KEY_ID` environment variable, or `key-id` option in a
+ profile)
+ - application key (`--application-key` argument, or `B2_APPLICATION_KEY` environment variable, or
+ `application-key` option in a profile)
 
 Sign into your Backblaze B2 account to generate them. Note that you can use the master application
 key or a normal (non-master) application key (which can also be restricted to a single bucket).
@@ -447,21 +553,27 @@ information.
 
 The format is `-r s3:bucket-name`. Requires
 
- - AWS key ID (`--key-id` argument or `S3_KEY_ID` environment variable)
- - AWS access key (`--access-key` argument or `S3_ACCESS_KEY` environment variable)
- - region (`--region` argument or `S3_REGION` environment variable)
+ - AWS key ID (`--key-id` argument, or `S3_KEY_ID` environment variable, or the `key-id` option
+ in a profile)
+ - AWS access key (`--access-key` argument, or `S3_ACCESS_KEY` environment variable, or `access-key`
+ option in a profile)
+ - region (`--region` argument, or `S3_REGION` environment variable, or `region` option in a profile)
 
 ## S3-compatible
 
 The format is `-r s3c:bucket-name`. Requires
 
- - key ID (`--key-id` argument or `S3C_KEY_ID` environment variable)
- - access key (`--access-key` argument or `S3C_ACCESS_KEY` environment variable)
- - host (`--host` argument or `S3C_HOST` environment variable)
- - region (`--region` argument or `S3C_REGION` environment variable)
+ - key ID (`--key-id` argument, or `S3C_KEY_ID` environment variable, or the `key-id` option
+ in a profile)
+ - access key (`--access-key` argument, or `S3C_ACCESS_KEY` environment variable, or `access-key`
+ option in a profile)
+ - host (`--host` argument, or `S3C_HOST` environment variable, or `host` option in a profile)
+ - region (`--region` argument, or `S3C_REGION` environment variable, or `region` option
+ in a profile)
 
 Host must *not* include the scheme. The default scheme is `https`, but can be changed via the
-`--scheme` argument (or, equivalently, the `S3C_SCHEME` environment variable).
+`--scheme` argument (or, equivalently, the `S3C_SCHEME` environment variable or `scheme` option
+in a profile).
 
 You can use S3-compatible backend to connect to [B2](https://www.backblaze.com/b2/docs/s3_compatible_api.html),
 S3, and many other cloud storage providers that offer S3-compatible API.
@@ -491,7 +603,7 @@ to its constructor to create the backend instance. In case there are some additi
 parameters that are required to connect to Proud Cloud (account id, secret token, etc.),
 you should add them to the `replicat.backends.pc.Client` constructor as keyword-only arguments.
 If present, Replicat will generate the corresponding command line arguments with defaults *and*
-you'll even be able to use environment variables to provide them.
+you'll even be able to use environment variables or profiles to provide them.
 
 `replicat.backends.pc.Client` must subclass `replicat.backends.base.Backend` and implement all
 of the methods marked as abstract. You could use implementations of existing

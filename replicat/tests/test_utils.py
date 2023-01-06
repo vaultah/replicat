@@ -344,33 +344,32 @@ class TestReadConfig:
         config_path.write_text(
             """
             first-option = 1
-            second-option = a
+            second-option = "a"
 
             [first-section]
 
 
             [second_section]
-            third_option = b
+            third_option = "b"
 
             [ with-spaces_weird   ]
-            second-option=c
+            second-option="c"
             boolean_option = false
             """
         )
-        # What can I say, not quite TOML
         assert config.read_config(config_path) == {
-            'first-option': '1',
+            'first-option': 1,
             'second-option': 'a',
         }
         assert config.read_config(config_path, profile='second_section') == {
-            'first-option': '1',
+            'first-option': 1,
             'second-option': 'a',
             'third_option': 'b',
         }
         assert config.read_config(config_path, profile='with-spaces_weird') == {
-            'first-option': '1',
+            'first-option': 1,
             'second-option': 'c',
-            'boolean_option': 'false',
+            'boolean_option': False,
         }
 
     def test_default_already_present(self, config_path):
@@ -381,8 +380,8 @@ class TestReadConfig:
             second-option = a
             """
         )
-        result = config.read_config(config_path)
-        assert result == {'first-option': '1', 'second-option': 'a'}
+        with pytest.raises(exceptions.InvalidConfig):
+            config.read_config(config_path)
 
     def test_no_matching_section(self, config_path):
         config_path.write_text(
@@ -437,15 +436,25 @@ class TestConfig:
         with pytest.raises(ValueError):
             cfg.apply_known({'repository': '<non-identifier>:<some param>'})
 
-    def test_apply_concurrent_ok(self):
+    @pytest.mark.parametrize(
+        'input_value, converted_value',
+        [
+            ('789', 789),
+            (890, 890),
+        ],
+    )
+    def test_apply_concurrent_ok(self, input_value, converted_value):
         cfg = config.Config()
-        cfg.apply_known({'concurrent': '789'})
-        assert cfg.concurrent == 789
+        cfg.apply_known({'concurrent': input_value})
+        assert cfg.concurrent == converted_value
 
-    def test_apply_concurrent_fail(self):
+    @pytest.mark.parametrize(
+        'input_value', ['789.0', 789.0, '-1', -1, '0', 0, '<not int>']
+    )
+    def test_apply_concurrent_fail(self, input_value):
         cfg = config.Config()
         with pytest.raises(ValueError):
-            cfg.apply_known({'concurrent': '789.0'})
+            cfg.apply_known({'concurrent': input_value})
 
     @pytest.mark.parametrize(
         'input_value, converted_value',
@@ -453,6 +462,8 @@ class TestConfig:
             ('true', True),
             ('false', False),
             ('TRUE', True),
+            (True, True),
+            (False, False),
         ],
     )
     def test_apply_quiet_ok(self, input_value, converted_value):
@@ -460,16 +471,23 @@ class TestConfig:
         cfg.apply_known({'hide-progress': input_value})
         assert cfg.quiet is converted_value
 
-    @pytest.mark.parametrize('input_value', ['none', '1', '0', 'true    '])
+    @pytest.mark.parametrize('input_value', ['none', '0', 0, 1, '<not bool>'])
     def test_apply_quiet_fail(self, input_value):
         cfg = config.Config()
         with pytest.raises(ValueError):
             cfg.apply_known({'hide-progress': input_value})
 
-    def test_apply_cache_directory_ok(self):
+    @pytest.mark.parametrize(
+        'input_value, converted_value',
+        [
+            ('string/sub/directory', Path('string/sub/directory')),
+            (Path('path/sub/directory'), Path('path/sub/directory')),
+        ],
+    )
+    def test_apply_cache_directory_ok(self, input_value, converted_value):
         cfg = config.Config()
-        cfg.apply_known({'cache-directory': 'dir/file'})
-        assert cfg.cache_directory == Path('dir/file')
+        cfg.apply_known({'cache-directory': input_value})
+        assert cfg.cache_directory == converted_value
 
     @pytest.mark.parametrize(
         'input_value, converted_value',
@@ -477,6 +495,8 @@ class TestConfig:
             ('true', None),
             ('false', Path('dir/file')),
             ('TRUE', None),
+            (True, None),
+            (False, Path('dir/file')),
         ],
     )
     def test_apply_no_cache_ok(self, input_value, converted_value):
@@ -484,7 +504,7 @@ class TestConfig:
         cfg.apply_known({'cache-directory': Path('dir/file'), 'no-cache': input_value})
         assert cfg.cache_directory == converted_value
 
-    @pytest.mark.parametrize('input_value', ['none', '1', '0', 'true    '])
+    @pytest.mark.parametrize('input_value', ['none', '1', '0', 0, 'true    '])
     def test_apply_no_cache_fail(self, input_value):
         cfg = config.Config()
         with pytest.raises(ValueError):
@@ -517,7 +537,14 @@ class TestConfig:
     def test_apply_key_ok(self):
         cfg = config.Config()
         cfg.apply_known({'key': '<key string>'})
-        assert cfg.key == '<key string>'
+        assert cfg.key == b'<key string>'
+
+    def test_apply_key_file_ok(self, tmp_path):
+        cfg = config.Config()
+        data = b'<no validation whatsoever>\n\n\n\n'
+        (tmp_path / 'key.text').write_bytes(data)
+        cfg.apply_known({'key-file': str(tmp_path / 'key.text')})
+        assert cfg.key == data
 
     def test_apply_key_file_fail(self, tmp_path):
         cfg = config.Config()
