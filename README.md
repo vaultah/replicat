@@ -534,7 +534,7 @@ See [_Backends_](#backends).
 
 Run `replicat` commands with `-r <backend>:<connection string>` and additional arguments
 that are specific to the selected backend. Those arguments may have defaults and may also
-be provided via environment variables. Use
+be provided via environment variables or profiles. Use
 
 ```bash
 replicat <command> -r <backend>:<connection string> --help
@@ -709,7 +709,7 @@ of the repository when you initialise it. Here's the default `config`:
     "chunking": {
         "name": "gclmulchunker",
         "min_length": 128000,
-        "max_length": 5120000,
+        "max_length": 5120000
     },
     "encryption": {
         "cipher": {
