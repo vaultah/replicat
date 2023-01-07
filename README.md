@@ -34,14 +34,12 @@ pip install replicat
 
 ## Reasoning
 
-For various reasons, I wasn't 100% happy with any of the similar projects that I've tried.
-Also, it's much easier to add new features or fix problems in a project that was built
-with those issues in mind and written in a familiar language.
+For various reasons, I wasn't entirely happy with any of the similar projects that I've tried.
 
-Highlights/goals:
+Highlights/goals of Replicat:
 
   - efficient, concise, easily auditable implementation
-  - high customizability
+  - high customisability
   - few external dependencies
   - well-documented behaviour
   - unified repository layout
@@ -160,7 +158,7 @@ Glossary:
 The installer will create the `replicat` command (same as `python -m replicat`).
 There are several available subcommands:
 
- - `init` - initializes the repository using the provided settings
+ - `init` - initialises the repository using the provided settings
  - `snapshot` - creates a new snapshot in the repository
  - `list-snapshots`/`ls` - lists snapshots
  - `list-files`/`lf` - lists files across snapshots
@@ -243,16 +241,18 @@ $ replicat init -r some:repository -p 'password string'
 $ replicat init -r some:repository -P path/to/password/file -o path/to/key/file
 # Specifies the cipher
 $ replicat init -r some:repository -p '...' --encryption.cipher.name chacha20_poly1305
-# Specifies the cipher name and parameters
+# Specifies settings for the cipher and the hash algorithm
 $ replicat init -r some:repository \
     -p '...' \
     --encryption.cipher.name aes_gcm \
-    --encryption.cipher.key_bits 128
+    --encryption.cipher.key_bits 128 \
+    --hashing.name sha2 \
+    --hashing.bits 256
 # Specifies the KDF name and parameters (for the key)
 $ replicat init -r some:repository \
     -p '...' \
     --encryption.kdf.name scrypt \
-    --encryption.kdf.n 1048576
+    --encryption.kdf.n 2097152
 # Specifies the chunking parameters
 $ replicat init -r some:repository \
     -p '...' \
@@ -264,6 +264,9 @@ $ replicat init -r some:repository \
     --chunking.min_length 128_000 \
     --chunking.max_length 2_048_000
 ```
+
+The main takeaway here is that you can disable encryption simply by setting `--encryption none`.
+Check the [_Custom settings_ section](#custom-settings) for more.
 
 ## `snapshot` examples
 
@@ -352,24 +355,33 @@ $ replicat restore -r some:repository \
 ## `add-key` examples
 
 ```bash
-# Unlocks the repository and creates an independent key, which will be printed to stdout
-$ replicat add-key -r some:repository -P path/to/password/file -K path/to/key/file
+# Creates an independent key, which will be printed to stdout
+$ replicat add-key -N path/to/file/with/new/password
 # Unlocks the repository and creates a shared key (i.e. with shared secrets)
-$ replicat add-key -r some:repository -P path/to/password/file -K path/to/key/file --shared
-# Unlocks the repository and creates an independent key, which will be written
-# to path/to/new/key/file
 $ replicat add-key -r some:repository \
-    -P path/to/password/file \
-    -K path/to/key/file \
-    -o path/to/new/key/file
-# Unlocks the repository and creates an independent key with some custom settings
-# (cipher params as well as chunking and hashing settings are repository-wide)
+    -p 'your password' \
+    -K your/key/file \
+    -n 'new password as a string' \
+    ---shared
+# Creates an independent key, which will be written to path/to/new/key/file
+$ replicat add-key -r some:repository -n 'new password as a string' -o path/to/new/key/file
+# Creates an independent key with some custom encryption key derivation settings
 $ replicat add-key -r some:repository \
-    -P path/to/password/file \
-    -K path/to/key/file \
     --encryption.kdf.name scrypt \
-    --encryption.kdf.n 1048576
+    --encryption.kdf.n 4194304
+# Uses your password to create a new key with the copy of data in your key, but with
+# different encryption key derivation settings (same as in the previous example).
+# The new key will be printed to stdout
+$ replicat add-key -r some:repository \
+    -P your/password/file \
+    -K your/key/file \
+    --encryption.kdf.n 4_194_304 \
+    --clone
 ```
+
+This shows a way to customize the KDF parameters for the key, arguably making the data stored
+in your key better protected (to the point of probable overkill with values like this).
+Use the [_Custom settings_ section](#custom-settings) as reference.
 
 ## `delete` examples
 
@@ -658,6 +670,84 @@ If you've created a Replicat-compatible adapter for a backend that Replicat does
 support *and* your implementation doesn't depend on additional third-party libraries
 (or at least they are not too heavy and can be moved to extras), consider submitting a PR
 to include it in this repository.
+
+# Custom settings
+
+Replicat's default parameters and selection of cryptographic primitives should work well for
+most users but they do allow for some customisation if you know what you are doing.
+
+Supported primitives and their parameters:
+
+|         Name         |    Use    |  Parameters (with defaults)  |     Description    | Notes |
+|----------------------|-----------|------------------------------|--------------------|-------|
+| `aes_gcm`            | AEAD      | `key_bits` (256 [bits]), `nonce_bits` (96 [bits]) | AES in GCM mode | Supports 128, 192, and 256 bit keys |
+| `chacha20_poly1305`  | AEAD      |                              | ChaCha20&#8209;Poly1305 ||
+| `scrypt`             | Key derivation | `n` (2 ^ 20), `r` (8), `p` (1) | Scrypt KDF | Preferred for low-entropy inputs |
+| `blake2b`            | Hash, HMAC, key derivation | `length` (64 [bytes])        | BLAKE2b | BLAKE2b-based "KDF" should only be used for high-entropy inputs |
+| `sha2`               | Hash      | `bits` (512 [bits])          | SHA2 | Supported digest sizes are 224, 256, 384, and 512 bits  |
+| `sha3`               | Hash      | `bits` (512 [bits])          | SHA3 | Supported digest sizes are 224, 256, 384, and 512 bits  |
+| `gclmulchunker`      | CDC       | `min_length` (128K [bytes]), `max_length` (5.12M [bytes]) | Content-defined chunking algorithm based on carry-less multiplication (CLMUL) |
+
+Encryption algorithm, hash algorithm, chunker, as well as their parameters are set for the entire
+repository and so apply to all users of the repository. By default, Replicat uses AES256-GCM
+for encryption, Scrypt (`n` is 2 ^ 20, `r` is 8, `p` is 1) as the KDF for the user's encryption
+key, BLAKE2b (as hash, "KDF", and HMAC), and GCLMULChunker as the chunker, which produces chunks
+between 128K and 5.12M in size with default parameters. KDF for the user's encryption key and
+KDF params can vary from key to key, though.
+
+## Repository settings
+
+Repository-wide settings are stored in the file called `config` that gets uploaded to the root
+of the repository when you initialise it. Here's the default `config`:
+
+```json
+{
+    "hashing": {
+        "name": "blake2b",
+        "length": 64
+    },
+    "chunking": {
+        "name": "gclmulchunker",
+        "min_length": 128000,
+        "max_length": 5120000,
+    },
+    "encryption": {
+        "cipher": {
+            "name": "aes_gcm",
+            "key_bits": 256,
+            "nonce_bits": 96
+        }
+    }
+}
+```
+
+Coincidentally, this hierarchy is how you're expected to provide your custom repository
+settings via CLI -- only in a flat representation.
+
+For example, to disable encryption for the repository, you'd pass `--encryption none` to
+the `init` command. If instead you wish to reduce AES-GCM key size from the default
+256 bits to 128 bits, all you need to do is pass `--encryption.cipher.key_bits 128`
+(or, equivalently, `--encryption.cipher.key-bits 128`) during initialisation.
+To change the cipher from the default AES256-GCM to ChaCha20&#8209;Poly1305, you'd use
+`--encryption.cipher.name chacha20_poly1305`. Note that when you set the `name` attribute
+like that, Replicat will load the default parameters for the new algorithm and also check
+if your settings are valid. It would be an error to provide any parameters
+for `chacha20_poly1305`, say.
+
+Changing `config` after the repository has already been initialised may render
+existing data inaccessible.
+
+## Key settings
+
+You may specify the KDF and its params whenever you create a new key, so either via `init`
+or via `add-key`. Similar to repository-wide settings, you'd use a flat hierarchical format
+for that. For example, in order to increase the work factor for Scrypt (the default KDF),
+you could pass `--encryption.kdf.n 2097152` (next power of two after 1048576) to the command,
+or you could tweak Scrypt's `r` parameter the same way.
+
+It's also possible to change the parameters for the existing key by cloning it via
+the `add-key` command. Simply set the `--clone` flag and provide the new KDF settings
+as shown in the previous paragraph.
 
 # Security
 

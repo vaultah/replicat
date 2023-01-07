@@ -147,10 +147,16 @@ def make_main_parser(*parent_parsers, defaults=None):
         metavar='NEW_PASSWORD_FILE_PATH',
         type=_read_bytes,
     )
-    add_key_parser.add_argument(
+    key_type_group = add_key_parser.add_mutually_exclusive_group()
+    key_type_group.add_argument(
         '--shared',
         action='store_true',
-        help='Whether to share encrypted chunks with the owner of that key',
+        help='Copy secrets from your key to share encrypted chunks with the owner of the new key',
+    )
+    key_type_group.add_argument(
+        '--clone',
+        action='store_true',
+        help='Copy secrets and use the same password for the new key',
     )
     add_key_parser.add_argument(
         '-o',

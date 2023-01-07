@@ -150,6 +150,8 @@ class aes_gcm(AEADCipherAdapterMixin):
     aead_cipher_name = 'AESGCM'
 
     def __init__(self, *, key_bits=256, nonce_bits=96):
+        if key_bits not in (128, 192, 256):
+            raise ValueError('Invalid key size')
         self.key_bits, self.nonce_bits = key_bits, nonce_bits
         super().__init__()
 
@@ -161,7 +163,7 @@ class chacha20_poly1305(AEADCipherAdapterMixin):
 
 
 class scrypt(KDFAdapter):
-    def __init__(self, *, length, n=1 << 22, r=8, p=1):
+    def __init__(self, *, length, n=1 << 20, r=8, p=1):
         self.length, self.n, self.r, self.p = length, n, r, p
 
     def generate_derivation_params(self):
@@ -219,7 +221,7 @@ class blake2b(KDFAdapter, MACAdapter, HashAdapter):
 
 
 class sha2(HashAdapter):
-    def __init__(self, *, bits=256):
+    def __init__(self, *, bits=512):
         if bits not in (224, 256, 384, 512):
             raise ValueError('Invalid digest size')
         self._hasher_class = getattr(hashlib, f'sha{bits}')
@@ -232,7 +234,7 @@ class sha2(HashAdapter):
 
 
 class sha3(HashAdapter):
-    def __init__(self, *, bits=256):
+    def __init__(self, *, bits=512):
         if bits not in (224, 256, 384, 512):
             raise ValueError('Invalid digest size')
         self._hasher_class = getattr(hashlib, f'sha3_{bits}')
@@ -296,8 +298,6 @@ _adapters = [
     aes_gcm,
     chacha20_poly1305,
     scrypt,
-    blake2b,
-    blake2b,
     blake2b,
     sha2,
     sha3,
