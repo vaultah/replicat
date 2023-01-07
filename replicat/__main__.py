@@ -60,14 +60,14 @@ async def _cmd_handler(repository, args, settings):
     elif args.action == 'delete-objects':
         await repository.delete_objects(args.object, confirm=not args.yes)
     elif args.action == 'add-key':
-        if args.shared:
+        if args.shared or args.clone:
             await repository.unlock(password=args.password, key=args.key)
 
         await repository.add_key(
-            password=args.new_password,
+            password=args.new_password if not args.clone else args.password,
             settings=settings,
             key_output_path=args.key_output_file,
-            shared=args.shared,
+            shared=args.shared or args.clone,
         )
     else:
         await repository.unlock(password=args.password, key=args.key)
@@ -186,7 +186,7 @@ def main():
     # the action default [e.g. -r/--repository's default] will not over write it".
     # This claim turned out to be false. BPO-45235
     _, unknown_args = main_parser.parse_known_args(namespace=args)
-    logger.info('After parsing CLI arguments again we have %s', vars(args))
+    logger.info('After parsing known CLI arguments again we have %s', vars(args))
     custom_settings = None
 
     if unknown_args and args.action in {'init', 'benchmark', 'add-key'}:
@@ -194,6 +194,8 @@ def main():
         flat_settings, unknown_args = cli.parse_cli_settings(unknown_args)
         if not unknown_args:
             custom_settings = utils.flat_to_nested(flat_settings)
+
+        logger.info('Custom settings for this action are %s', custom_settings)
 
     if unknown_args:
         main_parser.error('unrecognized arguments: ' + ' '.join(unknown_args))

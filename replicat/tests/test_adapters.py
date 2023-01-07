@@ -207,7 +207,7 @@ class TestSha2:
     def test_default(self):
         adapter = adapters.sha2()
         digest = adapter.digest(b'<data>')
-        assert digest == hashlib.sha256(b'<data>').digest()
+        assert digest == hashlib.sha512(b'<data>').digest()
 
     @pytest.mark.parametrize(
         'bits, hasher_class',
@@ -250,7 +250,7 @@ class TestSha3:
     def test_default(self):
         adapter = adapters.sha3()
         digest = adapter.digest(b'<data>')
-        assert digest == hashlib.sha3_256(b'<data>').digest()
+        assert digest == hashlib.sha3_512(b'<data>').digest()
 
     @pytest.mark.parametrize(
         'bits, hasher_class',
