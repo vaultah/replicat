@@ -229,7 +229,12 @@ def make_main_parser(*parent_parsers, defaults=None):
     snapshot_parser.add_argument('path', nargs='+', type=Path)
     snapshot_parser.add_argument('-n', '--note')
     snapshot_parser.add_argument(
-        '-L', '--limit-rate', dest='rate_limit', type=_rate_limit
+        '-L',
+        '--limit-rate',
+        help='Restrict upload speed (e.g., to 500K, 10M, etc). '
+        "The limit is per second and doesn't affect protocol traffic",
+        dest='rate_limit',
+        type=_rate_limit,
     )
     snapshot_parser.set_defaults(**defaults)
 
@@ -250,7 +255,12 @@ def make_main_parser(*parent_parsers, defaults=None):
         action='append',
     )
     restore_parser.add_argument(
-        '-L', '--limit-rate', dest='rate_limit', type=_rate_limit
+        '-L',
+        '--limit-rate',
+        help='Restrict download speed (e.g., to 500K, 10M, etc). '
+        "The limit is per second and doesn't affect protocol traffic",
+        dest='rate_limit',
+        type=_rate_limit,
     )
     restore_parser.set_defaults(**defaults)
 
@@ -271,7 +281,12 @@ def make_main_parser(*parent_parsers, defaults=None):
     )
     upload_objects_parser.add_argument('path', nargs='+', type=Path)
     upload_objects_parser.add_argument(
-        '-L', '--limit-rate', dest='rate_limit', type=_rate_limit
+        '-L',
+        '--limit-rate',
+        help='Restrict upload speed (e.g., to 500K, 10M, etc). '
+        "The limit is per second and doesn't affect protocol traffic",
+        dest='rate_limit',
+        type=_rate_limit,
     )
     upload_objects_parser.add_argument('-S', '--skip-existing', action='store_true')
     upload_objects_parser.set_defaults(**defaults)
@@ -291,7 +306,12 @@ def make_main_parser(*parent_parsers, defaults=None):
     )
     download_objects_parser.add_argument('-S', '--skip-existing', action='store_true')
     download_objects_parser.add_argument(
-        '-L', '--limit-rate', dest='rate_limit', type=_rate_limit
+        '-L',
+        '--limit-rate',
+        help='Restrict download speed (e.g., to 500K, 10M, etc). '
+        "The limit is per second and doesn't affect protocol traffic",
+        dest='rate_limit',
+        type=_rate_limit,
     )
     download_objects_parser.set_defaults(**defaults)
 
