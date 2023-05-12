@@ -1,4 +1,5 @@
 import asyncio
+import io
 import logging
 import os
 import threading
@@ -722,3 +723,69 @@ class TestBaseBackendConfig:
             'f': '<not specified>',
             'with_underscores': True,
         }
+
+
+class TestRateLimitedIO:
+    def test_wrapper(self):
+        stream = io.BytesIO()
+        stream.write(b'<first fifteen>')
+        rate_limited_io = utils.RateLimitedIO(100)
+
+        with rate_limited_io.wrap(stream) as wrapped:
+            assert isinstance(wrapped, io.IOBase)
+            assert not wrapped.closed
+
+            assert stream.tell() == 15
+            wrapped.write(b'<ten more>')
+            assert stream.tell() == 25
+            wrapped.seek(0)
+            assert wrapped.read(7) == b'<first '
+            assert stream.tell() == 7
+            assert wrapped.read() == b'fifteen><ten more>'
+            wrapped.seek(-5, io.SEEK_END)
+            assert wrapped.read() == b'more>'
+            wrapped.truncate(24)
+
+        assert wrapped.closed
+        assert not stream.closed
+        assert stream.tell() == 15 + 10
+        assert stream.getvalue() == b'<first fifteen><ten more'
+
+    @pytest.mark.parametrize(
+        'size, elapsed_seconds, pause_seconds',
+        [
+            (8, 0, 0.08),
+            (8, 0.08, 0),
+            (8, 0.08125, 0),
+            (-1, 0, 0.16),
+            (-1, 0.125, 0.16 - 0.125),
+            (-1, 0.16, 0),
+            (-1, 0.5875, 0),
+        ],
+    )
+    def test_wrapped_read_pauses_reads(self, size, elapsed_seconds, pause_seconds):
+        rate_limited_io = utils.RateLimitedIO(100)
+        stream = io.BytesIO(bytes(16))
+
+        with patch('time.perf_counter', side_effect=[13.75, 13.75 + elapsed_seconds]):
+            with patch.object(rate_limited_io, 'pause_reads') as pause_reads_mock:
+                with rate_limited_io.wrap(stream) as wrapped:
+                    wrapped.read(size)
+
+        # We expect it to take size / 100 seconds
+        pause_reads_mock.assert_called_once_with(pause_seconds)
+
+    @pytest.mark.parametrize(
+        'elapsed_seconds, pause_seconds',
+        [(0, 0.32), (0.125, 0.32 - 0.125), (0.32, 0), (0.5875, 0)],
+    )
+    def test_wrapped_write_pauses_writes(self, elapsed_seconds, pause_seconds):
+        rate_limited_io = utils.RateLimitedIO(0, write_limit=200)
+
+        with patch('time.perf_counter', side_effect=[16.75, 16.75 + elapsed_seconds]):
+            with patch.object(rate_limited_io, 'pause_writes') as pause_writes_mock:
+                with rate_limited_io.wrap(io.BytesIO()) as wrapped:
+                    wrapped.write(bytes(64))
+
+        # We expect it to take 64 / 200 seconds
+        pause_writes_mock.assert_called_once_with(pause_seconds)

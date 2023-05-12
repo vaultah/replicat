@@ -34,7 +34,14 @@ def _combine_optional_regexes(value):
     return utils.combine_regexes(value) if value is not None else None
 
 
-async def _cmd_handler(repository, args, settings):
+async def _cmd_handler(backend_type, connection_string, args, settings):
+    repository = Repository(
+        _instantiate_backend(backend_type, connection_string, vars(args)),
+        concurrent=args.concurrent,
+        quiet=args.quiet,
+        cache_directory=args.cache_directory,
+    )
+
     if args.action == 'init':
         await repository.init(
             password=args.password,
@@ -51,6 +58,7 @@ async def _cmd_handler(repository, args, settings):
         await repository.download_objects(
             path=args.path,
             object_regex=_combine_optional_regexes(args.object_regex),
+            rate_limit=args.rate_limit,
             skip_existing=args.skip_existing,
         )
     elif args.action == 'list-objects':
@@ -77,9 +85,10 @@ async def _cmd_handler(repository, args, settings):
             )
         elif args.action == 'restore':
             await repository.restore(
+                path=args.path,
                 snapshot_regex=_combine_optional_regexes(args.snapshot_regex),
                 file_regex=_combine_optional_regexes(args.file_regex),
-                path=args.path,
+                rate_limit=args.rate_limit,
             )
         elif args.action == 'delete':
             await repository.delete_snapshots(args.snapshot, confirm=not args.yes)
@@ -200,13 +209,7 @@ def main():
     if unknown_args:
         main_parser.error('unrecognized arguments: ' + ' '.join(unknown_args))
 
-    repository = Repository(
-        _instantiate_backend(backend_type, connection_string, vars(args)),
-        concurrent=args.concurrent,
-        quiet=args.quiet,
-        cache_directory=args.cache_directory,
-    )
-    asyncio.run(_cmd_handler(repository, args, custom_settings))
+    asyncio.run(_cmd_handler(backend_type, connection_string, args, custom_settings))
 
 
 if __name__ == '__main__':
