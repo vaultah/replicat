@@ -247,7 +247,6 @@ class sha3(HashAdapter):
 
 
 class gclmulchunker(ChunkerAdapter):
-
     # Chunk lengths in bytes
     MIN_LENGTH = 128_000
     MAX_LENGTH = 5_120_000
