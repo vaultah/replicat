@@ -449,9 +449,9 @@ $ replicat download-objects -r some:repository different/directory
 $ replicat download-objects -r some:repository --skip-existing different/directory
 # Downloads objects whose paths match any the -O regex(es) (i.e., all objects inside of
 # 'data' OR 'snapshots' top-level directories in the repository) to the current working
-# directory, skipping existing objects and limiting the download speed to just
-# 1 megabit per second
-$ replicat download-objects -r some:repository -O '^data/' -O '^snapshots/' -S -L 1Mb
+# directory, skipping existing objects and limiting the download speed to mere
+# 1 gigabit per second
+$ replicat download-objects -r some:repository -O '^data/' -O '^snapshots/' -S -L 1Gb
 ```
 
 ## `list-objects` examples
