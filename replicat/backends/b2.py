@@ -9,7 +9,7 @@ import backoff
 import httpx
 
 from .. import exceptions, utils
-from .base import Backend
+from .base import DEFAULT_STREAM_CHUNK_SIZE, Backend
 
 logger = logging.getLogger(__name__)
 
@@ -169,7 +169,9 @@ class B2(Backend):
 
     @utils.requires_auth
     @backoff_reauth
-    async def upload_stream(self, name, stream, length):
+    async def upload_stream(
+        self, name, stream, length, chunk_size=DEFAULT_STREAM_CHUNK_SIZE
+    ):
         upload_url, upload_token = await self._get_upload_url_token()
         upload_headers = {
             'authorization': upload_token,
@@ -180,7 +182,9 @@ class B2(Backend):
         }
         try:
             await self._client.post(
-                upload_url, headers=upload_headers, content=utils.aiter_chunks(stream)
+                upload_url,
+                headers=upload_headers,
+                content=utils.aiter_chunks(stream, chunk_size=chunk_size),
             )
         except:
             stream.seek(0)
@@ -197,7 +201,7 @@ class B2(Backend):
 
     @utils.requires_auth
     @backoff_reauth
-    async def download_stream(self, name, stream):
+    async def download_stream(self, name, stream, chunk_size=DEFAULT_STREAM_CHUNK_SIZE):
         bucket = await self._get_bucket()
         url = f'{self._auth.downloadUrl}/file/{bucket.name}/{name}'
         headers = {'authorization': self._auth.authorizationToken}
@@ -209,7 +213,7 @@ class B2(Backend):
 
             try:
                 stream.truncate(content_length)
-                async for chunk in response.aiter_bytes(128_000):
+                async for chunk in response.aiter_bytes(chunk_size):
                     stream.write(chunk)
             except:
                 stream.seek(0)

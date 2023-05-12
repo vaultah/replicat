@@ -7,7 +7,7 @@ from tempfile import NamedTemporaryFile
 import backoff
 
 from ..utils.fs import iterative_scandir
-from .base import Backend
+from .base import DEFAULT_STREAM_CHUNK_SIZE, Backend
 
 logger = logging.getLogger(__name__)
 backoff_on_oserror = backoff.on_exception(backoff.fibo, OSError, max_tries=5)
@@ -51,11 +51,11 @@ class Local(Backend):
             raise
 
     @backoff_on_oserror
-    def upload_stream(self, name, stream, length):
+    def upload_stream(self, name, stream, length, chunk_size=DEFAULT_STREAM_CHUNK_SIZE):
         destination, temp = self._destination_temp(name)
         try:
             with temp.open('wb') as file:
-                shutil.copyfileobj(stream, file)
+                shutil.copyfileobj(stream, file, length=chunk_size)
             temp.replace(destination)
         except:
             temp.unlink(missing_ok=True)
@@ -67,13 +67,13 @@ class Local(Backend):
         return (self.path / name).read_bytes()
 
     @backoff_on_oserror
-    def download_stream(self, name, stream):
+    def download_stream(self, name, stream, chunk_size=DEFAULT_STREAM_CHUNK_SIZE):
         file = (self.path / name).open('rb')
         length = os.fstat(file.fileno()).st_size
         try:
             stream.truncate(length)
             with file:
-                shutil.copyfileobj(file, stream)
+                shutil.copyfileobj(file, stream, length=chunk_size)
         except:
             stream.seek(0)
             raise

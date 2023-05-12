@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import asyncio
 import bisect
 import collections.abc
@@ -29,6 +31,7 @@ from tqdm import tqdm
 from tqdm.utils import CallbackIOWrapper
 
 from . import exceptions, utils
+from .backends.base import DEFAULT_STREAM_CHUNK_SIZE
 from .utils import FileListColumn, SnapshotListColumn, adapters
 from .utils.compat import Random
 from .utils.config import DEFAULT_CACHE_DIRECTORY
@@ -376,8 +379,7 @@ class Repository:
             digest_mac = self.props.mac(digest)
             digest_mac_mac = self.props.mac(digest_mac)
         else:
-            digest_mac = digest
-            digest_mac_mac = digest
+            digest_mac = digest_mac_mac = digest
 
         return LocationParts(name=digest_mac.hex(), tag=digest_mac_mac.hex())
 
@@ -1088,34 +1090,23 @@ class Repository:
         # and bundle them together
         files.sort(key=lambda file: (file.stat().st_size, str(file)))
 
-        state = _SnapshotState()
-        chunks_table = {}
-        snapshot_files = {}
-
-        bytes_tracker = tqdm(
-            desc='Data processed',
-            unit='B',
-            unit_scale=True,
-            total=None,
-            position=0,
-            disable=self._quiet,
-            leave=True,
-        )
-        finished_tracker = tqdm(
-            desc='Files processed',
-            unit='',
-            total=len(files),
-            position=1,
-            disable=self._quiet,
-            leave=True,
-        )
         loop = asyncio.get_running_loop()
         chunk_queue = queue.Queue(maxsize=self._concurrent * 10)
         chunk_producer_executor = ThreadPoolExecutor(
             max_workers=1, thread_name_prefix='chunk-producer'
         )
-        rate_limiter = utils.RateLimiter(rate_limit) if rate_limit is not None else None
         abort = threading.Event()
+
+        if rate_limit is not None:
+            rate_limiter = utils.RateLimitedIO(rate_limit)
+            upload_chunk_size = max(rate_limit // (self._concurrent * 16), 1)
+        else:
+            rate_limiter = None
+            upload_chunk_size = DEFAULT_STREAM_CHUNK_SIZE
+
+        state = _SnapshotState()
+        chunks_table = {}
+        snapshot_files = {}
 
         def _chunk_done(chunk: _SnapshotChunk):
             finished_files_count = 0
@@ -1183,15 +1174,11 @@ class Repository:
                 hasher = self.props.incremental_hasher()
 
                 with path.open('rb') as source_file:
-                    while True:
-                        chunk = source_file.read(chunk_size)
+                    while chunk := source_file.read(chunk_size):
                         state.bytes_with_padding += len(chunk)
                         file.stream_end += len(chunk)
                         hasher.feed(chunk)
                         yield chunk
-
-                        if len(chunk) < chunk_size:
-                            break
 
                     file.digest = hasher.digest()
                     file.metadata = self.read_metadata(source_file.fileno())
@@ -1266,25 +1253,50 @@ class Repository:
                     async with self._acquire_slot() as slot:
                         length = len(chunk.contents)
                         stream = io.BytesIO(chunk.contents)
-                        iowrapper = utils.TQDMIOReader(
-                            stream,
+
+                        if rate_limiter is not None:
+                            limited_wrapper = rate_limiter.wrap(stream)
+                        else:
+                            limited_wrapper = stream
+
+                        tqdm_wrapper = utils.TQDMIOReader(
+                            limited_wrapper,
                             desc=f'Chunk #{chunk.counter:06}',
                             total=length,
                             position=slot,
                             disable=self._quiet,
-                            rate_limiter=rate_limiter,
                         )
-                        with stream, iowrapper:
+                        with stream, limited_wrapper, tqdm_wrapper:
                             await self._maybe_run_in_executor(
                                 self.backend.upload_stream,
                                 chunk.location,
-                                iowrapper,
+                                tqdm_wrapper,
                                 length,
+                                upload_chunk_size,
                             )
 
                     _chunk_done(chunk)
 
         chunk_producer = loop.run_in_executor(chunk_producer_executor, _chunk_producer)
+
+        bytes_tracker = tqdm(
+            desc='Data processed',
+            unit='B',
+            unit_scale=True,
+            total=None,
+            position=0,
+            disable=self._quiet,
+            leave=True,
+        )
+        finished_tracker = tqdm(
+            desc='Files processed',
+            unit='',
+            total=len(files),
+            position=1,
+            disable=self._quiet,
+            leave=True,
+        )
+
         with finished_tracker, bytes_tracker:
             try:
                 await asyncio.gather(*(_worker() for _ in range(self._concurrent)))
@@ -1351,7 +1363,9 @@ class Repository:
             file.seek(offset)
             file.write(data)
 
-    async def restore(self, *, snapshot_regex=None, file_regex=None, path=None):
+    async def restore(
+        self, *, snapshot_regex=None, file_regex=None, path=None, rate_limit=None
+    ):
         if path is None:
             path = Path()
 
@@ -1359,25 +1373,23 @@ class Repository:
         logger.info("Will restore files to %s", path)
 
         loop = asyncio.get_running_loop()
-        # We'll submit plain backend methods to this executor instead of the standard
-        # one. We still need to use slots to limit concurrent calls to the backend
         loader = ThreadPoolExecutor(
-            max_workers=self._concurrent, thread_name_prefix='chunk-loader'
+            max_workers=self._concurrent * 2, thread_name_prefix='chunk-loader'
         )
         writer = ThreadPoolExecutor(
-            max_workers=self._concurrent * 3, thread_name_prefix='file-writer'
+            max_workers=self._concurrent * 2, thread_name_prefix='file-writer'
         )
+
+        if rate_limit is not None:
+            rate_limiter = utils.RateLimitedIO(rate_limit)
+            download_chunk_size = max(rate_limit // (self._concurrent * 16), 1)
+        else:
+            rate_limiter = None
+            download_chunk_size = DEFAULT_STREAM_CHUNK_SIZE
 
         glock = threading.Lock()
         flocks = {}
         flocks_refcounts = {}
-        file_re = self._compile_or_none(file_regex)
-
-        chunks_references = defaultdict(list)
-        files_digests = {}
-        files_metadata = {}
-
-        total_bytes = 0
 
         def _write_chunk_ref(ref, contents):
             file_path, chunk_size, stream_start, start = ref
@@ -1405,7 +1417,35 @@ class Repository:
 
         def _download_chunk(digest, refs):
             location = self._chunk_digest_to_location(digest)
-            contents = self._download_threadsafe(location, loop=loop)
+            # TODO: async backend methods will naturally do the writing from the
+            # same (main) thread. This is suboptimal, even if we're more likely
+            # to be restricted by the bandwidth. Should we use async files/offload
+            # file IO to a dedicated executor?
+            stream = io.BytesIO()
+
+            if rate_limiter is not None:
+                limited_wrapper = rate_limiter.wrap(stream)
+            else:
+                limited_wrapper = stream
+
+            with self._acquire_slot_threadsafe(loop=loop) as slot:
+                logger.info('Downloading chunk %r', location)
+                tqdm_wrapper = utils.TQDMIOWriter(
+                    limited_wrapper,
+                    desc=location[:25],  # TODO: something even smarter?
+                    total=None,
+                    position=slot,
+                    disable=self._quiet,
+                )
+                with stream, limited_wrapper, tqdm_wrapper:
+                    self._maybe_run_coroutine_threadsafe(
+                        self.backend.download_stream,
+                        location,
+                        tqdm_wrapper,
+                        download_chunk_size,
+                        loop=loop,
+                    )
+                    contents = stream.getvalue()
 
             logger.info('Decrypting %s', location)
             if self.props.encrypted:
@@ -1444,11 +1484,18 @@ class Repository:
                     with glock:
                         restore_path, metadata = files_metadata.pop(file_path)
                     self.restore_metadata(restore_path, metadata)
+                    finished_tracker.update()
 
         self.display_status('Loading snapshots')
         snapshots_gen = self._load_snapshots(snapshot_regex=snapshot_regex)
         snapshots = [x async for _, x in snapshots_gen if x['data'] is not None]
         snapshots.sort(key=lambda x: x['data']['utc_timestamp'], reverse=True)
+
+        file_re = self._compile_or_none(file_regex)
+        chunks_references = defaultdict(list)
+        files_digests = {}
+        files_metadata = {}
+        total_bytes = 0
 
         for snapshot_body in snapshots:
             snapshot_chunks = snapshot_body['chunks']
@@ -1496,7 +1543,16 @@ class Repository:
             disable=self._quiet,
             leave=True,
         )
-        with bytes_tracker:
+        finished_tracker = tqdm(
+            desc='Files restored',
+            unit='',
+            total=len(files_metadata),
+            position=1,
+            disable=self._quiet,
+            leave=True,
+        )
+
+        with finished_tracker, bytes_tracker:
             await asyncio.gather(
                 *(
                     loop.run_in_executor(loader, _download_chunk, *x)
@@ -1562,6 +1618,17 @@ class Repository:
 
         chunks_to_delete.difference_update(chunks_to_keep)
 
+        async def _delete_snapshot(location):
+            await self._delete(location)
+            if self._cache_directory is not None:
+                self._delete_cached(location)
+            finished_snapshots_tracker.update()
+
+        async def _delete_chunk(digest):
+            location = self._chunk_digest_to_location(digest)
+            await self._delete(location)
+            finished_chunks_tracker.update()
+
         finished_snapshots_tracker = tqdm(
             desc='Snapshots deleted',
             unit='',
@@ -1570,12 +1637,6 @@ class Repository:
             disable=self._quiet,
             leave=True,
         )
-
-        async def _delete_snapshot(location):
-            await self._delete(location)
-            if self._cache_directory is not None:
-                self._delete_cached(location)
-            finished_snapshots_tracker.update()
 
         with finished_snapshots_tracker:
             await asyncio.gather(*map(_delete_snapshot, snapshots_locations))
@@ -1588,11 +1649,6 @@ class Repository:
             disable=self._quiet,
             leave=True,
         )
-
-        async def _delete_chunk(digest):
-            location = self._chunk_digest_to_location(digest)
-            await self._delete(location)
-            finished_chunks_tracker.update()
 
         with finished_chunks_tracker:
             await asyncio.gather(*map(_delete_chunk, chunks_to_delete))
@@ -1626,6 +1682,10 @@ class Repository:
         if not to_delete:
             return
 
+        async def _delete_chunk(location):
+            await self._delete(location)
+            finished_tracker.update()
+
         finished_tracker = tqdm(
             desc='Unreferenced chunks deleted',
             unit='',
@@ -1634,10 +1694,6 @@ class Repository:
             disable=self._quiet,
             leave=True,
         )
-
-        async def _delete_chunk(location):
-            await self._delete(location)
-            finished_tracker.update()
 
         with finished_tracker:
             await asyncio.gather(*map(_delete_chunk, to_delete))
@@ -1695,11 +1751,62 @@ class Repository:
     async def upload_objects(self, paths, *, rate_limit=None, skip_existing=False):
         self.display_status('Collecting files')
         files = self._flatten_resolve_paths(paths)
+        logger.info('Found %d files to upload', len(files))
         if not files:
-            logger.info('No files found, nothing to do')
             return
+
+        working_directory = Path.cwd()
+
+        if rate_limit is not None:
+            rate_limiter = utils.RateLimitedIO(rate_limit)
+            upload_chunk_size = max(rate_limit // (self._concurrent * 16), 1)
         else:
-            logger.info('Found %d files', len(files))
+            rate_limiter = None
+            upload_chunk_size = DEFAULT_STREAM_CHUNK_SIZE
+
+        async def _upload_file(path):
+            name = path.relative_to(
+                os.path.commonpath([path, working_directory])
+            ).as_posix()
+
+            if skip_existing and await self._exists(name):
+                logger.info('Skipping file %r (exists)', name)
+            else:
+                async with self._acquire_slot() as slot:
+                    logger.info('Uploading file %r', name)
+                    # TODO: async backend methods will naturally do the reading from the
+                    # same (main) thread. This is suboptimal, even if we're more likely
+                    # to be restricted by the bandwidth. Should we use async files/offload
+                    # file IO to a dedicated executor?
+                    stream = path.open('rb')
+                    length = os.fstat(stream.fileno()).st_size
+
+                    if rate_limiter is not None:
+                        limited_wrapper = rate_limiter.wrap(stream)
+                    else:
+                        limited_wrapper = stream
+
+                    callback_wrapper = CallbackIOWrapper(
+                        bytes_tracker.update, limited_wrapper, 'read'
+                    )
+                    tqdm_wrapper = utils.TQDMIOReader(
+                        callback_wrapper,
+                        desc=name,
+                        total=length,
+                        position=slot,
+                        disable=self._quiet,
+                    )
+
+                    with stream, limited_wrapper, tqdm_wrapper:
+                        await self._maybe_run_in_executor(
+                            self.backend.upload_stream,
+                            name,
+                            tqdm_wrapper,
+                            length,
+                            upload_chunk_size,
+                        )
+
+            finished_tracker.update()
 
         bytes_tracker = tqdm(
             desc='Data uploaded',
@@ -1718,44 +1825,6 @@ class Repository:
             disable=self._quiet,
             leave=True,
         )
-        base_directory = Path.cwd()
-        rate_limiter = utils.RateLimiter(rate_limit) if rate_limit is not None else None
-
-        async def _upload_file(path):
-            name = path.relative_to(
-                os.path.commonpath([path, base_directory])
-            ).as_posix()
-
-            if skip_existing and await self._exists(name):
-                logger.info('Skipping file %r (exists)', name)
-            else:
-                async with self._acquire_slot() as slot:
-                    logger.info('Uploading file %r', name)
-                    # TODO: async backend methods will naturally do the reading from the
-                    # same (main) thread. This is suboptimal, even if we're more likely
-                    # to be restricted by the bandwidth. Should we use async files/offload
-                    # file IO to a dedicated executor?
-                    with path.open('rb') as stream:
-                        length = os.fstat(stream.fileno()).st_size
-                        callback_wrapper = CallbackIOWrapper(
-                            bytes_tracker.update, stream, 'read'
-                        )
-                        with utils.TQDMIOReader(
-                            callback_wrapper,
-                            desc=name,
-                            total=length,
-                            position=slot,
-                            disable=self._quiet,
-                            rate_limiter=rate_limiter,
-                        ) as iowrapper:
-                            await self._maybe_run_in_executor(
-                                self.backend.upload_stream,
-                                name,
-                                iowrapper,
-                                length,
-                            )
-
-            finished_tracker.update()
 
         with finished_tracker, bytes_tracker:
             await asyncio.gather(*map(_upload_file, files))
@@ -1771,13 +1840,10 @@ class Repository:
         rate_limit=None,
         skip_existing=False,
     ):
-        base_directory = path if path is not None else Path.cwd()
+        self.display_status('Loading object list')
         object_re = self._compile_or_none(object_regex)
-        rate_limiter = utils.RateLimiter(rate_limit) if rate_limit is not None else None
-        write_mode = 'xb' if skip_existing else 'wb'
         objects = []
 
-        self.display_status('Loading object list')
         async for object_path in self._aiter(self.backend.list_files, object_prefix):
             if object_re is not None and object_re.search(object_path) is None:
                 logger.info('Skipping %s (does not match the filter)', object_path)
@@ -1785,11 +1851,60 @@ class Repository:
 
             objects.append(object_path)
 
+        logger.info('Found %d objects to download', len(objects))
         if not objects:
-            logger.info('No objects selected, nothing to do')
             return
+
+        base_directory = path if path is not None else Path.cwd()
+        write_mode = 'xb' if skip_existing else 'wb'
+
+        if rate_limit is not None:
+            rate_limiter = utils.RateLimitedIO(rate_limit)
+            download_chunk_size = max(rate_limit // (self._concurrent * 16), 1)
         else:
-            logger.info('Found %d objects', len(objects))
+            rate_limiter = None
+            download_chunk_size = DEFAULT_STREAM_CHUNK_SIZE
+
+        async def _download_object(object_path):
+            output_path = base_directory / object_path
+
+            async with self._acquire_slot() as slot:
+                output_path.parent.mkdir(parents=True, exist_ok=True)
+                try:
+                    stream = output_path.open(write_mode)
+                except FileExistsError:
+                    logger.info('Skipping object %r (file exists)', output_path)
+                else:
+                    logger.info('Downloading object %r', object_path)
+                    # TODO: async backend methods will naturally do the writing from the
+                    # same (main) thread. This is suboptimal, even if we're more likely
+                    # to be restricted by the bandwidth. Should we use async files/offload
+                    # file IO to a dedicated executor?
+                    if rate_limiter is not None:
+                        limited_wrapper = rate_limiter.wrap(stream)
+                    else:
+                        limited_wrapper = stream
+
+                    callback_wrapper = CallbackIOWrapper(
+                        bytes_tracker.update, limited_wrapper, 'write'
+                    )
+                    tqdm_wrapper = utils.TQDMIOWriter(
+                        callback_wrapper,
+                        desc=object_path[:25],  # TODO: something even smarter?
+                        total=None,
+                        position=slot,
+                        disable=self._quiet,
+                    )
+
+                    with stream, limited_wrapper, tqdm_wrapper:
+                        await self._maybe_run_in_executor(
+                            self.backend.download_stream,
+                            object_path,
+                            tqdm_wrapper,
+                            download_chunk_size,
+                        )
+
+            finished_tracker.update()
 
         bytes_tracker = tqdm(
             desc='Data downloaded',
@@ -1808,39 +1923,6 @@ class Repository:
             disable=self._quiet,
             leave=True,
         )
-
-        async def _download_object(object_path):
-            output_path = base_directory / object_path
-
-            async with self._acquire_slot() as slot:
-                output_path.parent.mkdir(parents=True, exist_ok=True)
-                try:
-                    write_stream = output_path.open(write_mode)
-                except FileExistsError:
-                    logger.info('Skipping object %r (file exists)', output_path)
-                else:
-                    logger.info('Downloading object %r', object_path)
-                    # TODO: async backend methods will naturally do the writing from the
-                    # same (main) thread. This is suboptimal, even if we're more likely
-                    # to be restricted by the bandwidth. Should we use async files/offload
-                    # file IO to a dedicated executor?
-                    with write_stream:
-                        callback_wrapper = CallbackIOWrapper(
-                            bytes_tracker.update, write_stream, 'write'
-                        )
-                        with utils.TQDMIOWriter(
-                            callback_wrapper,
-                            desc=object_path[:25],  # TODO: something even smarter?
-                            total=None,
-                            position=slot,
-                            disable=self._quiet,
-                            rate_limiter=rate_limiter,
-                        ) as iowrapper:
-                            await self._maybe_run_in_executor(
-                                self.backend.download_stream, object_path, iowrapper
-                            )
-
-            finished_tracker.update()
 
         with finished_tracker, bytes_tracker:
             await asyncio.gather(*map(_download_object, objects))
@@ -1876,6 +1958,12 @@ class Repository:
                 logger.info('Aborting')
                 return
 
+        async def _delete_object(location):
+            await self._delete(location)
+            if self._cache_directory is not None:
+                self._delete_cached(location)
+            deleted_objects_tracker.update()
+
         deleted_objects_tracker = tqdm(
             desc='Objects deleted',
             unit='',
@@ -1884,12 +1972,6 @@ class Repository:
             disable=self._quiet,
             leave=True,
         )
-
-        async def _delete_object(location):
-            await self._delete(location)
-            if self._cache_directory is not None:
-                self._delete_cached(location)
-            deleted_objects_tracker.update()
 
         with deleted_objects_tracker:
             await asyncio.gather(*map(_delete_object, object_paths))

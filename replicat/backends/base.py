@@ -1,7 +1,12 @@
+from __future__ import annotations
+
 import abc
 import logging
 
 logger = logging.getLogger(__name__)
+
+
+DEFAULT_STREAM_CHUNK_SIZE = 128_000
 
 
 class Backend(abc.ABC):
@@ -9,7 +14,7 @@ class Backend(abc.ABC):
     """All of the methods can be either async or plain functions. Backend adapters
     are responsible for implementing their own fault handling and retry strategies"""
 
-    def __init__(self, connection_string, **ka):
+    def __init__(self, connection_string, **ka) -> None:
         pass
 
     @abc.abstractmethod
@@ -18,12 +23,14 @@ class Backend(abc.ABC):
         return True
 
     @abc.abstractmethod
-    async def upload(self, name, data):
+    async def upload(self, name, data) -> None:
         """Upload bytes-like data to the backend under this name"""
         return None
 
     @abc.abstractmethod
-    async def upload_stream(self, name, stream, length):
+    async def upload_stream(
+        self, name, stream, length, chunk_size=DEFAULT_STREAM_CHUNK_SIZE
+    ) -> None:
         """Upload seekable file-like stream to the backend under this name"""
         return None
 
@@ -33,7 +40,9 @@ class Backend(abc.ABC):
         return b''
 
     @abc.abstractmethod
-    async def download_stream(self, name, stream):
+    async def download_stream(
+        self, name, stream, chunk_size=DEFAULT_STREAM_CHUNK_SIZE
+    ) -> None:
         return None
 
     @abc.abstractmethod
@@ -44,24 +53,24 @@ class Backend(abc.ABC):
         return None
 
     @abc.abstractmethod
-    async def delete(self, name):
+    async def delete(self, name) -> None:
         """Delete file by name"""
         return None
 
-    async def authenticate(self):
+    async def authenticate(self) -> None:
         """Called to authenticate the client (see the @requires_auth decorator).
         Must have the same type as the function that requires authentication"""
         raise NotImplementedError
 
-    async def clean(self):
+    async def clean(self) -> None:
         """Perform clean up at the backend"""
         pass
 
-    async def close(self):
+    async def close(self) -> None:
         """Close instance resources"""
         pass
 
-    def __init_subclass__(cls, /, short_name=None, display_name=None, **kwargs):
+    def __init_subclass__(cls, /, short_name=None, display_name=None, **kwargs) -> None:
         super().__init_subclass__(**kwargs)
 
         if short_name is None:

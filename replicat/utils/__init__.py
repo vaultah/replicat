@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import ast
 import asyncio
 import base64
@@ -6,6 +8,7 @@ import functools
 import gc
 import importlib
 import inspect
+import io
 import logging
 import re
 import threading
@@ -14,7 +17,7 @@ import weakref
 from decimal import Decimal
 from enum import Enum, auto
 from types import SimpleNamespace
-from typing import Any, List, Optional
+from typing import Any, List
 
 from tqdm import tqdm
 
@@ -281,79 +284,89 @@ class DefaultNamespace(SimpleNamespace):
         return None
 
 
-class RateLimiter:
-    def __init__(self, limit):
-        self.lock = threading.Lock()
-        self.limit = limit
-        self.checkpoint = None
-        self.bytes_since_checkpoint = None
+class _RateLimitedFileWrapper(io.IOBase):
+    def __init__(self, file, rate_limiter):
+        self._file, self._rate_limiter = file, rate_limiter
 
-    def available(self):
-        with self.lock:
-            checkpoint = int(time.monotonic())
-            if self.checkpoint is None or self.checkpoint < checkpoint:
-                self.bytes_since_checkpoint = 0
-                self.checkpoint = checkpoint
-
-            return self.limit - self.bytes_since_checkpoint
-
-    def consumed(self, bytes_amount):
-        with self.lock:
-            checkpoint = int(time.monotonic())
-            if self.checkpoint is None or self.checkpoint < checkpoint:
-                self.bytes_since_checkpoint = bytes_amount
-                self.checkpoint = checkpoint
-            else:
-                self.bytes_since_checkpoint += bytes_amount
-
-
-class TQDMIOReader:
-    def __init__(
-        self,
-        stream,
-        *,
-        desc,
-        total,
-        position,
-        disable,
-        rate_limiter: Optional[RateLimiter] = None,
-    ):
-        self._stream = stream
-        self._rate_limiter = rate_limiter
-        self._tracker = tqdm(
-            desc=desc,
-            unit='B',
-            total=total,
-            unit_scale=True,
-            position=position,
-            disable=disable,
-            leave=False,
-        )
-
-    def read(self, size):
-        if self._rate_limiter is not None:
-            size = min(max(self._rate_limiter.available(), 1), size, 16_384)
-            data = self._stream.read(size)
-            self._rate_limiter.consumed(len(data))
-        else:
-            data = self._stream.read(size)
-
-        self._tracker.update(len(data))
+    def read(self, size=-1):
+        start = time.perf_counter()
+        data = self._file.read(size)
+        real_elapsed = time.perf_counter() - start
+        expected_elapsed = len(data) / self._rate_limiter.read_limit
+        self._rate_limiter.pause_reads(max(expected_elapsed - real_elapsed, 0))
         return data
 
+    def write(self, data):
+        start = time.perf_counter()
+        bytes_written = self._file.write(data)
+        real_elapsed = time.perf_counter() - start
+        expected_elapsed = bytes_written / self._rate_limiter.write_limit
+        self._rate_limiter.pause_writes(max(expected_elapsed - real_elapsed, 0))
+        return bytes_written
+
     def seek(self, *args, **kwargs):
-        pos = self._stream.seek(*args, **kwargs)
-        self._tracker.reset()
-        self._tracker.update(pos)
+        return self._file.seek(*args, **kwargs)
+
+    def tell(self, *args, **kwargs):
+        return self._file.tell(*args, **kwargs)
+
+    def truncate(self, *args, **kwargs):
+        return self._file.truncate(*args, **kwargs)
 
     def __enter__(self):
         return self
 
     def __exit__(self, *exc_info):
-        self._tracker.close()
+        super().close()
 
 
-class TQDMIOWriter:
+class RateLimitedIO:
+    PAUSE_THRESHOLD_SECONDS = 0.25
+    PAUSE_LIMIT = 0.5
+
+    def __init__(self, limit, write_limit=None):
+        if write_limit is None:
+            write_limit = limit
+
+        self.read_limit = limit
+        self.write_limit = write_limit
+
+        self._read_sleep_amortised = 0
+        self._read_lock = threading.Lock()
+        self._write_sleep_amortised = 0
+        self._write_lock = threading.Lock()
+
+    def pause_reads(self, seconds):
+        with self._read_lock:
+            self._read_sleep_amortised += seconds
+            if self._read_sleep_amortised > self.PAUSE_LIMIT:
+                self._read_sleep_amortised = self.PAUSE_LIMIT
+
+            if self._read_sleep_amortised <= self.PAUSE_THRESHOLD_SECONDS:
+                return
+
+            sleep_start = time.perf_counter()
+            time.sleep(self._read_sleep_amortised)
+            self._read_sleep_amortised -= time.perf_counter() - sleep_start
+
+    def pause_writes(self, seconds):
+        with self._write_lock:
+            self._write_sleep_amortised += seconds
+            if self._write_sleep_amortised > self.PAUSE_LIMIT:
+                self._write_sleep_amortised = self.PAUSE_LIMIT
+
+            if self._write_sleep_amortised <= self.PAUSE_THRESHOLD_SECONDS:
+                return
+
+            sleep_start = time.perf_counter()
+            time.sleep(self._write_sleep_amortised)
+            self._write_sleep_amortised -= time.perf_counter() - sleep_start
+
+    def wrap(self, file):
+        return _RateLimitedFileWrapper(file, self)
+
+
+class TQDMIOBase:
     def __init__(
         self,
         stream,
@@ -362,10 +375,8 @@ class TQDMIOWriter:
         total,
         position,
         disable,
-        rate_limiter: Optional[RateLimiter] = None,
     ):
         self._stream = stream
-        self._rate_limiter = rate_limiter
         self._tracker = tqdm(
             desc=desc,
             unit='B',
@@ -376,16 +387,11 @@ class TQDMIOWriter:
             leave=False,
         )
 
-    def write(self, data):
-        # TODO: rate limiter
-        length = self._stream.write(data)
-        self._tracker.update(length)
-        return length
-
     def seek(self, *args, **kwargs):
         pos = self._stream.seek(*args, **kwargs)
         self._tracker.reset()
         self._tracker.update(pos)
+        return pos
 
     def truncate(self, size=None):
         new_size = self._stream.truncate(size)
@@ -397,6 +403,20 @@ class TQDMIOWriter:
 
     def __exit__(self, *exc_info):
         self._tracker.close()
+
+
+class TQDMIOReader(TQDMIOBase):
+    def read(self, size=-1):
+        data = self._stream.read(size)
+        self._tracker.update(len(data))
+        return data
+
+
+class TQDMIOWriter(TQDMIOBase):
+    def write(self, data):
+        length = self._stream.write(data)
+        self._tracker.update(length)
+        return length
 
 
 async def async_gen_wrapper(it):

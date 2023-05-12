@@ -10,7 +10,7 @@ import backoff
 import httpx
 
 from .. import utils
-from .base import Backend
+from .base import DEFAULT_STREAM_CHUNK_SIZE, Backend
 
 logger = logging.getLogger(__name__)
 
@@ -262,12 +262,14 @@ class S3Compatible(Backend, short_name='S3C'):
         await self._put_object(name, data, payload_digest)
 
     @backoff_on_httperror
-    async def _put_object_stream(self, name, stream, length, payload_digest):
+    async def _put_object_stream(
+        self, name, stream, *, length, payload_digest, chunk_size
+    ):
         try:
             await self._make_request(
                 'PUT',
                 f'/{self.bucket_name}/{name}',
-                content=utils.aiter_chunks(stream),
+                content=utils.aiter_chunks(stream, chunk_size=chunk_size),
                 payload_digest=payload_digest,
                 headers={'content-length': str(length)},
             )
@@ -275,9 +277,17 @@ class S3Compatible(Backend, short_name='S3C'):
             stream.seek(0)
             raise
 
-    async def upload_stream(self, name, stream, length):
+    async def upload_stream(
+        self, name, stream, length, chunk_size=DEFAULT_STREAM_CHUNK_SIZE
+    ):
         payload_digest = _get_stream_hexdigest(stream)
-        await self._put_object_stream(name, stream, length, payload_digest)
+        await self._put_object_stream(
+            name,
+            stream,
+            length=length,
+            payload_digest=payload_digest,
+            chunk_size=chunk_size,
+        )
 
     @backoff_on_httperror
     async def download(self, name):
@@ -289,7 +299,7 @@ class S3Compatible(Backend, short_name='S3C'):
         return await response.aread()
 
     @backoff_on_httperror
-    async def download_stream(self, name, stream):
+    async def download_stream(self, name, stream, chunk_size=DEFAULT_STREAM_CHUNK_SIZE):
         async with self._make_streaming_request(
             'GET',
             f'/{self.bucket_name}/{name}',
@@ -301,7 +311,7 @@ class S3Compatible(Backend, short_name='S3C'):
 
             try:
                 stream.truncate(content_length)
-                async for chunk in response.aiter_bytes(128_000):
+                async for chunk in response.aiter_bytes(chunk_size):
                     stream.write(chunk)
             except:
                 stream.seek(0)

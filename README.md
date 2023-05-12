@@ -279,6 +279,9 @@ $ replicat snapshot -r some:repository \
     -c 10 \
     -n 'A note (optional)'
     image.jpg some-directory another-directory and/more.text
+# Uploads one file in chunks using 5 concurrent connections, while restricting
+# the bandswith to 512 KB per second. Creates a new snapshot without any note
+$ replicat snapshot -r some:repository --limit-rate 512K file.log
 ```
 
 ## `list-snapshots`/`ls` examples
@@ -334,10 +337,12 @@ $ replicat lf -r some:repository \
 ## `restore` examples
 
 ```bash
-# Unlocks the repository and restores the latest versions of all files to target directory
+# Unlocks the repository and restores the latest versions of all files to target directory,
+# while limiting the download speed to at most 10 MB per second
 $ replicat restore -r some:repository \
     -P path/to/password/file \
     -K path/to/key/file \
+    --limit-rate 10M \
     target-directory
 # Unlocks the repository and restores the latest versions of files that match any of the
 # -F regex(es) from snapshots that match any of the -S regex(es)
@@ -424,6 +429,12 @@ $ replicat clean -r some:repository -P path/to/password/file -K path/to/key/file
                         /absolute/file
 # Uploads local files that do not yet exist in the repository (only checks the file names)
 $ replicat upload-objects -r some:repository --skip-existing some/file some/directory
+# Same, but additionally limits the upload speed to 2 MiB per second
+$ replicat upload-objects \
+    -r some:repository \
+    --skip-existing \
+    -L 2MiB \
+    some/file some/directory
 ```
 
 ## `download-objects` examples
@@ -438,8 +449,9 @@ $ replicat download-objects -r some:repository different/directory
 $ replicat download-objects -r some:repository --skip-existing different/directory
 # Downloads objects whose paths match any the -O regex(es) (i.e., all objects inside of
 # 'data' OR 'snapshots' top-level directories in the repository) to the current working
-# directory, skipping existing objects
-$ replicat download-objects -r some:repository -O '^data/' -O '^snapshots/' -S
+# directory, skipping existing objects and limiting the download speed to mere
+# 1 gigabit per second
+$ replicat download-objects -r some:repository -O '^data/' -O '^snapshots/' -S -L 1Gb
 ```
 
 ## `list-objects` examples

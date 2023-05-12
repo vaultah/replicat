@@ -21,10 +21,14 @@ def _read_bytes(path):
     return Path(path).read_bytes()
 
 
-def _check_natural_number(value):
+def _natural_number(value):
     if (converted := int(value)) < 1:
         raise ValueError
     return converted
+
+
+def _rate_limit(value):
+    return _natural_number(human_to_bytes(value))
 
 
 initial_parser = argparse.ArgumentParser(add_help=False)
@@ -49,6 +53,8 @@ config_group.add_argument(
     const=None,
     default=argparse.SUPPRESS,
 )
+# We don't use %(default)s placeholders in help, because they'd be affected
+# by parser level defaults that we set later based on config and env vars
 config_group.add_argument(
     '--config',
     help=f'Path to the configuration file (default is {config.DEFAULT_CONFIG_PATH})',
@@ -75,7 +81,7 @@ common_options_parser.add_argument(
 common_options_parser.add_argument(
     '-c',
     '--concurrent',
-    type=_check_natural_number,
+    type=_natural_number,
     help='The number of concurrent connections to the backend '
     f'(the default is {config.DEFAULT_CONCURRENT})',
     default=config.DEFAULT_CONCURRENT,
@@ -223,7 +229,12 @@ def make_main_parser(*parent_parsers, defaults=None):
     snapshot_parser.add_argument('path', nargs='+', type=Path)
     snapshot_parser.add_argument('-n', '--note')
     snapshot_parser.add_argument(
-        '-L', '--limit-rate', dest='rate_limit', type=human_to_bytes
+        '-L',
+        '--limit-rate',
+        help='Restrict upload speed (e.g., to 500K, 10M, etc). '
+        "The limit is per second and doesn't affect protocol traffic",
+        dest='rate_limit',
+        type=_rate_limit,
     )
     snapshot_parser.set_defaults(**defaults)
 
@@ -242,6 +253,14 @@ def make_main_parser(*parent_parsers, defaults=None):
         help='Regex to filter files (can be specified more than once '
         'to include files matching ANY of the given regexes)',
         action='append',
+    )
+    restore_parser.add_argument(
+        '-L',
+        '--limit-rate',
+        help='Restrict download speed (e.g., to 500K, 10M, etc). '
+        "The limit is per second and doesn't affect protocol traffic",
+        dest='rate_limit',
+        type=_rate_limit,
     )
     restore_parser.set_defaults(**defaults)
 
@@ -262,7 +281,12 @@ def make_main_parser(*parent_parsers, defaults=None):
     )
     upload_objects_parser.add_argument('path', nargs='+', type=Path)
     upload_objects_parser.add_argument(
-        '-L', '--limit-rate', dest='rate_limit', type=human_to_bytes
+        '-L',
+        '--limit-rate',
+        help='Restrict upload speed (e.g., to 500K, 10M, etc). '
+        "The limit is per second and doesn't affect protocol traffic",
+        dest='rate_limit',
+        type=_rate_limit,
     )
     upload_objects_parser.add_argument('-S', '--skip-existing', action='store_true')
     upload_objects_parser.set_defaults(**defaults)
@@ -281,6 +305,14 @@ def make_main_parser(*parent_parsers, defaults=None):
         action='append',
     )
     download_objects_parser.add_argument('-S', '--skip-existing', action='store_true')
+    download_objects_parser.add_argument(
+        '-L',
+        '--limit-rate',
+        help='Restrict download speed (e.g., to 500K, 10M, etc). '
+        "The limit is per second and doesn't affect protocol traffic",
+        dest='rate_limit',
+        type=_rate_limit,
+    )
     download_objects_parser.set_defaults(**defaults)
 
     list_objects_parser = subparsers.add_parser('list-objects', parents=parent_parsers)

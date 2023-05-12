@@ -2,7 +2,7 @@ import os
 import re
 import threading
 import time
-from unittest.mock import ANY, call, patch
+from unittest.mock import ANY, MagicMock, call, patch
 
 import pytest
 
@@ -646,14 +646,16 @@ class TestSnapshot:
         upload_lock = threading.Lock()
         bytes_consumed = 0
 
-        def upldstream(name, contents, length):
+        def upldstream(name, contents, length, chunk_size):
             nonlocal bytes_consumed
             with upload_lock:
                 bytes_consumed += length
                 bytes_remaining = len(data) - bytes_consumed
 
             try:
-                return Local.upload_stream(local_backend, name, contents, length)
+                return Local.upload_stream(
+                    local_backend, name, contents, length, chunk_size
+                )
             finally:
                 if not bytes_remaining:
                     # Simulate work
@@ -666,6 +668,80 @@ class TestSnapshot:
 
         upload_mock.assert_called_once_with(result.location, ANY)
         assert upload_stream_mock.call_count == len(result.data['files'][0]['chunks'])
+
+    @pytest.mark.asyncio
+    async def test_streams_without_rate_limit(
+        self, local_backend, local_repo, tmp_path
+    ):
+        await local_repo.init(
+            settings={
+                'encryption': None,
+                'chunking': {
+                    'min_length': 256,
+                    'max_length': 256,
+                },
+            }
+        )
+
+        data = Random(0).randbytes(3 * 256)
+        file = tmp_path / 'file'
+        file.write_bytes(data)
+
+        with patch.object(local_backend, 'upload_stream') as upload_stream_mock:
+            with patch('replicat.utils.RateLimitedIO') as rate_limited_io_mock:
+                with patch('replicat.utils.TQDMIOReader') as tqdm_mock:
+                    await local_repo.snapshot(paths=[file])
+
+        rate_limited_io_mock.assert_not_called()
+        assert tqdm_mock.call_count == 3
+        assert upload_stream_mock.call_count == 3
+        upload_stream_mock.assert_has_calls(
+            3 * [call(ANY, tqdm_mock.return_value, 256, ANY)]
+        )
+
+    @pytest.mark.asyncio
+    async def test_streams_with_rate_limit(self, local_backend, local_repo, tmp_path):
+        await local_repo.init(
+            settings={
+                'encryption': None,
+                'chunking': {
+                    'min_length': 256,
+                    'max_length': 256,
+                },
+            }
+        )
+
+        data = Random(0).randbytes(3 * 256)
+        file = tmp_path / 'file'
+        file.write_bytes(data)
+
+        with patch.object(local_backend, 'upload_stream') as upload_stream_mock:
+            with patch('replicat.utils.RateLimitedIO') as rate_limited_io_mock:
+                with patch('replicat.utils.TQDMIOReader') as tqdm_mock:
+                    await local_repo.snapshot(paths=[file], rate_limit=12345)
+
+        rate_limited_io_mock.assert_called_once_with(12345)
+        wrap_mock = rate_limited_io_mock.return_value.wrap
+        assert wrap_mock.call_count == 3
+        assert tqdm_mock.call_count == 3
+        tqdm_mock.assert_has_calls(
+            3
+            * [
+                call(
+                    wrap_mock.return_value,
+                    desc=ANY,
+                    total=256,
+                    position=ANY,
+                    disable=ANY,
+                ),
+            ],
+            any_order=True,
+        )
+
+        assert upload_stream_mock.call_count == 3
+        upload_stream_mock.assert_has_calls(
+            3 * [call(ANY, tqdm_mock.return_value, 256, ANY)]
+        )
 
 
 class TestRestore:
@@ -823,6 +899,104 @@ class TestRestore:
         )
         assert result.files == [str(file)]
         assert tmp_path.joinpath(*file.parts[1:]).read_bytes() == first_version
+
+    @pytest.mark.asyncio
+    async def test_streams_without_rate_limit(
+        self, local_backend, local_repo, tmp_path
+    ):
+        await local_repo.init(
+            settings={
+                'encryption': None,
+                'chunking': {
+                    'min_length': 256,
+                    'max_length': 256,
+                },
+            }
+        )
+
+        data = Random(0).randbytes(3 * 256)
+        file = tmp_path / 'file'
+        file.write_bytes(data)
+        await local_repo.snapshot(paths=[file])
+
+        tqdm_mocked = []
+
+        def _tqdm_side_effect(stream, **_):
+            mock = MagicMock(write=stream.write)
+            tqdm_mocked.append(mock)
+            return mock
+
+        with patch.object(
+            local_backend, 'download_stream', side_effect=local_backend.download_stream
+        ) as download_stream_mock:
+            with patch('replicat.utils.RateLimitedIO') as rate_limited_io_mock:
+                with patch(
+                    'replicat.utils.TQDMIOWriter',
+                    side_effect=_tqdm_side_effect,
+                ) as tqdm_mock:
+                    await local_repo.restore(path=tmp_path)
+
+        rate_limited_io_mock.assert_not_called()
+        assert tqdm_mock.call_count == 3
+        assert download_stream_mock.call_count == 3
+        download_stream_mock.assert_has_calls(
+            [call(ANY, x, ANY) for x in tqdm_mocked], any_order=True
+        )
+
+    @pytest.mark.asyncio
+    async def test_streams_with_rate_limit(self, local_backend, local_repo, tmp_path):
+        await local_repo.init(
+            settings={
+                'encryption': None,
+                'chunking': {
+                    'min_length': 256,
+                    'max_length': 256,
+                },
+            }
+        )
+
+        data = Random(0).randbytes(3 * 256)
+        file = tmp_path / 'file'
+        file.write_bytes(data)
+        await local_repo.snapshot(paths=[file])
+
+        wrap_mocked = []
+        tqdm_mocked = []
+
+        def _wrap_mocked(stream):
+            mock = MagicMock(write=stream.write)
+            wrap_mocked.append(mock)
+            return mock
+
+        def _tqdm_side_effect(stream, **_):
+            mock = MagicMock(write=stream.write)
+            tqdm_mocked.append(mock)
+            return mock
+
+        with patch.object(
+            local_backend, 'download_stream', side_effect=local_backend.download_stream
+        ) as download_stream_mock:
+            with patch('replicat.utils.RateLimitedIO') as rate_limited_io_mock:
+                rate_limited_io_mock.return_value.wrap.side_effect = _wrap_mocked
+                with patch(
+                    'replicat.utils.TQDMIOWriter', side_effect=_tqdm_side_effect
+                ) as tqdm_mock:
+                    await local_repo.restore(path=tmp_path, rate_limit=12345)
+
+        rate_limited_io_mock.assert_called_once_with(12345)
+        assert rate_limited_io_mock.return_value.wrap.call_count == 3
+        assert tqdm_mock.call_count == 3
+        tqdm_mock.assert_has_calls(
+            [
+                call(x, desc=ANY, total=ANY, position=ANY, disable=ANY)
+                for x in wrap_mocked
+            ],
+            any_order=True,
+        )
+        assert download_stream_mock.call_count == 3
+        download_stream_mock.assert_has_calls(
+            [call(ANY, x, ANY) for x in tqdm_mocked], any_order=True
+        )
 
 
 class TestDeleteSnapshots:
@@ -1314,6 +1488,113 @@ class TestUploadObjects:
         assert set(backend.list_files()) == {'files/file'}
         assert backend.download('files/file') == b'<old data>'
 
+    @pytest.mark.asyncio
+    async def test_streams_without_rate_limit(
+        self, local_backend, local_repo, tmp_path
+    ):
+        await local_repo.init(settings={'encryption': None})
+
+        data = Random(0).randbytes(128)
+        first_file = tmp_path / 'first_file'
+        first_file.write_bytes(data * 2)
+        second_file = tmp_path / 'second_file'
+        second_file.write_bytes(data * 3)
+
+        with patch.object(local_backend, 'upload_stream') as upload_stream_mock:
+            with patch('replicat.utils.RateLimitedIO') as rate_limited_io_mock:
+                with patch('replicat.repository.CallbackIOWrapper') as callback_wrapper:
+                    with patch('replicat.utils.TQDMIOReader') as tqdm_mock:
+                        await local_repo.upload_objects(paths=[first_file, second_file])
+
+        rate_limited_io_mock.assert_not_called()
+        assert callback_wrapper.call_count == 2
+        assert tqdm_mock.call_count == 2
+        tqdm_mock.assert_has_calls(
+            [
+                call(
+                    callback_wrapper.return_value,
+                    desc=ANY,
+                    total=256,
+                    position=ANY,
+                    disable=ANY,
+                ),
+                call(
+                    callback_wrapper.return_value,
+                    desc=ANY,
+                    total=384,
+                    position=ANY,
+                    disable=ANY,
+                ),
+            ],
+            any_order=True,
+        )
+
+        assert upload_stream_mock.call_count == 2
+        upload_stream_mock.assert_has_calls(
+            [
+                call(ANY, tqdm_mock.return_value, 256, ANY),
+                call(ANY, tqdm_mock.return_value, 384, ANY),
+            ],
+            any_order=True,
+        )
+
+    @pytest.mark.asyncio
+    async def test_streams_with_rate_limit(self, local_backend, local_repo, tmp_path):
+        await local_repo.init(settings={'encryption': None})
+
+        data = Random(0).randbytes(128)
+        first_file = tmp_path / 'first_file'
+        first_file.write_bytes(data * 3)
+        second_file = tmp_path / 'second_file'
+        second_file.write_bytes(data * 4)
+
+        with patch.object(local_backend, 'upload_stream') as upload_stream_mock:
+            with patch('replicat.utils.RateLimitedIO') as rate_limited_io_mock:
+                with patch('replicat.repository.CallbackIOWrapper') as callback_wrapper:
+                    with patch('replicat.utils.TQDMIOReader') as tqdm_mock:
+                        await local_repo.upload_objects(
+                            paths=[first_file, second_file], rate_limit=12345
+                        )
+
+        rate_limited_io_mock.assert_called_once_with(12345)
+        wrap_mock = rate_limited_io_mock.return_value.wrap
+        assert wrap_mock.call_count == 2
+        assert callback_wrapper.call_count == 2
+        callback_wrapper.assert_has_calls(
+            2 * [call(ANY, wrap_mock.return_value, 'read')],
+            any_order=True,
+        )
+
+        assert tqdm_mock.call_count == 2
+        tqdm_mock.assert_has_calls(
+            [
+                call(
+                    callback_wrapper.return_value,
+                    desc=ANY,
+                    total=384,
+                    position=ANY,
+                    disable=ANY,
+                ),
+                call(
+                    callback_wrapper.return_value,
+                    desc=ANY,
+                    total=512,
+                    position=ANY,
+                    disable=ANY,
+                ),
+            ],
+            any_order=True,
+        )
+
+        assert upload_stream_mock.call_count == 2
+        upload_stream_mock.assert_has_calls(
+            [
+                call(ANY, tqdm_mock.return_value, 384, ANY),
+                call(ANY, tqdm_mock.return_value, 512, ANY),
+            ],
+            any_order=True,
+        )
+
 
 class TestDownloadObjects:
     @pytest.fixture(autouse=True)
@@ -1364,6 +1645,85 @@ class TestDownloadObjects:
             target_path / 'file',
             target_path / 'very/very/nested/file',
         }
+
+    @pytest.mark.asyncio
+    async def test_streams_without_rate_limit(
+        self, local_backend, local_repo, tmp_path
+    ):
+        await local_repo.init(settings={'encryption': None})
+
+        with patch.object(local_backend, 'download_stream') as download_stream_mock:
+            with patch('replicat.utils.RateLimitedIO') as rate_limited_io_mock:
+                with patch('replicat.repository.CallbackIOWrapper') as callback_wrapper:
+                    with patch('replicat.utils.TQDMIOWriter') as tqdm_mock:
+                        await local_repo.download_objects(
+                            path=tmp_path,
+                            object_regex='file',
+                        )
+
+        rate_limited_io_mock.assert_not_called()
+        assert callback_wrapper.call_count == 3
+        assert tqdm_mock.call_count == 3
+        tqdm_mock.assert_has_calls(
+            3
+            * [
+                call(
+                    callback_wrapper.return_value,
+                    desc=ANY,
+                    total=ANY,
+                    position=ANY,
+                    disable=ANY,
+                ),
+            ],
+            any_order=True,
+        )
+
+        assert download_stream_mock.call_count == 3
+        download_stream_mock.assert_has_calls(
+            3 * [call(ANY, tqdm_mock.return_value, ANY)],
+            any_order=True,
+        )
+
+    @pytest.mark.asyncio
+    async def test_streams_with_rate_limit(self, local_backend, local_repo, tmp_path):
+        await local_repo.init(settings={'encryption': None})
+
+        with patch.object(local_backend, 'download_stream') as download_stream_mock:
+            with patch('replicat.utils.RateLimitedIO') as rate_limited_io_mock:
+                with patch('replicat.repository.CallbackIOWrapper') as callback_wrapper:
+                    with patch('replicat.utils.TQDMIOWriter') as tqdm_mock:
+                        await local_repo.download_objects(
+                            path=tmp_path, object_regex='file', rate_limit=12345
+                        )
+
+        rate_limited_io_mock.assert_called_once_with(12345)
+        wrap_mock = rate_limited_io_mock.return_value.wrap
+        assert wrap_mock.call_count == 3
+        assert callback_wrapper.call_count == 3
+        callback_wrapper.assert_has_calls(
+            3 * [call(ANY, wrap_mock.return_value, 'write')],
+            any_order=True,
+        )
+
+        assert tqdm_mock.call_count == 3
+        tqdm_mock.assert_has_calls(
+            3
+            * [
+                call(
+                    callback_wrapper.return_value,
+                    desc=ANY,
+                    total=ANY,
+                    position=ANY,
+                    disable=ANY,
+                ),
+            ],
+            any_order=True,
+        )
+        assert download_stream_mock.call_count == 3
+        download_stream_mock.assert_has_calls(
+            3 * [call(ANY, tqdm_mock.return_value, ANY)],
+            any_order=True,
+        )
 
 
 class TestListObjects:
