@@ -787,5 +787,5 @@ class TestRateLimitedIO:
                 with rate_limited_io.wrap(io.BytesIO()) as wrapped:
                     wrapped.write(bytes(64))
 
-        # We expect it to take 64 / 200 seconds
+        # We expect it to take 64 / 200 = 0.32 seconds
         pause_writes_mock.assert_called_once_with(pause_seconds)
