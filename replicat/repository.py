@@ -165,7 +165,7 @@ class Repository:
         self._quiet = quiet
         self._cache_directory = cache_directory
 
-        self._slots = asyncio.Queue(maxsize=concurrent)
+        self._slots = asyncio.PriorityQueue(maxsize=concurrent)
         # We need actual integers for TQDM slot management in CLI, but this queue
         # can also act as a semaphore in the general case. Note that numbering starts
         # from 2, leaving two topmost slots to non-slotable trackers
