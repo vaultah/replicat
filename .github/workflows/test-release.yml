@@ -67,6 +67,22 @@ jobs:
     with:
       python-version: '3.11'
 
+  # 3.12 builds
+  build-312-windows:
+    uses: ./.github/workflows/build-windows.yml
+    with:
+      python-version: '3.12'
+
+  build-312-linux:
+    uses: ./.github/workflows/build-linux.yml
+    with:
+      python-version: '3.12'
+
+  build-312-macos:
+    uses: ./.github/workflows/build-macos.yml
+    with:
+      python-version: '3.12'
+
   build-sdist:
     runs-on: ubuntu-latest
     steps:
