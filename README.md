@@ -208,7 +208,7 @@ Encrypted repositories require a key and a matching password for every operation
 
 If the backend requires additional parameters (account name, client secret, some boolean flag, or
 literally anything else), you'll also be able to set them via command line arguments or
-in the configuration file. Refer to [_Backends_ section](#backends) section to learn more.
+in the configuration file. Refer to [_Backends_ section](#backends) to learn more.
 
 If you often use many of these arguments, and their values mostly stay the same between
 invocations, you may find it easier to put them in a configuration file instead.
