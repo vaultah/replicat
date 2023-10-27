@@ -7,7 +7,7 @@ on:
         type: string
 jobs:
   build-wheels:
-    name: Build wheels on ${{ matrix.os }}
+    name: Build and test wheels on ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
