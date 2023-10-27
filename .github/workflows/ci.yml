@@ -26,9 +26,6 @@ jobs:
       - name: Build wheels
         uses: pypa/cibuildwheel@v2.16.2
         env:
-          CIBW_ARCHS_MACOS: "x86_64 universal2"
-          CIBW_ARCHS_LINUX: "x86_64 i686 aarch64 ppc64le s390x"
-          CIBW_ARCHS_WINDOWS: "AMD64 x86"
           CIBW_TEST_EXTRAS: "test"
           CIBW_TEST_COMMAND: "python -m pytest --pyargs replicat.tests"
           CIBW_PRERELEASE_PYTHONS: true
