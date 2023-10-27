@@ -15,11 +15,9 @@ jobs:
         uses: actions/checkout@v4
       - run: python -m pip install build
       - run: python -m build --sdist
-      - run: echo "SDIST_NAME=$(basename $(ls dist/*.tar.gz))" >> $GITHUB_ENV
       - uses: actions/upload-artifact@v2
         with:
-          name: ${{ env.SDIST_NAME }}
-          path: dist/${{ env.SDIST_NAME }}
+          path: dist/*.tar.gz
 
   upload:
     needs:
