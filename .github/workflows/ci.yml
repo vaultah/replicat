@@ -11,26 +11,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v2
+        uses: actions/checkout@v4
       - run: ./scripts/lint --check-only --install
 
-  build_wheels:
+  build-wheels:
     needs: lint
-    name: Build wheels on ${{ matrix.os }}
-    runs-on: ${{ matrix.os }}
-    strategy:
-      matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
-    steps:
-      - uses: actions/checkout@v4
-      - name: Build wheels
-        uses: pypa/cibuildwheel@v2.16.2
-        env:
-          CIBW_ARCHS: "auto64"
-          CIBW_BUILD: "cp*"
-          CIBW_TEST_EXTRAS: "test"
-          CIBW_TEST_COMMAND: "python -m pytest --pyargs replicat.tests"
-          CIBW_PRERELEASE_PYTHONS: true
-      - uses: actions/upload-artifact@v3
-        with:
-          path: ./wheelhouse/*.whl
+    uses: ./.github/workflows/build-wheels.yml
+    with:
+      include-pre-release-pythons: "true"
