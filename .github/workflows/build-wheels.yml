@@ -1,0 +1,27 @@
+name: Build and test wheels
+on:
+  workflow_call:
+    inputs:
+      include-pre-release-pythons:
+        required: true
+        type: string
+jobs:
+  build-wheels:
+    name: Build and test wheels on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build wheels
+        uses: pypa/cibuildwheel@v2.16.2
+        env:
+          CIBW_ARCHS: "auto64"
+          CIBW_BUILD: "cp*"
+          CIBW_TEST_EXTRAS: "test"
+          CIBW_TEST_COMMAND: "python -m pytest --pyargs replicat.tests"
+          CIBW_PRERELEASE_PYTHONS: ${{ inputs.include-pre-release-pythons }}
+      - uses: actions/upload-artifact@v3
+        with:
+          path: ./wheelhouse/*.whl
