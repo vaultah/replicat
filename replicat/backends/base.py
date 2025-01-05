@@ -10,7 +10,6 @@ DEFAULT_STREAM_CHUNK_SIZE = 128_000
 
 
 class Backend(abc.ABC):
-
     """All of the methods can be either async or plain functions. Backend adapters
     are responsible for implementing their own fault handling and retry strategies"""
 

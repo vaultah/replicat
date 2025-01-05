@@ -175,7 +175,7 @@ There are several available subcommands:
 > concurrently; however, there are presently no guards in place that would make it safe
 > for you to run destructive actions (`delete`, `clean`) concurrently with those actions
 > *unless* you use independent keys (see the explanation above). I do plan to implement them
-> soon-ish, but in the meantime **DO NOT** use shared keys (or, naturally, the same key)
+> eventually, but in the meantime **DO NOT** use shared keys (or, naturally, the same key)
 > to `snapshot` and `clean` at the same time, for example.
 >
 > As far as the upcoming implementation of such guards, it'll be based on locks. I'm familiar
