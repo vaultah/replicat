@@ -50,108 +50,21 @@ a copycat.
 
 # Basics
 
-You can use Replicat to backup files from your machine to a *repository*, located on a *backend*
-such as a local directory or cloud storage (like Backblaze B2). Your files are transfered and
-stored in an optionally encrypted and chunked form, and references to *chunks* (i.e. their hash
-digests) are stored in *snapshots* along with file name and metadata. You can create, list,
-and delete snapshots, and, of course, restore original files from snapshots.
+You can use Replicat to backup files from your machine to a *repository*, located on a supported 
+*backend* such as a local directory or cloud storage (like Backblaze B2). Files are transferred
+and stored in an optionally encrypted and chunked form, and references to *chunks* are stored in
+*snapshots*, along with file name and metadata.
 
-Replicat supports two types of repositories: **encrypted** (the default) and **unencrypted**.
+To restore files from a snapshot, Replicat will download referenced chunks from the backend and
+use them to assemble the original files locally.
+
+Replicat supports two types of repositories: *encrypted* (the default) and *unencrypted*.
 You may want to disable encryption if you trust your backend provider and network, for example.
+Duplicate chunks are reused between snapshots to save on bandwidth and storage costs.
 
-Chunks, snapshots, and all other pieces of data inside **unencrypted** repositories are stored
-unencrypted.
-
-In case of **encrypted** repositories, Replicat will use symmetric encryption to encrypt chunks
-and snapshots. In order to use encryption, you will need to choose a password and generate the key
-associated with that password (Replicat can do it for you). You'll need both the password and the
-matching key to unlock the repository, but how or where you're going to store them is up to you.
-
-Actually, you can create multiple keys with different passwords and maybe share those with
-other people. If you ask Replicat to create a "shared" key, it will copy some of the secrets
-from your key to the new key, so that you and the owner of the new key could use deduplication
-features *together*, meaning data uploaded by you could be reused (referenced and decrypted)
-by the other person. That other person will also be able to create "shared" keys by copying
-secrets that were originally copied to their key from your key, and so on. This creates a web of
-trust of sorts. If any of this is not desirable, you can create "independent" keys.
-
-Names of files, file timestamps, and other file metadata within snapshots are encrypted using
-a secret that never gets copied to other keys. That is, if you create a snapshot, owners of shared
-keys will be able to see it, but there will be no available information about it beyond its storage
-name and the table of chunk references (still, they might still be able to check whether you have
-ever uploaded a specific piece of data - that's what enables shared deduplication).
-No data will be accessible if a snapshot was created using an independent key.
-
-<details>
-    <summary>
-        <b><i>High-level technical details</i></b>
-    </summary>
-<p>
-The key is a JSON object that contains parameters for the KDF, which will be used to derive
-user key from the password, and a private encrypted section, which can only be decrypted
-by the owner of the key and the matching password (i.e., it's encrypted and decrypted using
-the previously derived user key). The encrypted section contains secrets for the cryptographic
-primitives that control how the data is split into chunks, visibility of chunks of data, and more.
-</p>
-
-<p>
-The storage names for chunks and snapshots in unencrypted repositories are simply the hash
-digests of their contents. For encrypted repositories, the storage name for the chunk is derived
-from the hash digest of its contents <i>and</i> one of the aforementioned secrets, in order to reduce
-the chance of successful "confirmation of file" attacks. The chunk itself is encrypted with
-the combination of the hash digest of its contents <i>and</i> another one of those secrets, since
-the usual convergent encryption is vulnerable to that same "confirmation of file" attack. Note that
-that these secrets get copied to shared keys in order to support shared deduplication. Table
-of chunk references in a snapshot also gets encrypted in a way that lets owners of shared keys to
-decrypt it. This helps Replicat to identify which chunks are still referenced by snapshots and
-which can be garbage collected.
-</p>
-</details>
-
-<details>
-    <summary>
-        <b><i>Extremely cool, colorful, in-depth diagrams that I worked really hard on</i></b>
-    </summary>
-Glossary:
-
- - **`Encrypt(data, key)`/`Decrypt(data, key)`** - encrypts/decrypts `data` with the encryption key
- `key` using an authenticated encryption algorithm. It's normally used to encrypt/decrypt private
- sections in keys, as well as chunks and snapshots.
-
- - **`Hash(data)`** - computes the hash digest of `data` using a hashing algorithm.
- It's used to check integrity of data and to derive encryption keys for chunks and snapshots.
-
- - **`Mac(data, key)`** - computes the message authentication code for `data` using suitable `key`
- and a MAC algorithm. It's mainly used to verify ownership of chunks.
-
- - **`SlowKdf(ikm, salt[, context])`/`FastKdf(ikm, salt[, context])`** - calls a "slow"/"fast" key derivation
- function to obtain an encryption key from `ikm` using `salt` and an optional `context`. As a general rule,
- replicat uses "slow" KDF for low-entropy inputs and "fast" KDF for high-entropy inputs. The output length
- will match the encryption key length of the chosen encryption algorithm.
-
- - **`UserKey`** - encryption key derived as `SlowKdf(Password, UserKdfParams)`, where `Password`
- is the user's password and `UserKdfParams` is the salt. `UserKey` is used to encrypt sensitive
- personal data: private sections in keys and file metadata in snapshots.
-
- - **`SharedKey`**, **`SharedKdfParams`**, **`SharedMacKey`**, **`SharedChunkerKey`** - secrets stored in
- the private sections of keys. `SharedKey` and `SharedKdfParams` are used to derive encryption keys using
- "fast" KDF (they will encrypt shared data, like chunks and chunk references). `SharedMacKey` is the MAC key.
- `SharedChunkerKey` personalises content-defined chunking (CDC) to prevent watermarking attacks.
-
- - **`GetChunkLocation(name, authentication_tag)`/`GetSnapshotLocation(name, authentication_tag)`** - obtains the
- location for a chunk/snapshot using its name and the corresponding authentication tag.
- 
- - **`Upload(data, location)`** - uploads `data` to the backend to the given `location`.
- - **`Download(location)`** - downloads data from the backend at the given `location`.
- 
-![replicat config](https://user-images.githubusercontent.com/4944562/172485084-e2935819-0287-442c-a71c-b2098ef12077.svg)
-
-![replicat keys](https://user-images.githubusercontent.com/4944562/172485551-789c608b-5dfd-4846-94e7-7d88a96f19db.svg)
-
-![replicat chunks](https://user-images.githubusercontent.com/4944562/172485100-f4dc189f-6736-4914-8fe9-51960771f122.svg)
-
-![replicat snapshots](https://user-images.githubusercontent.com/4944562/172485108-b4d66ee8-d00d-4593-a95a-c84eef53af3e.svg)
-</details>
+See [*Encryption*](https://github.com/vaultah/replicat/wiki#encryption) for a more in-depth look
+into this, or [*Functional flow overview*](https://github.com/vaultah/replicat/wiki/Functional-flow-overview)
+for the extremely cool and colorful diagrams that I worked really hard on.
 
 # Command line interface
 
