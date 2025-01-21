@@ -2,10 +2,6 @@
     <img src='https://i.imgur.com/1vtNQHs.png' />
 </p>
 
-<p align='center'>
-    <em><strong>[ ˈrɛplɪkət ]</strong></em>
-</p>
-
 # Replicat
 
 Configurable and lightweight backup utility with deduplication and encryption.
@@ -90,9 +86,6 @@ There are several available subcommands:
 > *unless* you use independent keys (see the explanation above). I do plan to implement them
 > eventually, but in the meantime **DO NOT** use shared keys (or, naturally, the same key)
 > to `snapshot` and `clean` at the same time, for example.
->
-> As far as the upcoming implementation of such guards, it'll be based on locks. I'm familiar
-> with the lock-free deduplication strategy (like in Duplicacy), but I don't like it much.
 
 There are several command line arguments that are common to all subcommands:
 
@@ -599,26 +592,8 @@ to include it in this repository.
 # Custom settings
 
 Replicat's default parameters and selection of cryptographic primitives should work well for
-most users but they do allow for some customisation if you know what you are doing.
-
-Supported primitives and their parameters:
-
-|         Name         |    Use    |  Parameters (with defaults)  |     Description    | Notes |
-|----------------------|-----------|------------------------------|--------------------|-------|
-| `aes_gcm`            | AEAD      | `key_bits` (256 [bits]), `nonce_bits` (96 [bits]) | AES in GCM mode | Supports 128, 192, and 256 bit keys |
-| `chacha20_poly1305`  | AEAD      |                              | ChaCha20&#8209;Poly1305 ||
-| `scrypt`             | Key derivation | `n` (2 ^ 20), `r` (8), `p` (1) | Scrypt KDF | Preferred for low-entropy inputs |
-| `blake2b`            | Hash, HMAC, key derivation | `length` (64 [bytes])        | BLAKE2b | BLAKE2b-based "KDF" should only be used for high-entropy inputs |
-| `sha2`               | Hash      | `bits` (512 [bits])          | SHA2 | Supported digest sizes are 224, 256, 384, and 512 bits  |
-| `sha3`               | Hash      | `bits` (512 [bits])          | SHA3 | Supported digest sizes are 224, 256, 384, and 512 bits  |
-| `gclmulchunker`      | CDC       | `min_length` (128K [bytes]), `max_length` (5.12M [bytes]) | Content-defined chunking algorithm based on carry-less multiplication (CLMUL) |
-
-Encryption algorithm, hash algorithm, chunker, as well as their parameters are set for the entire
-repository and so apply to all users of the repository. By default, Replicat uses AES256-GCM
-for encryption, Scrypt (`n` is 2 ^ 20, `r` is 8, `p` is 1) as the KDF for the user's encryption
-key, BLAKE2b (as hash, "KDF", and HMAC), and GCLMULChunker as the chunker, which produces chunks
-between 128K and 5.12M in size with default parameters. KDF for the user's encryption key and
-KDF params can vary from key to key, though.
+most users but they do allow for some customisation if you know what you are doing. Refer to
+[_Encryption > Settings_](https://github.com/vaultah/replicat/wiki#settings) for more information.
 
 ## Repository settings
 
