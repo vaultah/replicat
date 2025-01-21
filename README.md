@@ -58,7 +58,7 @@ Replicat supports two types of repositories: *encrypted* (the default) and *unen
 You may want to disable encryption if you trust your backend provider and network, for example.
 Duplicate chunks are reused between snapshots to save on bandwidth and storage costs.
 
-See [*Encryption*](https://github.com/vaultah/replicat/wiki#encryption) for a more in-depth look
+See [*Cryptography*](https://github.com/vaultah/replicat/wiki#cryptography) for a more in-depth look
 into this, or [*Functional flow overview*](https://github.com/vaultah/replicat/wiki/Functional-flow-overview)
 for the extremely cool and colorful diagrams that I worked really hard on.
 
