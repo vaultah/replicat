@@ -80,12 +80,11 @@ There are several available subcommands:
  - [`list-objects`](https://github.com/vaultah/replicat/wiki/Command%E2%80%90line-interface-(CLI)#list-objects) - lists objects at the backend (a low-level command)
  - [`delete-objects`](https://github.com/vaultah/replicat/wiki/Command%E2%80%90line-interface-(CLI)#delete-objects) - deletes objects from the backend (a low-level command)
 
-> ⚠️ **WARNING**: commands that read from or upload to the repository can safely be run
-> concurrently; however, there are presently no guards in place that would make it safe
-> for you to run destructive actions (`delete`, `clean`) concurrently with those actions
-> *unless* you use independent keys (see the explanation above). I do plan to implement them
-> eventually, but in the meantime **DO NOT** use shared keys (or, naturally, the same key)
-> to `snapshot` and `clean` at the same time, for example.
+> ⚠️ **WARNING**: it's not safe to run commands that read from or upload to the repository
+> concurrently with destructive actions such as `delete` or `clean` if they are run by users
+> with [shared keys](https://github.com/vaultah/replicat/wiki#keys) (or, naturally, the same key).
+> For example, do **NOT** `snapshot` and `clean` at the same time, unless those actions are performed
+> with independent keys.
 
 There are several command line arguments that are common to all subcommands:
 
@@ -273,60 +272,6 @@ to include it in this repository.
 Replicat's default parameters and selection of cryptographic primitives should work well for
 most users but they do allow for some customisation if you know what you are doing. Refer to
 [_Encryption > Settings_](https://github.com/vaultah/replicat/wiki#settings) for more information.
-
-## Repository settings
-
-Repository-wide settings are stored in the file called `config` that gets uploaded to the root
-of the repository when you initialise it. Here's the default `config`:
-
-```json
-{
-    "hashing": {
-        "name": "blake2b",
-        "length": 64
-    },
-    "chunking": {
-        "name": "gclmulchunker",
-        "min_length": 128000,
-        "max_length": 5120000
-    },
-    "encryption": {
-        "cipher": {
-            "name": "aes_gcm",
-            "key_bits": 256,
-            "nonce_bits": 96
-        }
-    }
-}
-```
-
-Coincidentally, this hierarchy is how you're expected to provide your custom repository
-settings via CLI -- only in a flat representation.
-
-For example, to disable encryption for the repository, you'd pass `--encryption none` to
-the `init` command. If instead you wish to reduce AES-GCM key size from the default
-256 bits to 128 bits, all you need to do is pass `--encryption.cipher.key_bits 128`
-(or, equivalently, `--encryption.cipher.key-bits 128`) during initialisation.
-To change the cipher from the default AES256-GCM to ChaCha20&#8209;Poly1305, you'd use
-`--encryption.cipher.name chacha20_poly1305`. Note that when you set the `name` attribute
-like that, Replicat will load the default parameters for the new algorithm and also check
-if your settings are valid. It would be an error to provide any parameters
-for `chacha20_poly1305`, say.
-
-Changing `config` after the repository has already been initialised may render
-existing data inaccessible.
-
-## Key settings
-
-You may specify the KDF and its params whenever you create a new key, so either via `init`
-or via `add-key`. Similar to repository-wide settings, you'd use a flat hierarchical format
-for that. For example, in order to increase the work factor for Scrypt (the default KDF),
-you could pass `--encryption.kdf.n 2097152` (next power of two after 1048576) to the command,
-or you could tweak Scrypt's `r` parameter the same way.
-
-It's also possible to change the parameters for the existing key by cloning it via
-the `add-key` command. Simply set the `--clone` flag and provide the new KDF settings
-as shown in the previous paragraph.
 
 # Security
 
