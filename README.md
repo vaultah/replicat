@@ -67,18 +67,18 @@ for the extremely cool and colorful diagrams that I worked really hard on.
 The installer will create the `replicat` command (same as `python -m replicat`).
 There are several available subcommands:
 
- - `init` - initialises the repository using the provided settings
- - `snapshot` - creates a new snapshot in the repository
- - `list-snapshots`/`ls` - lists snapshots
- - `list-files`/`lf` - lists files across snapshots
- - `restore` - restores files from snapshots
- - `add-key` - creates a new key for the encrypted repository
- - `delete` - deletes snapshots by their names
- - `clean` - performs garbage collection
- - `upload-objects` - uploads objects to the backend (a low-level command)
- - `download-objects` - downloads objects from the backend (a low-level command)
- - `list-objects` - lists objects at the backend (a low-level command)
- - `delete-objects` - deletes objects from the backend (a low-level command)
+ - [`init`](https://github.com/vaultah/replicat/wiki/Command%E2%80%90line-interface-(CLI)#init) - initialises the repository using the provided settings
+ - [`snapshot`](https://github.com/vaultah/replicat/wiki/Command%E2%80%90line-interface-(CLI)#snapshot) - creates a new snapshot in the repository
+ - [`list-snapshots`/`ls`](https://github.com/vaultah/replicat/wiki/Command%E2%80%90line-interface-(CLI)#list-snapshotsls) - lists snapshots
+ - [`list-files`/`lf`](https://github.com/vaultah/replicat/wiki/Command%E2%80%90line-interface-(CLI)#list-fileslf) - lists files across snapshots
+ - [`restore`](https://github.com/vaultah/replicat/wiki/Command%E2%80%90line-interface-(CLI)#restore) - restores files from snapshots
+ - [`add-key`](https://github.com/vaultah/replicat/wiki/Command%E2%80%90line-interface-(CLI)#add-key) - creates a new key for the encrypted repository
+ - [`delete`](https://github.com/vaultah/replicat/wiki/Command%E2%80%90line-interface-(CLI)#delete) - deletes snapshots by their names
+ - [`clean`](https://github.com/vaultah/replicat/wiki/Command%E2%80%90line-interface-(CLI)#clean) - performs garbage collection
+ - [`upload-objects`](https://github.com/vaultah/replicat/wiki/Command%E2%80%90line-interface-(CLI)#upload-objects) - uploads objects to the backend (a low-level command)
+ - [`download-objects`](https://github.com/vaultah/replicat/wiki/Command%E2%80%90line-interface-(CLI)#download-objects) - downloads objects from the backend (a low-level command)
+ - [`list-objects`](https://github.com/vaultah/replicat/wiki/Command%E2%80%90line-interface-(CLI)#list-objects) - lists objects at the backend (a low-level command)
+ - [`delete-objects`](https://github.com/vaultah/replicat/wiki/Command%E2%80%90line-interface-(CLI)#delete-objects) - deletes objects from the backend (a low-level command)
 
 > ⚠️ **WARNING**: commands that read from or upload to the repository can safely be run
 > concurrently; however, there are presently no guards in place that would make it safe
