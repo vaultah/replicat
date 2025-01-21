@@ -261,80 +261,10 @@ S3, and many other cloud storage providers that offer S3-compatible API.
 
 `replicat.backends` is a namespace package, making it possible to add custom backends
 without changing `replicat` source code.
-
-Suppose your backend of choice is a hypothetical low low cost cloud storage
-Proud Cloud (`pc` for short). The most barebones implementation of the
-Replicat-compatible adapter for the `pc` backend will require a directory with
-the following structure:
-
-```bash
-$ tree proud-cloud/
-proud-cloud/
-└── replicat
-    └── backends
-        └── pc.py
-```
-
-The `-r` argument of `replicat` commands will take the form of `-r pc:<connection string>`.
-Replicat will use it to locate the `pc` module inside the `replicat.backends` package,
-load the `replicat.backends.pc.Client` class, and pass the `<connection string>`
-to its constructor to create the backend instance. In case there are some additional
-parameters that are required to connect to Proud Cloud (account id, secret token, etc.),
-you should add them to the `replicat.backends.pc.Client` constructor as keyword-only arguments.
-If present, Replicat will generate the corresponding command line arguments with defaults *and*
-you'll even be able to use environment variables or profiles to provide them.
-
-`replicat.backends.pc.Client` must subclass `replicat.backends.base.Backend` and implement all
-of the methods marked as abstract. You could use implementations of existing
-`replicat.backends.base.Backend` subclasses as examples. To make your implementation visible
-to Replicat, you'll need to add it to the module search path before invoking `replicat`
-(you could use the
-[`PYTHONPATH`](https://docs.python.org/3/using/cmdline.html#envvar-PYTHONPATH) environment
-variable for that).
-
-Here's an example:
-
-```python
-# ./proud-cloud/replicat/backends/pc.py
-from .base import Backend
-
-class ProudCloud(Backend):
-    def __init__(self, connection_string, *, account_id, secret, port=9_876, legacy=False):
-        print(f'PC args: {connection_string=}, {account_id=}, {secret=}, {port=}, {legacy=}')
-        ...
-    ...
-
-Client = ProudCloud
-```
-
-```bash
-$ PYTHONPATH=proud-cloud replicat init -r pc:... --help
-usage: replicat init [-h] [-r REPO] [-q] [-c CONCURRENT] [-v] [-K KEYFILE]
-                     [-p PASSWORD | -P PASSWORD_FILE_PATH] [--account-id ACCOUNT_ID]
-                     [--secret SECRET] [--port PORT] [--legacy LEGACY] [-o KEY_OUTPUT_FILE]
-
-optional arguments:
-  ...
-
-arguments specific to the ProudCloud backend:
-  --account-id ACCOUNT_ID
-                        or the PROUDCLOUD_ACCOUNT_ID environment variable
-  --secret SECRET       or the PROUDCLOUD_SECRET environment variable
-  --port PORT           or the PROUDCLOUD_PORT environment variable, or the constructor default 9876
-  --legacy LEGACY       or the PROUDCLOUD_LEGACY environment variable, or the constructor default False
-```
-
-```bash
-$ PYTHONPATH=proud-cloud PROUDCLOUD_LEGACY=true PROUDCLOUD_SECRET='pr0ud' \
-    replicat init -r pc:... \
-    --account-id 12345 \
-    --port 9877
-PC args: connection_string='...', account_id=12345, secret='pr0ud', port=9877, legacy=True
-...
-```
+See [_Custom backends_](https://github.com/vaultah/replicat/wiki/Custom-backends).
 
 If you've created a Replicat-compatible adapter for a backend that Replicat doesn't already
-support *and* your implementation doesn't depend on additional third-party libraries
+support and your implementation doesn't depend on additional third-party libraries
 (or at least they are not too heavy and can be moved to extras), consider submitting a PR
 to include it in this repository.
 
