@@ -119,10 +119,54 @@ class TestHelperMethods:
 
 class TestInit:
     @pytest.mark.asyncio
-    async def test_encrypted_no_password(self, local_repo):
-        with pytest.raises(exceptions.ReplicatError):
-            # No password, and the "no encryption" flag was not set
-            await local_repo.init()
+    async def test_encrypted_no_password_ok(self, local_backend, local_repo, tmp_path):
+        result = await local_repo.init(
+            settings={
+                'chunking': {'min_length': 12_345},
+                'encryption': {'kdf': {'n': 4}},
+            },
+            key_output_path=tmp_path / 'output.key',
+        )
+        # Config contents and defaults
+        assert local_backend.download('config') == local_repo.serialize(result.config)
+        assert result.config == {
+            'chunking': {
+                'name': 'gclmulchunker',
+                'min_length': 12_345,
+                'max_length': 5_120_000,
+            },
+            'hashing': {'name': 'blake2b', 'length': 64},
+            'encryption': {
+                'cipher': {'name': 'aes_gcm', 'key_bits': 256, 'nonce_bits': 96}
+            },
+        }
+
+        # Key contents and defaults
+        assert (tmp_path / 'output.key').read_bytes() == local_repo.serialize(
+            result.key
+        )
+        assert result.key.keys() == {'userkey', 'private'}
+
+        assert isinstance(result.key['userkey'], bytes)
+        assert len(result.key['userkey']) == 32
+
+        assert isinstance(result.key['private'], dict)
+
+        private = result.key['private']
+
+        assert private['mac'] == {'name': 'blake2b', 'length': 64}
+        assert private['shared_kdf'] == {'name': 'blake2b', 'length': 32}
+        assert isinstance(private['shared_key'], bytes)
+        assert len(private['shared_key']) == 32
+        assert isinstance(private['shared_kdf_params'], bytes)
+        assert len(private['shared_kdf_params']) == 16
+        assert isinstance(private['mac_params'], bytes)
+        assert len(private['mac_params']) == 64
+        assert isinstance(private['chunker_params'], bytes)
+        assert len(private['chunker_params']) == 16
+        assert local_repo.props.userkey == result.key['userkey']
+        assert local_repo.props.private == private
+        assert local_repo.props.encrypted
 
     @pytest.mark.asyncio
     async def test_encrypted_ok(self, local_backend, local_repo, tmp_path):

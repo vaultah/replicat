@@ -190,6 +190,9 @@ class Repository:
     def display_status(self, message):
         print(ef.bold + message + ef.rs, file=sys.stderr)
 
+    def display_warning(self, message):
+        print(fg(242, 200, 15) + ef.bold + message + ef.rs + fg.rs, file=sys.stderr)
+
     def display_danger(self, message):
         print(fg(255, 10, 10) + ef.bold + message + ef.rs + fg.rs, file=sys.stderr)
 
@@ -517,7 +520,34 @@ class Repository:
             'cipher': cipher,
         }
 
-    def _make_key(self, *, cipher, chunker, settings=None, private=None):
+    def _make_private(self, *, cipher, chunker, settings=None):
+        if settings is None:
+            settings = {}
+
+        encryption_settings = settings.get('encryption', {})
+        shared_kdf_settings = encryption_settings.get('shared_kdf', {})
+        shared_kdf_settings.setdefault('name', self.DEFAULT_SHARED_KDF_NAME)
+        shared_kdf_type, shared_args = adapters.from_config(
+            **shared_kdf_settings, length=cipher.key_bytes
+        )
+        shared_kdf = shared_kdf_type(**shared_args)
+
+        # Message authentication
+        mac_settings = encryption_settings.get('mac', {})
+        mac_settings.setdefault('name', self.DEFAULT_MAC_NAME)
+        mac_type, mac_args = adapters.from_config(**mac_settings)
+        mac = mac_type(**mac_args)
+
+        return {
+            'shared_key': cipher.generate_key(),
+            'shared_kdf': dict(shared_args, name=shared_kdf_type.__name__),
+            'shared_kdf_params': shared_kdf.generate_derivation_params(),
+            'mac': dict(mac_args, name=mac_type.__name__),
+            'mac_params': mac.generate_mac_params(),
+            'chunker_params': chunker.generate_chunking_params(),
+        }
+
+    def _make_encrypted_key(self, *, cipher, private, settings=None):
         if settings is None:
             settings = {}
 
@@ -530,38 +560,32 @@ class Repository:
         )
         user_kdf = user_kdf_type(**user_kdf_args)
 
-        if private is None:
-            # KDF for shared data
-            shared_kdf_settings = encryption_settings.get('shared_kdf', {})
-            shared_kdf_settings.setdefault('name', self.DEFAULT_SHARED_KDF_NAME)
-            shared_kdf_type, shared_args = adapters.from_config(
-                **shared_kdf_settings, length=cipher.key_bytes
-            )
-            shared_kdf = shared_kdf_type(**shared_args)
-
-            # Message authentication
-            mac_settings = encryption_settings.get('mac', {})
-            mac_settings.setdefault('name', self.DEFAULT_MAC_NAME)
-            mac_type, mac_args = adapters.from_config(**mac_settings)
-            mac = mac_type(**mac_args)
-
-            private = {
-                'shared_key': cipher.generate_key(),
-                'shared_kdf': dict(shared_args, name=shared_kdf_type.__name__),
-                'shared_kdf_params': shared_kdf.generate_derivation_params(),
-                'mac': dict(mac_args, name=mac_type.__name__),
-                'mac_params': mac.generate_mac_params(),
-                'chunker_params': chunker.generate_chunking_params(),
-            }
-
         return {
             'kdf': dict(user_kdf_args, name=user_kdf_type.__name__),
             'kdf_params': user_kdf.generate_derivation_params(),
             'private': private,
         }
 
-    def _instantiate_key(self, key, *, password, cipher):
-        # User key derivation
+    def _make_unencrypted_key(self, *, cipher, private, settings=None):
+        return {'userkey': cipher.generate_key(), 'private': private}
+
+    def _is_key_encrypted(self, key):
+        return 'userkey' not in key
+
+    def _instantiate_unencrypted_key(self, key):
+        userkey, private = key['userkey'], key['private']
+        # Message authentication
+        authenticator_type, authenticator_args = adapters.from_config(**private['mac'])
+        # KDF for shared data
+        shared_kdf_type, shared_kdf_args = adapters.from_config(**private['shared_kdf'])
+        return {
+            'userkey': userkey,
+            'private': private,
+            'authenticator': authenticator_type(**authenticator_args),
+            'shared_kdf': shared_kdf_type(**shared_kdf_args),
+        }
+
+    def _instantiate_encrypted_key(self, key, *, password, cipher):
         kdf_type, kdf_args = adapters.from_config(**key['kdf'])
         userkey = kdf_type(**kdf_args).derive(password, params=key['kdf_params'])
 
@@ -575,12 +599,11 @@ class Repository:
         authenticator_type, authenticator_args = adapters.from_config(**private['mac'])
         # KDF for shared data
         shared_kdf_type, shared_kdf_args = adapters.from_config(**private['shared_kdf'])
-
         return {
             'userkey': userkey,
+            'private': private,
             'authenticator': authenticator_type(**authenticator_args),
             'shared_kdf': shared_kdf_type(**shared_kdf_args),
-            'private': private,
         }
 
     def _validate_init_settings(self, settings):
@@ -614,23 +637,37 @@ class Repository:
 
         if props.encrypted:
             self.display_status('Generating new key')
-            if password is None:
-                raise exceptions.ReplicatError(
-                    'A password is needed to initialize encrypted repository'
-                )
-
-            key = self._make_key(
+            private = self._make_private(
                 cipher=props.cipher, chunker=props.chunker, settings=settings
             )
-            props = dataclasses.replace(
-                props,
-                **self._instantiate_key(key, password=password, cipher=props.cipher),
-            )
-            # Encrypt the private portion
-            logger.debug('Private key portion (unencrypted): %r', key['private'])
-            key['private'] = props.encrypt(
-                self.serialize(key['private']), props.userkey
-            )
+            logger.debug('Private key portion (unencrypted): %r', private)
+
+            if password is None:
+                self.display_warning(
+                    'Password was not provided, so the key will NOT be encrypted. '
+                    'Make sure to store it securely.'
+                )
+                key = self._make_unencrypted_key(
+                    cipher=props.cipher, settings=settings, private=private
+                )
+                props = dataclasses.replace(
+                    props,
+                    **self._instantiate_unencrypted_key(key),
+                )
+            else:
+                key = self._make_encrypted_key(
+                    cipher=props.cipher, settings=settings, private=private
+                )
+                props = dataclasses.replace(
+                    props,
+                    **self._instantiate_encrypted_key(
+                        key, password=password, cipher=props.cipher
+                    ),
+                )
+                # Encrypt the private portion
+                key['private'] = props.encrypt(
+                    self.serialize(key['private']), props.userkey
+                )
 
             # TODO: store keys in the repository?
             if key_output_path is not None:
@@ -659,47 +696,37 @@ class Repository:
 
         if props.encrypted:
             self.display_status('Unlocking repository')
-            if password is None or key is None:
+
+            if key is None:
                 raise exceptions.ReplicatError(
-                    'Both password and key are needed to unlock this repository'
+                    'Key is required to unlock this repository'
                 )
 
             # TODO: Load keys from the backend as a fallback?
             if isinstance(key, (str, collections.abc.ByteString)):
                 key = self.deserialize(key)
 
-            props = dataclasses.replace(
-                props,
-                **self._instantiate_key(key, password=password, cipher=props.cipher),
-            )
+            if self._is_key_encrypted(key):
+                if password is None:
+                    raise exceptions.ReplicatError(
+                        'Both password and key are needed to unlock this repository'
+                    )
+
+                props = dataclasses.replace(
+                    props,
+                    **self._instantiate_encrypted_key(
+                        key, password=password, cipher=props.cipher
+                    ),
+                )
+            else:
+                props = dataclasses.replace(
+                    props,
+                    **self._instantiate_uencrypted_key(
+                        key, password=password, cipher=props.cipher
+                    ),
+                )
 
         self.props = props
-
-    def _add_key(self, *, password, settings, props, private, key_output_path):
-        self.display_status('Generating new key')
-        key = self._make_key(
-            cipher=props.cipher,
-            chunker=props.chunker,
-            settings=settings,
-            private=private,
-        )
-        key_props = self._instantiate_key(key, password=password, cipher=props.cipher)
-
-        # Encrypt the private portion
-        logger.debug('Private portion of the new key (unencrypted): %r', key['private'])
-        key['private'] = props.encrypt(
-            self.serialize(key['private']),
-            key_props['userkey'],
-        )
-        # TODO: store it in the repository?
-        if key_output_path is not None:
-            key_output_path = Path(key_output_path).resolve()
-            self.display_status(f'Writing key to {key_output_path}')
-            key_output_path.write_bytes(self.serialize(key))
-        else:
-            print(json.dumps(key, indent=4, default=self.default_serialization_hook))
-
-        return key
 
     def _validate_add_key_settings(self, settings):
         self._validate_settings(
@@ -718,10 +745,6 @@ class Repository:
             self._validate_add_key_settings(settings)
 
         logger.info('Using provided settings: %r', settings)
-        if password is None:
-            raise exceptions.ReplicatError(
-                'The password is required to generate a new key'
-            )
 
         if shared:
             if not self._unlocked:
@@ -739,13 +762,47 @@ class Repository:
         if not props.encrypted:
             raise exceptions.ReplicatError('Repository is not encrypted')
 
-        key = self._add_key(
-            password=password,
-            settings=settings,
-            props=props,
-            private=private,
-            key_output_path=key_output_path,
-        )
+        if private is None:
+            private = self._make_private(
+                cipher=props.cipher, chunker=props.chunker, settings=settings
+            )
+
+        self.display_status('Generating new key')
+        logger.debug('Private key portion of the new key (unencrypted): %r', private)
+
+        if password is None:
+            self.display_warning(
+                'Password was not provided, so the key will NOT be encrypted. '
+                'Make sure to store it securely.'
+            )
+            key = self._make_unencrypted_key(
+                cipher=props.cipher, settings=settings, private=private
+            )
+        else:
+            key = self._make_encrypted_key(
+                cipher=props.cipher, settings=settings, private=private
+            )
+
+            props = dataclasses.replace(
+                props,
+                **self._instantiate_encrypted_key(
+                    key, password=password, cipher=props.cipher
+                ),
+            )
+            # Encrypt the private portion
+            key['private'] = props.encrypt(
+                self.serialize(key['private']),
+                props.userkey,
+            )
+
+        # TODO: store it in the repository?
+        if key_output_path is not None:
+            key_output_path = Path(key_output_path).resolve()
+            self.display_status(f'Writing key to {key_output_path}')
+            key_output_path.write_bytes(self.serialize(key))
+        else:
+            print(json.dumps(key, indent=4, default=self.default_serialization_hook))
+
         return utils.DefaultNamespace(new_key=key)
 
     def _encrypt_snapshot_body(self, snapshot_body):
