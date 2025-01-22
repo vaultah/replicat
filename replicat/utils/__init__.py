@@ -14,6 +14,7 @@ import re
 import threading
 import time
 import weakref
+from collections.abc import MutableMapping
 from decimal import Decimal
 from enum import Enum, auto
 from types import SimpleNamespace
@@ -186,9 +187,9 @@ def type_reverse(object):
 
 
 _async_auth_glock = asyncio.Lock()
-_async_auth_locks = weakref.WeakKeyDictionary()
+_async_auth_locks: MutableMapping[Any, asyncio.Lock] = weakref.WeakKeyDictionary()
 _sync_auth_glock = threading.Lock()
-_sync_auth_locks = weakref.WeakKeyDictionary()
+_sync_auth_locks: MutableMapping[Any, threading.Lock] = weakref.WeakKeyDictionary()
 
 
 def requires_auth(func):

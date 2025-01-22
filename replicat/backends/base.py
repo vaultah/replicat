@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-import abc
 import logging
+from abc import ABC, abstractmethod
+from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -9,49 +10,52 @@ logger = logging.getLogger(__name__)
 DEFAULT_STREAM_CHUNK_SIZE = 128_000
 
 
-class Backend(abc.ABC):
+class Backend(ABC):
+    short_name: str
+    display_name: str
+
     """All of the methods can be either async or plain functions. Backend adapters
     are responsible for implementing their own fault handling and retry strategies"""
 
-    def __init__(self, connection_string, **ka) -> None:
+    def __init__(self, connection_string: str, **ka) -> None:
         pass
 
-    @abc.abstractmethod
+    @abstractmethod
     async def exists(self, name) -> bool:
         """Check whether a file with this name exists at the backend"""
         return True
 
-    @abc.abstractmethod
+    @abstractmethod
     async def upload(self, name, data) -> None:
         """Upload bytes-like data to the backend under this name"""
         return None
 
-    @abc.abstractmethod
+    @abstractmethod
     async def upload_stream(
         self, name, stream, length, chunk_size=DEFAULT_STREAM_CHUNK_SIZE
     ) -> None:
         """Upload seekable file-like stream to the backend under this name"""
         return None
 
-    @abc.abstractmethod
+    @abstractmethod
     async def download(self, name) -> bytes:
         """Download file from the backend by name and return its contents as bytes"""
         return b''
 
-    @abc.abstractmethod
+    @abstractmethod
     async def download_stream(
         self, name, stream, chunk_size=DEFAULT_STREAM_CHUNK_SIZE
     ) -> None:
         return None
 
-    @abc.abstractmethod
-    async def list_files(self, prefix=''):
+    @abstractmethod
+    async def list_files(self, prefix: str = ''):
         """Get the list of files from the backend. Restricts the results to
         non-deleted files starting with this prefix. The return value can be a
         plain iterable or an async iterator"""
         return None
 
-    @abc.abstractmethod
+    @abstractmethod
     async def delete(self, name) -> None:
         """Delete file by name"""
         return None
@@ -69,7 +73,13 @@ class Backend(abc.ABC):
         """Close instance resources"""
         pass
 
-    def __init_subclass__(cls, /, short_name=None, display_name=None, **kwargs) -> None:
+    def __init_subclass__(
+        cls,
+        /,
+        short_name: Optional[str] = None,
+        display_name: Optional[str] = None,
+        **kwargs,
+    ) -> None:
         super().__init_subclass__(**kwargs)
 
         if short_name is None:

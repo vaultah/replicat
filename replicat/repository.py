@@ -51,7 +51,7 @@ class LocationParts(NamedTuple):
 # immutable typed thing with __init__ and attribute access
 class _SnapshotChunk(NamedTuple):
     contents: bytes
-    index: int
+    table_index: int
     location: str
     stream_start: int
     stream_end: int
@@ -99,18 +99,24 @@ class RepositoryProps:
 
     def encrypt(self, data: bytes, key: bytes) -> bytes:
         assert self.encrypted
+        assert self.cipher is not None
         return self.cipher.encrypt(data, key)
 
     def decrypt(self, data: bytes, key: bytes) -> bytes:
         assert self.encrypted
+        assert self.cipher is not None
         return self.cipher.decrypt(data, key)
 
     def mac(self, data: bytes) -> bytes:
         assert self.encrypted
+        assert self.authenticator is not None
+        assert self.private is not None
         return self.authenticator.mac(data, params=self.private['mac_params'])
 
     def derive_shared_subkey(self, ctx: bytes) -> bytes:
         assert self.encrypted
+        assert self.shared_kdf is not None
+        assert self.private is not None
         return self.shared_kdf.derive(
             self.private['shared_key'],
             context=ctx,
@@ -118,7 +124,12 @@ class RepositoryProps:
         )
 
     def chunkify(self, it: Iterator[ByteString]) -> Iterator[bytes]:
-        params = self.private['chunker_params'] if self.encrypted else None
+        if self.encrypted:
+            assert self.private is not None
+            params = self.private['chunker_params']
+        else:
+            params = None
+
         return self.chunker(it, params=params)
 
 
@@ -1134,7 +1145,7 @@ class Repository:
                 file_data['chunks'].append(
                     {
                         'range': [part_start, part_end],
-                        'index': chunk.index,
+                        'index': chunk.table_index,
                         'counter': chunk.counter,
                     }
                 )
@@ -1213,7 +1224,7 @@ class Repository:
 
                 chunk = _SnapshotChunk(
                     contents=encrypted_contents,
-                    index=index,
+                    table_index=index,
                     location=self._chunk_digest_to_location(digest),
                     counter=state.chunk_counter,
                     stream_start=stream_start,
@@ -1245,7 +1256,7 @@ class Repository:
                     'Processing chunk #%d, exists=%s, I=%d, L=%s',
                     chunk.counter,
                     exists,
-                    chunk.index,
+                    chunk.table_index,
                     chunk.location,
                 )
                 if exists:
