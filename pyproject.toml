@@ -23,7 +23,7 @@ known_first_party=["_replicat_adapters"]
 
 [tool.mypy]
 mypy_path = "stubs"
-ignore_missing_imports = True
+ignore_missing_imports = true
 
 [build-system]
 requires = [
