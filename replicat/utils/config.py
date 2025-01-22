@@ -8,7 +8,7 @@ from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
-from appdirs import user_cache_dir, user_config_dir
+from platformdirs import user_cache_dir, user_config_dir
 
 from .. import exceptions
 from . import compat, guess_type, parse_repository

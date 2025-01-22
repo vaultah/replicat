@@ -117,7 +117,7 @@ setup(
         'httpx>=0.22,<1',
         'cryptography>=35',
         'backoff>=2,<3',
-        'appdirs>=1.4.4,<1.5',
+        'platformdirs>=4.3.6,<4.4',
         'tqdm>=4.63,<5',
         'sty>=1,<1.1',
         'tomli >= 1.1.0 ; python_version < "3.11"',

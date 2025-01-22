@@ -21,6 +21,9 @@ include_trailing_comma = true
 known_third_party=["tqdm", "pytest", "httpx", "cryptography", "backoff", "appdirs"]
 known_first_party=["_replicat_adapters"]
 
+[tool.mypy]
+mypy_path = "stubs"
+
 [build-system]
 requires = [
     "setuptools>=42",

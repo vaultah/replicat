@@ -5,7 +5,7 @@ import inspect
 import os
 from abc import ABC, abstractmethod
 from collections.abc import ByteString, Iterator
-from typing import Optional
+from typing import Any, Dict, List, Optional, Tuple, Type, Union
 
 import _replicat_adapters
 from .. import exceptions
@@ -97,7 +97,7 @@ class ChunkerAdapter(ABC):
         self,
         chunk_iterator: Iterator[ByteString],
         *,
-        params: Optional[ByteString] = None,
+        params: Optional[bytes] = None,
     ) -> Iterator[bytes]:
         """Re-chunk the incoming stream of bytes using the provided params"""
         yield b''
@@ -115,9 +115,11 @@ class HashlibIncrementalHasher(IncrementalHasher):
 
 
 class AEADCipherAdapterMixin(CipherAdapter):
-    aead_cipher_name = None
+    aead_cipher_name: str
+    key_bits: int
+    nonce_bits: int
 
-    def __init__(self):
+    def __init__(self) -> None:
         self._key_bytes, self._nonce_bytes = self.key_bits // 8, self.nonce_bits // 8
 
     @property
@@ -149,7 +151,7 @@ class AEADCipherAdapterMixin(CipherAdapter):
 class aes_gcm(AEADCipherAdapterMixin):
     aead_cipher_name = 'AESGCM'
 
-    def __init__(self, *, key_bits=256, nonce_bits=96):
+    def __init__(self, *, key_bits: int = 256, nonce_bits: int = 96) -> None:
         if key_bits not in (128, 192, 256):
             raise ValueError('Invalid key size')
         self.key_bits, self.nonce_bits = key_bits, nonce_bits
@@ -163,14 +165,18 @@ class chacha20_poly1305(AEADCipherAdapterMixin):
 
 
 class scrypt(KDFAdapter):
-    def __init__(self, *, length, n=1 << 20, r=8, p=1):
+    def __init__(
+        self, *, length: int, n: int = 1 << 20, r: int = 8, p: int = 1
+    ) -> None:
         self.length, self.n, self.r, self.p = length, n, r, p
 
-    def generate_derivation_params(self):
+    def generate_derivation_params(self) -> bytes:
         salt = os.urandom(self.length)
         return salt
 
-    def derive(self, pwd, *, params, context=None):
+    def derive(
+        self, pwd: bytes, *, params: bytes, context: Optional[bytes] = None
+    ) -> bytes:
         from cryptography.hazmat.primitives.kdf.scrypt import Scrypt
 
         if context is None:
@@ -189,14 +195,16 @@ class scrypt(KDFAdapter):
 
 
 class blake2b(KDFAdapter, MACAdapter, HashAdapter):
-    def __init__(self, *, length=64):
+    def __init__(self, *, length: int = 64) -> None:
         self.digest_size = length
 
-    def generate_derivation_params(self):
+    def generate_derivation_params(self) -> bytes:
         salt = os.urandom(hashlib.blake2b.SALT_SIZE)
         return salt
 
-    def derive(self, key_material, *, params, context=None):
+    def derive(
+        self, key_material: bytes, *, params: bytes, context: Optional[bytes] = None
+    ) -> bytes:
         if context is None:
             context = b''
 
@@ -204,19 +212,19 @@ class blake2b(KDFAdapter, MACAdapter, HashAdapter):
             context, salt=params, digest_size=self.digest_size, key=key_material
         ).digest()
 
-    def generate_mac_params(self):
+    def generate_mac_params(self) -> bytes:
         key = os.urandom(hashlib.blake2b.MAX_KEY_SIZE)
         return key
 
-    def mac(self, message, *, params):
+    def mac(self, message: bytes, *, params: bytes) -> bytes:
         return hashlib.blake2b(
             message, digest_size=self.digest_size, key=params
         ).digest()
 
-    def digest(self, data):
+    def digest(self, data: bytes) -> bytes:
         return hashlib.blake2b(data, digest_size=self.digest_size).digest()
 
-    def incremental_hasher(self):
+    def incremental_hasher(self) -> IncrementalHasher:
         return HashlibIncrementalHasher(hashlib.blake2b(digest_size=self.digest_size))
 
 
@@ -234,15 +242,15 @@ class sha2(HashAdapter):
 
 
 class sha3(HashAdapter):
-    def __init__(self, *, bits=512):
+    def __init__(self, *, bits: int = 512) -> None:
         if bits not in (224, 256, 384, 512):
             raise ValueError('Invalid digest size')
         self._hasher_class = getattr(hashlib, f'sha3_{bits}')
 
-    def digest(self, data):
+    def digest(self, data: bytes) -> bytes:
         return self._hasher_class(data).digest()
 
-    def incremental_hasher(self):
+    def incremental_hasher(self) -> IncrementalHasher:
         return HashlibIncrementalHasher(self._hasher_class())
 
 
@@ -252,7 +260,9 @@ class gclmulchunker(ChunkerAdapter):
     MAX_LENGTH = 5_120_000
     alignment = 4
 
-    def __init__(self, *, min_length=MIN_LENGTH, max_length=MAX_LENGTH):
+    def __init__(
+        self, *, min_length: int = MIN_LENGTH, max_length: int = MAX_LENGTH
+    ) -> None:
         if min_length > max_length:
             raise ValueError(
                 f'Minimum length ({min_length}) is greater '
@@ -261,7 +271,12 @@ class gclmulchunker(ChunkerAdapter):
 
         self.min_length, self.max_length = min_length, max_length
 
-    def __call__(self, chunk_iterator, *, params=None):
+    def __call__(
+        self,
+        chunk_iterator: Iterator[ByteString],
+        *,
+        params: Optional[bytes] = None,
+    ) -> Iterator[bytes]:
         if not params:
             params = b'\xFF' * 16
         else:
@@ -289,11 +304,21 @@ class gclmulchunker(ChunkerAdapter):
 
             chunk = next_chunk
 
-    def generate_chunking_params(self):
+    def generate_chunking_params(self) -> bytes:
         return os.urandom(16)
 
 
-_adapters = [
+AdapterType = Type[
+    Union[
+        CipherAdapter,
+        KDFAdapter,
+        MACAdapter,
+        IncrementalHasher,
+        HashAdapter,
+        ChunkerAdapter,
+    ]
+]
+_adapters: List[AdapterType] = [
     aes_gcm,
     chacha20_poly1305,
     scrypt,
@@ -305,7 +330,7 @@ _adapters = [
 _adapters_mapping = {a.__name__: a for a in _adapters}
 
 
-def from_config(name, **kwargs):
+def from_config(name: str, **kwargs) -> Tuple[AdapterType, Dict[str, Any]]:
     try:
         adapter_type = _adapters_mapping[name]
     except KeyError:
