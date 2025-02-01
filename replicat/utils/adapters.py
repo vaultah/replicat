@@ -278,7 +278,7 @@ class gclmulchunker(ChunkerAdapter):
         params: Optional[bytes] = None,
     ) -> Iterator[bytes]:
         if not params:
-            params = b'\xFF' * 16
+            params = b'\xff' * 16
         else:
             while len(params) < 16:
                 params += params
