@@ -121,10 +121,7 @@ class TestInit:
     @pytest.mark.asyncio
     async def test_encrypted_no_password_ok(self, local_backend, local_repo, tmp_path):
         result = await local_repo.init(
-            settings={
-                'chunking': {'min_length': 12_345},
-                'encryption': {'kdf': {'n': 4}},
-            },
+            settings={'chunking': {'min_length': 12_345}},
             key_output_path=tmp_path / 'output.key',
         )
         # Config contents and defaults
@@ -145,27 +142,26 @@ class TestInit:
         assert (tmp_path / 'output.key').read_bytes() == local_repo.serialize(
             result.key
         )
-        assert result.key.keys() == {'userkey', 'private'}
-
+        assert result.key.keys() == {'userkey', 'params'}
         assert isinstance(result.key['userkey'], bytes)
         assert len(result.key['userkey']) == 32
 
-        assert isinstance(result.key['private'], dict)
+        params = result.key['params']
+        assert isinstance(result.key['params'], dict)
+        assert params['mac'] == {'name': 'blake2b', 'length': 64}
+        assert params['shared_kdf'] == {'name': 'blake2b', 'length': 32}
+        assert isinstance(params['shared_key'], bytes)
+        assert len(params['shared_key']) == 32
+        assert isinstance(params['shared_kdf_params'], bytes)
+        assert len(params['shared_kdf_params']) == 16
+        assert isinstance(params['mac_params'], bytes)
+        assert len(params['mac_params']) == 64
+        assert isinstance(params['chunker_params'], bytes)
+        assert len(params['chunker_params']) == 16
 
-        private = result.key['private']
-
-        assert private['mac'] == {'name': 'blake2b', 'length': 64}
-        assert private['shared_kdf'] == {'name': 'blake2b', 'length': 32}
-        assert isinstance(private['shared_key'], bytes)
-        assert len(private['shared_key']) == 32
-        assert isinstance(private['shared_kdf_params'], bytes)
-        assert len(private['shared_kdf_params']) == 16
-        assert isinstance(private['mac_params'], bytes)
-        assert len(private['mac_params']) == 64
-        assert isinstance(private['chunker_params'], bytes)
-        assert len(private['chunker_params']) == 16
+        # Check that the repository is unlocked
         assert local_repo.props.userkey == result.key['userkey']
-        assert local_repo.props.private == private
+        assert local_repo.props.params == params
         assert local_repo.props.encrypted
 
     @pytest.mark.asyncio
@@ -208,28 +204,30 @@ class TestInit:
         assert len(result.key['kdf_params']) == 32
         assert isinstance(result.key['private'], bytes)
 
+        # Check that key params can be decrypted
         cipher = adapters.aes_gcm(key_bits=256, nonce_bits=96)
         kdf = adapters.scrypt(r=8, n=4, p=1, length=32)
         userkey = kdf.derive(b'<password>', params=result.key['kdf_params'])
-
-        private = local_repo.deserialize(
+        params = local_repo.deserialize(
             cipher.decrypt(
                 result.key['private'],
                 userkey,
             )
         )
-        assert private['mac'] == {'name': 'blake2b', 'length': 64}
-        assert private['shared_kdf'] == {'name': 'blake2b', 'length': 32}
-        assert isinstance(private['shared_key'], bytes)
-        assert len(private['shared_key']) == 32
-        assert isinstance(private['shared_kdf_params'], bytes)
-        assert len(private['shared_kdf_params']) == 16
-        assert isinstance(private['mac_params'], bytes)
-        assert len(private['mac_params']) == 64
-        assert isinstance(private['chunker_params'], bytes)
-        assert len(private['chunker_params']) == 16
+        assert params['mac'] == {'name': 'blake2b', 'length': 64}
+        assert params['shared_kdf'] == {'name': 'blake2b', 'length': 32}
+        assert isinstance(params['shared_key'], bytes)
+        assert len(params['shared_key']) == 32
+        assert isinstance(params['shared_kdf_params'], bytes)
+        assert len(params['shared_kdf_params']) == 16
+        assert isinstance(params['mac_params'], bytes)
+        assert len(params['mac_params']) == 64
+        assert isinstance(params['chunker_params'], bytes)
+        assert len(params['chunker_params']) == 16
+
+        # Check that the repository is unlocked
         assert local_repo.props.userkey == userkey
-        assert local_repo.props.private == private
+        assert local_repo.props.params == params
         assert local_repo.props.encrypted
 
     @pytest.mark.asyncio
@@ -252,52 +250,80 @@ class TestInit:
         assert not local_repo.props.encrypted
 
 
-class TestEncryptedUnlock:
-    @pytest.fixture(autouse=True)
-    async def init_params(self, local_repo):
-        return await local_repo.init(
-            password=b'<password>', settings={'encryption': {'kdf': {'n': 4}}}
-        )
-
-    @pytest.mark.asyncio
-    async def test_no_password(self, local_repo, init_params):
-        with pytest.raises(exceptions.ReplicatError):
-            await local_repo.unlock(key=init_params.key)
+class TestUnlock:
 
     @pytest.mark.asyncio
     async def test_no_key(self, local_repo):
-        with pytest.raises(exceptions.ReplicatError):
+        await local_repo.init(
+            password=b'<password>', settings={'encryption': {'kdf': {'n': 4}}}
+        )
+        with pytest.raises(
+            exceptions.ReplicatError, match='Key is required to unlock this repository'
+        ):
             await local_repo.unlock(password=b'<password>')
 
     @pytest.mark.asyncio
-    async def test_bad_password(self, local_repo, init_params):
+    async def test_bad_password(self, local_repo):
+        init_params = await local_repo.init(
+            password=b'<password>', settings={'encryption': {'kdf': {'n': 4}}}
+        )
         with pytest.raises(exceptions.DecryptionError):
             await local_repo.unlock(password=b'<no-pass word>', key=init_params.key)
 
     @pytest.mark.asyncio
-    async def test_ok(self, local_repo, init_params):
+    async def test_password_protected_key_with_no_password(self, local_repo):
+        init_params = await local_repo.init(
+            password=b'<password>', settings={'encryption': {'kdf': {'n': 4}}}
+        )
+        with pytest.raises(
+            exceptions.ReplicatError,
+            match='Both password and key are needed to unlock this repository',
+        ):
+            await local_repo.unlock(key=init_params.key)
+
+    @pytest.mark.asyncio
+    async def test_with_password_ok(self, local_repo, local_backend):
+        local_repo = Repository(local_backend, concurrent=1, cache_directory=None)
+        init_params = await local_repo.init(
+            password=b'<password>', settings={'encryption': {'kdf': {'n': 4}}}
+        )
+
+        # Fresh instance
+        local_repo = Repository(local_backend, concurrent=1, cache_directory=None)
         await local_repo.unlock(password=b'<password>', key=init_params.key)
 
         cipher = adapters.aes_gcm(key_bits=256, nonce_bits=96)
         kdf = adapters.scrypt(r=8, n=4, p=1, length=32)
         userkey = kdf.derive(b'<password>', params=init_params.key['kdf_params'])
-        private = local_repo.deserialize(
+        params = local_repo.deserialize(
             cipher.decrypt(init_params.key['private'], userkey)
         )
 
         assert local_repo.props.userkey == userkey
-        assert local_repo.props.private == private
+        assert local_repo.props.params == params
         assert local_repo.props.encrypted
 
+    @pytest.mark.asyncio
+    async def test_no_password_ok(self, local_repo, local_backend):
+        local_repo = Repository(local_backend, concurrent=1, cache_directory=None)
+        init_params = await local_repo.init()
 
-class TestUnencryptedUnlock:
-    @pytest.fixture
-    async def init_params(self, local_repo):
-        return await local_repo.init(settings={'encryption': None})
+        # Fresh instance
+        local_repo = Repository(local_backend, concurrent=1, cache_directory=None)
+        await local_repo.unlock(key=init_params.key)
+
+        assert local_repo.props.userkey == init_params.key['userkey']
+        assert local_repo.props.params == init_params.key['params']
+        assert local_repo.props.encrypted
 
     @pytest.mark.asyncio
-    async def test_ok(self, local_repo, init_params):
+    async def test_unencrypted_ok(self, local_repo, local_backend):
+        await local_repo.init(settings={'encryption': None})
+
+        # Fresh instance
+        local_repo = Repository(local_backend, concurrent=1, cache_directory=None)
         await local_repo.unlock()
+
         assert not local_repo.props.encrypted
 
 
@@ -309,17 +335,37 @@ class TestAddKey:
             await local_repo.add_key(password=b'<password>')
 
     @pytest.mark.asyncio
+    async def test_encrypted_repository_shared_key_no_password(
+        self, local_repo, tmp_path
+    ):
+        await local_repo.init(
+            password=b'<password>', settings={'encryption': {'kdf': {'n': 4}}}
+        )
+        result = await local_repo.add_key(
+            shared=True, key_output_path=tmp_path / 'output.key'
+        )
+        assert (tmp_path / 'output.key').read_bytes() == local_repo.serialize(
+            result.new_key
+        )
+        assert result.new_key.keys() == {'userkey', 'params'}
+        assert isinstance(result.new_key['userkey'], bytes)
+        assert len(result.new_key['userkey']) == 32
+
+        props_before = local_repo.props
+        await local_repo.unlock(key=result.new_key)
+
+        assert local_repo.props is not props_before
+        assert local_repo.props.userkey == result.new_key['userkey']
+        assert local_repo.props.params == props_before.params
+
+    @pytest.mark.asyncio
     async def test_encrypted_repository_shared_key(self, local_repo, tmp_path):
         await local_repo.init(
             password=b'<password>', settings={'encryption': {'kdf': {'n': 4}}}
         )
         result = await local_repo.add_key(
             password=b'<different password>',
-            settings={
-                'encryption': {
-                    'kdf': {'n': 8, 'r': 4},
-                },
-            },
+            settings={'encryption': {'kdf': {'n': 8, 'r': 4}}},
             shared=True,
             key_output_path=tmp_path / 'output.key',
         )
@@ -340,8 +386,9 @@ class TestAddKey:
 
         props_before = local_repo.props
         await local_repo.unlock(password=b'<different password>', key=result.new_key)
+
         assert local_repo.props is not props_before
-        assert local_repo.props.private == props_before.private
+        assert local_repo.props.params == props_before.params
 
     @pytest.mark.asyncio
     async def test_encrypted_repository_independent_key(self, local_repo, tmp_path):
@@ -375,22 +422,63 @@ class TestAddKey:
         assert len(result.new_key['kdf_params']) == 32
 
         await local_repo.unlock(password=b'<different password>', key=result.new_key)
+
         assert local_repo.props is not props_before
-        private_before = props_before.private
-        private = local_repo.props.private
-        assert private['mac'] == {'name': 'blake2b', 'length': 64}
-        assert private['shared_kdf'] == {'name': 'blake2b', 'length': 32}
-        assert isinstance(private['shared_key'], bytes)
-        assert private['shared_key'] != private_before['shared_key']
-        assert private['shared_kdf_params'] != private_before['shared_kdf_params']
-        assert isinstance(private['shared_kdf_params'], bytes)
-        assert len(private['shared_kdf_params']) == 16
-        assert private['mac_params'] != private_before['mac_params']
-        assert isinstance(private['mac_params'], bytes)
-        assert len(private['mac_params']) == 64
-        assert private['chunker_params'] != private_before['chunker_params']
-        assert isinstance(private['chunker_params'], bytes)
-        assert len(private['chunker_params']) == 16
+        params_before = props_before.params
+        params = local_repo.props.params
+        assert params['mac'] == {'name': 'blake2b', 'length': 64}
+        assert params['shared_kdf'] == {'name': 'blake2b', 'length': 32}
+        assert isinstance(params['shared_key'], bytes)
+        assert params['shared_key'] != params_before['shared_key']
+        assert params['shared_kdf_params'] != params_before['shared_kdf_params']
+        assert isinstance(params['shared_kdf_params'], bytes)
+        assert len(params['shared_kdf_params']) == 16
+        assert params['mac_params'] != params_before['mac_params']
+        assert isinstance(params['mac_params'], bytes)
+        assert len(params['mac_params']) == 64
+        assert params['chunker_params'] != params_before['chunker_params']
+        assert isinstance(params['chunker_params'], bytes)
+        assert len(params['chunker_params']) == 16
+
+    @pytest.mark.asyncio
+    async def test_encrypted_repository_independent_key_no_password(
+        self, local_repo, tmp_path
+    ):
+        await local_repo.init(
+            password=b'<password>', settings={'encryption': {'kdf': {'n': 4}}}
+        )
+        props_before = local_repo.props
+
+        result = await local_repo.add_key(
+            shared=False, key_output_path=tmp_path / 'output.key'
+        )
+        assert (tmp_path / 'output.key').read_bytes() == local_repo.serialize(
+            result.new_key
+        )
+        assert result.new_key.keys() == {'userkey', 'params'}
+        assert isinstance(result.new_key['userkey'], bytes)
+        assert len(result.new_key['userkey']) == 32
+
+        await local_repo.unlock(key=result.new_key)
+        assert local_repo.props is not props_before
+        assert local_repo.props.userkey == result.new_key['userkey']
+
+        params_before = props_before.params
+        params = local_repo.props.params
+
+        assert params['mac'] == {'name': 'blake2b', 'length': 64}
+        assert params['shared_kdf'] == {'name': 'blake2b', 'length': 32}
+        assert isinstance(params['shared_key'], bytes)
+        assert params['shared_key'] != params_before['shared_key']
+        assert params['shared_kdf_params'] != params_before['shared_kdf_params']
+        assert isinstance(params['shared_kdf_params'], bytes)
+        assert len(params['shared_kdf_params']) == 16
+        assert params['mac_params'] != params_before['mac_params']
+        assert isinstance(params['mac_params'], bytes)
+        assert len(params['mac_params']) == 64
+        assert params['chunker_params'] != params_before['chunker_params']
+        assert isinstance(params['chunker_params'], bytes)
+        assert len(params['chunker_params']) == 16
 
 
 class TestSnapshot:
