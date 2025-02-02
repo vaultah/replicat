@@ -18,7 +18,7 @@ indent = "    "
 sections = ["FUTURE", "STDLIB", "THIRDPARTY", "FIRSTPARTY", "LOCALFOLDER"]
 no_lines_before = "LOCALFOLDER"
 include_trailing_comma = true
-known_third_party=["tqdm", "pytest", "httpx", "cryptography", "backoff", "appdirs"]
+known_third_party=["tqdm", "pytest", "httpx", "cryptography", "backoff", "platformdirs"]
 known_first_party=["_replicat_adapters"]
 
 [tool.mypy]

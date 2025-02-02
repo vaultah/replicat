@@ -1870,7 +1870,8 @@ class TestListObjects:
     @pytest.mark.asyncio
     async def test_all(self, local_repo):
         result = await local_repo.list_objects()
-        assert set(result.paths) == {
+        assert len(result) == 3
+        assert set(result) == {
             'file',
             'nested/file',
             'very/very/nested/file',
@@ -1879,7 +1880,8 @@ class TestListObjects:
     @pytest.mark.asyncio
     async def test_regex_filter(self, local_repo):
         result = await local_repo.list_objects(object_regex='^very|^file')
-        assert set(result.paths) == {
+        assert len(result) == 2
+        assert set(result) == {
             'file',
             'very/very/nested/file',
         }

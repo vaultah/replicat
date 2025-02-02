@@ -25,14 +25,25 @@ from decimal import Decimal
 from functools import cached_property
 from operator import attrgetter
 from pathlib import Path
-from typing import Any, ByteString, Dict, Iterator, List, NamedTuple, Optional, Tuple
+from typing import (
+    Any,
+    ByteString,
+    Dict,
+    Iterator,
+    List,
+    NamedTuple,
+    Optional,
+    Set,
+    Tuple,
+    Union,
+)
 
-from sty import ef, fg
+from sty import bg, ef, fg
 from tqdm import tqdm
 from tqdm.utils import CallbackIOWrapper
 
 from . import exceptions, utils
-from .backends.base import DEFAULT_STREAM_CHUNK_SIZE
+from .backends.base import DEFAULT_STREAM_CHUNK_SIZE, Backend
 from .utils import FileListColumn, SnapshotListColumn, adapters
 from .utils.compat import Random
 from .utils.config import DEFAULT_CACHE_DIRECTORY
@@ -41,6 +52,9 @@ from .utils.fs import flatten_paths
 logger = logging.getLogger(__name__)
 
 _queue_timeout = 0.025  # seconds
+
+PathLike = Union[str, os.PathLike]
+RegexPattern = Union[str, re.Pattern]
 
 
 class LocationParts(NamedTuple):
@@ -169,6 +183,32 @@ class RepositoryProps:
         return self.config.chunker(it, params=params)
 
 
+@dataclasses.dataclass(repr=False, frozen=True)
+class InitResult:
+    config: Dict[str, Any]
+    key: Optional[Dict[str, Any]] = None
+
+
+@dataclasses.dataclass(repr=False, frozen=True)
+class AddKeyResult:
+    new_key: Dict[str, Any]
+
+
+@dataclasses.dataclass(repr=False, frozen=True)
+class SnapshotResult:
+    name: str
+    tag: str
+    location: str
+    chunks: List[bytes]
+    data: Dict[str, Any]
+
+
+@dataclasses.dataclass(repr=False, frozen=True)
+class RestoreResult:
+    files: List[str]
+    chunks: List[bytes]
+
+
 class Repository:
     # NOTE: trailing slashes
     CHUNK_PREFIX = 'data/'
@@ -204,11 +244,11 @@ class Repository:
 
     def __init__(
         self,
-        backend,
+        backend: Backend,
         *,
-        concurrent,
-        quiet=True,
-        cache_directory=DEFAULT_CACHE_DIRECTORY,
+        concurrent: int,
+        quiet: bool = True,
+        cache_directory: PathLike = DEFAULT_CACHE_DIRECTORY,
     ) -> None:
         self._concurrent = concurrent
         self._quiet = quiet
@@ -227,7 +267,10 @@ class Repository:
         print(ef.bold + message + ef.rs, file=sys.stderr)
 
     def display_warning(self, message: str) -> None:
-        print(fg(242, 200, 15) + ef.bold + message + ef.rs + fg.rs, file=sys.stderr)
+        print(
+            bg(242, 200, 15) + fg(0, 0, 0) + ef.bold + message + ef.rs + fg.rs + bg.rs,
+            file=sys.stderr,
+        )
 
     def display_danger(self, message: str) -> None:
         print(fg(255, 10, 10) + ef.bold + message + ef.rs + fg.rs, file=sys.stderr)
@@ -251,7 +294,7 @@ class Repository:
         return hasattr(self, 'props')
 
     @cached_property
-    def _default_backend_executor(self):
+    def _default_backend_executor(self) -> ThreadPoolExecutor:
         """Default executor for non-async methods of the backend instance"""
         return ThreadPoolExecutor(
             max_workers=self._concurrent, thread_name_prefix='default-backend-executor'
@@ -384,22 +427,22 @@ class Repository:
         async for value in result:
             yield value
 
-    def _compile_or_none(self, pattern):
+    def _compile_or_none(self, pattern: Optional[RegexPattern]) -> Optional[re.Pattern]:
         return re.compile(pattern) if pattern is not None else None
 
     def default_serialization_hook(self, data, /):
         return utils.type_hint(data)
 
-    def serialize(self, object, /):
+    def serialize(self, object: Any, /) -> bytes:
         string = json.dumps(
             object, separators=(',', ':'), default=self.default_serialization_hook
         )
         return bytes(string, 'ascii')
 
-    def object_deserialization_hook(self, data, /):
+    def object_deserialization_hook(self, data: Dict[str, Any], /) -> Any:
         return utils.type_reverse(data)
 
-    def deserialize(self, data, /):
+    def deserialize(self, data: Union[str, bytes], /) -> Any:
         return json.loads(data, object_hook=self.object_deserialization_hook)
 
     def get_chunk_location(self, *, name, tag):
@@ -461,7 +504,7 @@ class Repository:
         digest_mac = self.props.mac(digest) if self.props.encrypted else digest
         return LocationParts(name=digest.hex(), tag=digest_mac.hex())
 
-    def read_metadata(self, file):
+    def read_metadata(self, file: Union[int, PathLike]) -> Dict[str, int]:
         if isinstance(file, int):
             stat_result = os.fstat(file)
         else:
@@ -487,7 +530,9 @@ class Repository:
         else:
             os.utime(path, ns=ns)
 
-    def _validate_settings(self, schema, obj):
+    def _validate_settings(
+        self, schema: Dict[str, Union[type, Tuple[type, ...]]], obj: Dict[str, Any]
+    ) -> None:
         extra_keys = obj.keys() - schema.keys()
         if extra_keys:
             raise exceptions.ReplicatError(
@@ -510,7 +555,9 @@ class Repository:
                 f'of the allowed types ({type_names})'
             )
 
-    def _make_config(self, *, settings=None):
+    def _make_config(
+        self, *, settings: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
         if settings is None:
             settings = {}
 
@@ -541,7 +588,7 @@ class Repository:
 
         return config
 
-    def _instantiate_config(self, config):
+    def _instantiate_config(self, config: Dict[str, Any]) -> ConfigProps:
         chunker_type, chunker_args = adapters.from_config(**config['chunking'])
         assert issubclass(chunker_type, adapters.ChunkerAdapter)
         hasher_type, hasher_args = adapters.from_config(**config['hashing'])
@@ -602,7 +649,7 @@ class Repository:
     def _make_protected_key(
         self,
         *,
-        cipher,
+        cipher: adapters.CipherAdapter,
         params: Dict[str, Any],
         settings: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
@@ -633,7 +680,7 @@ class Repository:
     ) -> Dict[str, Any]:
         return {'userkey': cipher.generate_key(), 'params': params}
 
-    def _is_key_protected(self, key):
+    def _is_key_protected(self, key: Dict[str, Any]) -> bool:
         return 'kdf' in key
 
     def _instantiate_unprotected_key(self, key_data: Dict[str, Any]) -> KeyProps:
@@ -713,7 +760,13 @@ class Repository:
     def _pretty_json(self, obj: Any) -> str:
         return json.dumps(obj, indent=4, default=self.default_serialization_hook)
 
-    async def init(self, *, password=None, settings=None, key_output_path=None):
+    async def init(
+        self,
+        *,
+        password: Optional[bytes] = None,
+        settings: Optional[Dict[str, Any]] = None,
+        key_output_path: Optional[PathLike] = None,
+    ) -> InitResult:
         if settings:
             self._validate_init_settings(settings, with_password=password is not None)
 
@@ -724,6 +777,8 @@ class Repository:
         config = self._instantiate_config(config_data)
 
         if config.encrypted:
+            assert config.cipher is not None
+
             self.display_status('Generating new key')
             params = self._make_key_params(
                 cipher=config.cipher, chunker=config.chunker, settings=settings
@@ -763,16 +818,21 @@ class Repository:
                 print(self._pretty_json(key_data))
 
             self.props = RepositoryProps(config=config, key=key)
-            return_value = utils.DefaultNamespace(config=config_data, key=key_data)
+            result = InitResult(config=config_data, key=key_data)
         else:
             self.props = RepositoryProps(config=config, key=None)
-            return_value = utils.DefaultNamespace(config=config_data, key=None)
+            result = InitResult(config=config_data, key=None)
 
         self.display_status('Uploading config')
         await self._upload_data('config', self.serialize(config_data))
-        return return_value
+        return result
 
-    async def unlock(self, *, password=None, key=None):
+    async def unlock(
+        self,
+        *,
+        password: Optional[bytes] = None,
+        key: Optional[Union[Dict[str, Any], str, bytes]] = None,
+    ) -> None:
         self.display_status('Loading config')
         config_data = self.deserialize(await self._download('config'))
         config_props = self._instantiate_config(config_data)
@@ -787,14 +847,17 @@ class Repository:
             self.display_status('Unlocking repository')
 
             # TODO: Load keys from the backend as a fallback?
-            if isinstance(key, (str, collections.abc.ByteString)):
+            if isinstance(key, (str, bytes)):
                 key = self.deserialize(key)
+                assert isinstance(key, dict)
 
             if self._is_key_protected(key):
                 if password is None:
                     raise exceptions.ReplicatError(
                         'Both password and key are needed to unlock this repository'
                     )
+
+                assert config_props.cipher is not None
 
                 key_props = self._instantiate_protected_key(
                     key,
@@ -845,8 +908,13 @@ class Repository:
             )
 
     async def add_key(
-        self, *, password=None, settings=None, shared=False, key_output_path=None
-    ):
+        self,
+        *,
+        password: Optional[bytes] = None,
+        settings: Optional[Dict[str, Any]] = None,
+        shared: bool = False,
+        key_output_path: Optional[PathLike] = None,
+    ) -> AddKeyResult:
         if settings:
             self._validate_add_key_settings(
                 settings, shared=shared, with_password=password is not None
@@ -872,6 +940,8 @@ class Repository:
 
         if not config.encrypted:
             raise exceptions.ReplicatError('Repository is not encrypted')
+
+        assert config.cipher is not None
 
         if params is None:
             params = self._make_key_params(
@@ -909,7 +979,7 @@ class Repository:
         else:
             print(self._pretty_json(key_data))
 
-        return utils.DefaultNamespace(new_key=key_data)
+        return AddKeyResult(new_key=key_data)
 
     def _encrypt_snapshot_body(self, snapshot_body):
         if self.props.encrypted:
@@ -981,7 +1051,7 @@ class Repository:
 
         return body
 
-    async def _load_snapshots(self, *, snapshot_regex=None):
+    async def _load_snapshots(self, *, snapshot_regex: Optional[RegexPattern] = None):
         # In the most common case, we'll just load cached files and do some key
         # derivation and decryption, all of which might benefit from use of multiple
         # threads. In case we have to download some snapshots, we can run plain backend
@@ -1051,7 +1121,13 @@ class Repository:
     def _format_snaphot_size(self, *, path, chunks, data):
         return data and utils.bytes_to_human(self._extract_snapshot_size(data))
 
-    async def list_snapshots(self, *, snapshot_regex=None, header=True, columns=None):
+    async def list_snapshots(
+        self,
+        *,
+        snapshot_regex: Optional[RegexPattern] = None,
+        header: bool = True,
+        columns: Optional[List[SnapshotListColumn]] = None,
+    ):
         if columns is None:
             columns = [
                 SnapshotListColumn.NAME,
@@ -1068,7 +1144,7 @@ class Repository:
             SnapshotListColumn.FILE_COUNT: self._format_snapshot_file_count,
             SnapshotListColumn.SIZE: self._format_snaphot_size,
         }
-        columns_widths = {}
+        columns_widths: Dict[SnapshotListColumn, int] = {}
         snapshots = []
 
         self.display_status('Loading snapshots')
@@ -1179,7 +1255,12 @@ class Repository:
         return dt.isoformat(sep=' ', timespec='seconds')
 
     async def list_files(
-        self, *, snapshot_regex=None, file_regex=None, header=True, columns=None
+        self,
+        *,
+        snapshot_regex: Optional[RegexPattern] = None,
+        file_regex: Optional[RegexPattern] = None,
+        header: bool = True,
+        columns: Optional[List[FileListColumn]] = None,
     ):
         if columns is None:
             columns = [
@@ -1201,7 +1282,7 @@ class Repository:
             FileListColumn.MTIME: self._format_file_mtime,
             FileListColumn.CTIME: self._format_file_ctime,
         }
-        columns_widths = {}
+        columns_widths: Dict[FileListColumn, int] = {}
         files = []
         file_re = self._compile_or_none(file_regex)
 
@@ -1255,10 +1336,16 @@ class Repository:
                 sep='\t',
             )
 
-    def _flatten_resolve_paths(self, paths):
-        return list(flatten_paths(path.resolve(strict=True) for path in paths))
+    def _flatten_resolve_paths(self, paths: List[PathLike]) -> list[Path]:
+        return list(flatten_paths(Path(path).resolve(strict=True) for path in paths))
 
-    async def snapshot(self, *, paths, note=None, rate_limit=None):
+    async def snapshot(
+        self,
+        *,
+        paths: List[PathLike],
+        note: Optional[str] = None,
+        rate_limit: Optional[int] = None,
+    ) -> SnapshotResult:
         self.display_status('Collecting files')
         files = self._flatten_resolve_paths(paths)
         logger.info('Found %d files', len(files))
@@ -1267,7 +1354,9 @@ class Repository:
         files.sort(key=lambda file: (file.stat().st_size, str(file)))
 
         loop = asyncio.get_running_loop()
-        chunk_queue = queue.Queue(maxsize=self._concurrent * 10)
+        chunk_queue: queue.Queue[_SnapshotChunk] = queue.Queue(
+            maxsize=self._concurrent * 10
+        )
         chunk_producer_executor = ThreadPoolExecutor(
             max_workers=1, thread_name_prefix='chunk-producer'
         )
@@ -1281,10 +1370,10 @@ class Repository:
             upload_chunk_size = DEFAULT_STREAM_CHUNK_SIZE
 
         state = _SnapshotState()
-        chunks_table = {}
-        snapshot_files = {}
+        chunks_table: Dict[bytes, int] = {}
+        snapshot_files: Dict[str, Dict[str, Any]] = {}
 
-        def _chunk_done(chunk: _SnapshotChunk):
+        def _chunk_done(chunk: _SnapshotChunk) -> None:
             finished_files_count = 0
             bisect_point = bisect.bisect_left(state.files, (chunk.stream_end + 1,))
 
@@ -1491,7 +1580,10 @@ class Repository:
         if note is not None:
             snapshot_data['note'] = note
 
-        snapshot_body = {'chunks': list(chunks_table), 'data': snapshot_data}
+        snapshot_body: Dict[str, Any] = {
+            'chunks': list(chunks_table),
+            'data': snapshot_data,
+        }
         logger.debug('Generated snapshot: %s', self._pretty_json(snapshot_body))
 
         serialized_snapshot = self._encrypt_snapshot_body(snapshot_body)
@@ -1506,7 +1598,7 @@ class Repository:
             reused_human = utils.bytes_to_human(state.bytes_reused)
             self.display_status(f'Used {reused_human} of existing data')
 
-        return utils.DefaultNamespace(
+        return SnapshotResult(
             name=name,
             tag=tag,
             location=location,
@@ -1534,12 +1626,17 @@ class Repository:
             file.write(data)
 
     async def restore(
-        self, *, snapshot_regex=None, file_regex=None, path=None, rate_limit=None
-    ):
+        self,
+        *,
+        snapshot_regex: Optional[RegexPattern] = None,
+        file_regex: Optional[RegexPattern] = None,
+        path: Optional[PathLike] = None,
+        rate_limit: Optional[int] = None,
+    ) -> RestoreResult:
         if path is None:
             path = Path()
 
-        path = path.resolve()
+        path = Path(path).resolve()
         logger.info("Will restore files to %s", path)
 
         loop = asyncio.get_running_loop()
@@ -1558,7 +1655,7 @@ class Repository:
             download_chunk_size = DEFAULT_STREAM_CHUNK_SIZE
 
         glock = threading.Lock()
-        flocks = {}
+        flocks: Dict[str, threading.Lock] = {}
         flocks_refcounts = {}
 
         def _write_chunk_ref(ref, contents):
@@ -1663,7 +1760,7 @@ class Repository:
 
         file_re = self._compile_or_none(file_regex)
         chunks_references = defaultdict(list)
-        files_digests = {}
+        files_digests: Dict[str, Set[bytes]] = {}
         files_metadata = {}
         total_bytes = 0
 
@@ -1730,7 +1827,7 @@ class Repository:
                 )
             )
 
-        return utils.DefaultNamespace(files=list(files_digests))
+        return RestoreResult(files=list(files_digests), chunks=list(chunks_references))
 
     def _format_snapshot_info_brief(self, snapshot_data):
         parts = []
@@ -1747,7 +1844,9 @@ class Repository:
         parts.append(utils.bytes_to_human(size))
         return ', '.join(parts)
 
-    async def delete_snapshots(self, snapshots, /, *, confirm=True):
+    async def delete_snapshots(
+        self, snapshots: List[str], /, *, confirm: bool = True
+    ) -> None:
         # TODO: locking
         self.display_status('Loading snapshots')
         chunks_to_delete = set()
@@ -1823,7 +1922,7 @@ class Repository:
         with finished_chunks_tracker:
             await asyncio.gather(*map(_delete_chunk, chunks_to_delete))
 
-    async def clean(self):
+    async def clean(self) -> None:
         # TODO: locking
         self.display_status('Loading snapshots')
         referenced_digests = {
@@ -1897,7 +1996,9 @@ class Repository:
             f'in {elapsed:.3f} seconds ({utils.bytes_to_human(rate, 3)}/s)'
         )
 
-    async def benchmark(self, name, settings=None):
+    async def benchmark(
+        self, name: str, settings: Optional[Dict[str, Any]] = None
+    ) -> None:
         logger.info('Using provided settings: %r', settings)
         if settings is None:
             settings = {}
@@ -1918,7 +2019,13 @@ class Repository:
         else:
             raise RuntimeError('Sorry, not yet')
 
-    async def upload_objects(self, paths, *, rate_limit=None, skip_existing=False):
+    async def upload_objects(
+        self,
+        paths: List[PathLike],
+        *,
+        rate_limit: Optional[int] = None,
+        skip_existing: bool = False,
+    ) -> None:
         self.display_status('Collecting files')
         files = self._flatten_resolve_paths(paths)
         logger.info('Found %d files to upload', len(files))
@@ -1999,17 +2106,15 @@ class Repository:
         with finished_tracker, bytes_tracker:
             await asyncio.gather(*map(_upload_file, files))
 
-        return utils.DefaultNamespace(files=files)
-
     async def download_objects(
         self,
         *,
-        path=None,
-        object_prefix='',
-        object_regex=None,
-        rate_limit=None,
-        skip_existing=False,
-    ):
+        path: Optional[PathLike] = None,
+        object_prefix: str = '',
+        object_regex: Optional[RegexPattern] = None,
+        rate_limit: Optional[int] = None,
+        skip_existing: bool = False,
+    ) -> None:
         self.display_status('Loading object list')
         object_re = self._compile_or_none(object_regex)
         objects = []
@@ -2097,14 +2202,12 @@ class Repository:
         with finished_tracker, bytes_tracker:
             await asyncio.gather(*map(_download_object, objects))
 
-        return utils.DefaultNamespace(objects=objects)
-
     async def list_objects(
         self,
         *,
-        object_prefix='',
-        object_regex=None,
-    ):
+        object_prefix: str = '',
+        object_regex: Optional[RegexPattern] = None,
+    ) -> List[str]:
         object_re = self._compile_or_none(object_regex)
         paths = []
 
@@ -2117,9 +2220,11 @@ class Repository:
             paths.append(object_path)
             print(object_path)
 
-        return utils.DefaultNamespace(paths=paths)
+        return paths
 
-    async def delete_objects(self, object_paths, /, *, confirm: bool = True) -> None:
+    async def delete_objects(
+        self, object_paths: List[str], /, *, confirm: bool = True
+    ) -> None:
         if confirm:
             message_parts = ['The following objects will be deleted:']
             message_parts.extend(f'    {x}' for x in object_paths)
