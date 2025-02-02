@@ -51,8 +51,6 @@ from .utils.fs import flatten_paths
 
 logger = logging.getLogger(__name__)
 
-_queue_timeout = 0.025  # seconds
-
 PathLike = Union[str, os.PathLike]
 RegexPattern = Union[str, re.Pattern]
 
@@ -1455,6 +1453,8 @@ class Repository:
 
         def _chunk_producer():
             # Will run in a different thread, because most of these actions release GIL
+            queue_timeout = 0.5  # seconds
+
             for output_chunk in self.props.chunkify(_stream_files()):
                 state.chunk_counter += 1
                 stream_start = state.bytes_chunked
@@ -1489,18 +1489,29 @@ class Repository:
                         return
 
                     try:
-                        chunk_queue.put(chunk, timeout=_queue_timeout)
+                        chunk_queue.put(chunk, timeout=queue_timeout)
                     except queue.Full:
-                        pass
+                        logger.debug(
+                            'Chunk queue full (%d/%d)',
+                            chunk_queue.qsize(),
+                            chunk_queue.maxsize,
+                        )
                     else:
+                        logger.debug(
+                            'Added chunk to queue (%d/%d)',
+                            chunk_queue.qsize(),
+                            chunk_queue.maxsize,
+                        )
                         break
 
         async def _worker():
+            queue_timeout = 0.025  # seconds
+
             while not chunk_queue.empty() or not chunk_producer.done():
                 try:
                     chunk = chunk_queue.get_nowait()
                 except queue.Empty:
-                    await asyncio.sleep(_queue_timeout)
+                    await asyncio.sleep(queue_timeout)
                     continue
 
                 exists = await self._exists(chunk.location)
