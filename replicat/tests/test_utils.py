@@ -640,7 +640,8 @@ def test_config_for_backend():
     class testbackend:
         short_name = 'TB'
 
-        def __init__(self, a: int = 1, *, b: str, c=None, **kwargs): ...
+        def __init__(self, a: int = 1, *, b: str, c=None, **kwargs):
+            ...
 
     backend_config_type = config.config_for_backend(testbackend, missing='<empty>')
     assert issubclass(backend_config_type, config.BaseBackendConfig)
@@ -668,7 +669,8 @@ class TestBaseBackendConfig:
                 e,
                 f,
                 with_underscores=True,
-            ): ...
+            ):
+                ...
 
         return testbackend
 
