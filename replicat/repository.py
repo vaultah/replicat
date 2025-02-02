@@ -39,8 +39,6 @@ from .utils.fs import flatten_paths
 
 logger = logging.getLogger(__name__)
 
-_queue_timeout = 0.025  # seconds
-
 
 class LocationParts(NamedTuple):
     name: str
@@ -1190,7 +1188,7 @@ class Repository:
                     'Finished streaming file %r, stopping', state.current_file.path
                 )
 
-        def _chunk_producer():
+        def _chunk_producer(queue_timeout=0.025):
             # Will run in a different thread, because most of these actions release GIL
             for output_chunk in self.props.chunkify(_stream_files()):
                 state.chunk_counter += 1
@@ -1226,18 +1224,18 @@ class Repository:
                         return
 
                     try:
-                        chunk_queue.put(chunk, timeout=_queue_timeout)
+                        chunk_queue.put(chunk, timeout=queue_timeout)
                     except queue.Full:
                         pass
                     else:
                         break
 
-        async def _worker():
+        async def _worker(queue_timeout=0.025):
             while not chunk_queue.empty() or not chunk_producer.done():
                 try:
                     chunk = chunk_queue.get_nowait()
                 except queue.Empty:
-                    await asyncio.sleep(_queue_timeout)
+                    await asyncio.sleep(queue_timeout)
                     continue
 
                 exists = await self._exists(chunk.location)
