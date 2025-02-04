@@ -18,7 +18,7 @@ Python 3.8 (or newer) running on Linux, MacOS, or Windows.
  - any S3-compatible service
 
 You can implement and use your own adapter for pretty much any backup destination without
-changing the source code of Replicat (more on that later).
+changing the source code of Replicat.
 
 ## Installation
 
@@ -64,7 +64,8 @@ for the extremely cool and colorful diagrams that I worked really hard on.
 
 # Command line interface
 
-The installer will create the `replicat` command (same as `python -m replicat`).
+The installer will create the `replicat` command (shortcut for `python -m replicat`).
+
 There are several available subcommands:
 
  - [`init`](https://github.com/vaultah/replicat/wiki/Command%E2%80%90line-interface-(CLI)#init) - initialises the repository using the provided settings
@@ -80,58 +81,63 @@ There are several available subcommands:
  - [`list-objects`](https://github.com/vaultah/replicat/wiki/Command%E2%80%90line-interface-(CLI)#list-objects) - lists objects at the backend (a low-level command)
  - [`delete-objects`](https://github.com/vaultah/replicat/wiki/Command%E2%80%90line-interface-(CLI)#delete-objects) - deletes objects from the backend (a low-level command)
 
-> ⚠️ **WARNING**: it's not safe to run commands that read from or upload to the repository
-> concurrently with destructive actions such as `delete` or `clean` if they are run by users
-> with [shared keys](https://github.com/vaultah/replicat/wiki#keys) (or, naturally, the same key).
-> For example, do **NOT** `snapshot` and `clean` at the same time, unless those actions are performed
-> with independent keys.
+> ⚠️ **WARNING**: do not upload to and delete from the repository at the same time using
+> the same key or [shared keys](https://github.com/vaultah/replicat/wiki#keys). For example,
+> it's not safe to run `snapshot` and `delete` or `clean` concurrently, except when using
+> independent keys.
 
 There are several command line arguments that are common to all subcommands:
 
  - `-r`/`--repository` - used to specify the type and location of the repository backend
  (backup destination). The format is `<backend>:<connection string>`, where `<backend>` is
  the short name of a Replicat-compatible backend and `<connection string>` is open to
- interpretation by the adapter for the selected backend. Examples:
- `b2:bucket-name` for the B2 backend or `local:some/local/path` for the local backend
+ interpretation by the adapter for the selected backend. For example, `b2:bucket-name`
+ for the B2 backend, or `local:some/local/path` for the local backend
  (or just `some/local/path`, since the `<backend>:` part can be omitted for local
  destinations). If the backend requires additional arguments, they will appear in the
- `--help` output. Refer to the section on backends for more detailed information.
+ `--help` output
 
  - `-q`/`--hide-progress` - suppresses progress indication for commands that support it
  - `-c`/`--concurrent` - the number of concurrent connections to the backend
  - `--cache-directory` - specifies the directory to use for cache. `--no-cache` disables
- cache completely.
+ cache completely
  - `-v`/`--verbose` - increases the logging verbosity. The default verbosity is `warning`,
- `-v` means `info`, `-vv` means `debug`.
+ `-v` means `info`, `-vv` means `debug`
 
-Encrypted repositories require a key and a matching password for every operation:
+Encrypted repositories additionally require a key for every operation:
 
  - `-K`/`--key-file` - the path to the key file
- - `-p`/`--password` - the password in plaintext. **However**, it's more secure to provide the
- password in a file via the `-P`/`--password-file` argument, or as an environment variable
- `REPLICAT_PASSWORD`.
 
-If the backend requires additional parameters (account name, client secret, some boolean flag, or
-literally anything else), you'll also be able to set them via command line arguments or
-in the configuration file. Refer to [_Backends_ section](#backends) to learn more.
+If the repository is encrypted and the key is password-protected, a matching password is also
+required:
+
+ - `-P`/`--password-file` - path to the file with the password (**preferred**)
+ - `-p`/`--password` - the password in plaintext
 
 If you often use many of these arguments, and their values mostly stay the same between
-invocations, you may find it easier to put them in a configuration file instead.
-There are three arguments related to that:
+invocations, you may find it easier to put them in a [configuration file](#configuration-file)
+instead:
 
  - `--profile` - load settings from this profile in the configuration file
  - `--config` - path to the configuration file (check `--help` for the default config location)
  - `--ignore-config` - ignore the configuration file
 
-Note that values from CLI always take precedence over options from the configuration file.
-Specifically, to build the final configuration, Replicat considers command line arguments, environment
-variables, the configuration file (either the default one *or* the one supplied via `--config`),
-and global defaults, in that order.
-
 Names of configuration file options mostly match the long names of command line arguments
 (e.g., `hide-progress = true` matches `--hide-progress`, `repository = "s3:bucket"` matches
 `-r s3:bucket`), but you can always refer to the
 [_Configuration file_ section](#configuration-file) for full reference.
+
+Repository (`-r`, `--repository`) can also be provided as the `REPLICAT_REPOSITORY` environment variable.
+Password can be provided as the `REPLICAT_PASSWORD` environment variable.
+
+If the backend needs additional parameters (account name, client secret, some boolean flag, or
+literally anything else), you'll also be able to set them via command line arguments, as environment
+variables, or in the configuration file. Refer to [_Backends_ section](#backends) to learn more.
+
+Note that values from CLI always take precedence over options from the configuration file.
+Specifically, to build the final configuration, Replicat considers global defaults, the configuration
+file (either the default one *or* the one supplied via `--config`), environment variables, and command
+line arguments, in that order.
 
 # Configuration file
 
@@ -188,13 +194,17 @@ region = "..."
 ```
 
 Options that you specify at the top of the configuration file are defaults and they will be
-inherited by all of the profiles. In the example above there are three profiles
-(not including the default one): `debugging`, `my-local-repo`, `some-s3-repo`. You can tell
-Replicat which profile to use via the `--profile` CLI argument.
+inherited by all of the _profiles_. In the example above there are three profiles
+(not including the default one):
+ - `debugging`
+ - `my-local-repo`
+ - `some-s3-repo`
+ 
+You can tell Replicat which profile to use via the `--profile` CLI argument (e.g. `--profile my-local-repo`).
 
 Notice that `some-s3-repo` includes options that were not listed in the table. `key-id`,
-`access-key`, `region` are the aforementioned backend-specific options for the S3 backend.
-See [_Backends_](#backends).
+`access-key`, `region` are the backend-specific options for the S3 backend
+([_Backends_](#backends)).
 
 # Backends
 
@@ -210,7 +220,7 @@ to see them.
 
 ## Local
 
-The format is `-r local:some/local/path` or simply `-r some/local/path`.
+The format is `-r local:some/local/path`, or simply `-r some/local/path`.
 
 ## B2
 
@@ -223,8 +233,8 @@ requires
  `application-key` option in a profile)
 
 Sign into your Backblaze B2 account to generate them. Note that you can use the master application
-key or a normal (non-master) application key (which can also be restricted to a single bucket).
-Refer to [official B2 docs](https://www.backblaze.com/b2/docs/application_keys.html) for more
+key or a normal (non-master) application key that can be restricted to a single bucket.
+Refer to [official B2 docs](https://www.backblaze.com/docs/cloud-storage-application-keys) for more
 information.
 
 ## S3
@@ -253,14 +263,14 @@ Host must *not* include the scheme. The default scheme is `https`, but can be ch
 `--scheme` argument (or, equivalently, the `S3C_SCHEME` environment variable or `scheme` option
 in a profile).
 
-You can use S3-compatible backend to connect to [B2](https://www.backblaze.com/b2/docs/s3_compatible_api.html),
+You can use S3-compatible backend to connect to [B2](https://www.backblaze.com/docs/cloud-storage-s3-compatible-api),
 S3, and many other cloud storage providers that offer S3-compatible API.
 
 # Custom backends
 
-`replicat.backends` is a namespace package, making it possible to add custom backends
-without changing `replicat` source code.
-See [_Custom backends_](https://github.com/vaultah/replicat/wiki/Custom-backends).
+`replicat.backends` is a Python namespace package, making it possible to add custom backends
+without changing `replicat` source code. See [this guide](https://github.com/vaultah/replicat/wiki/Custom-backends)
+for a complete walkthrough.
 
 If you've created a Replicat-compatible adapter for a backend that Replicat doesn't already
 support and your implementation doesn't depend on additional third-party libraries
