@@ -1,7 +1,7 @@
 import sys
 from typing import List, Tuple
 
-version_info = (1, 5, 0)
+version_info = (1, 6, 0)
 version = '.'.join(map(str, version_info))
 
 
